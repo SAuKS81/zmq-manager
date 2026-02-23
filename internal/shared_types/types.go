@@ -8,28 +8,31 @@ type OrderBookLevel struct {
 
 // OrderBookUpdate ist die normalisierte Orderbuch-Struktur.
 type OrderBookUpdate struct {
-	Exchange    string           `json:"exchange" msgpack:"e"`
-	Symbol      string           `json:"symbol" msgpack:"s"`
-	MarketType  string           `json:"market_type" msgpack:"m"`
-	Timestamp   int64            `json:"timestamp" msgpack:"t"`
-	GoTimestamp int64            `json:"go_timestamp" msgpack:"gt"`
-	Bids        []OrderBookLevel `json:"bids" msgpack:"b"`
-	Asks        []OrderBookLevel `json:"asks" msgpack:"a"`
-	DataType    string           `json:"data_type" msgpack:"dt"`
+	Exchange       string           `json:"exchange" msgpack:"e"`
+	Symbol         string           `json:"symbol" msgpack:"s"`
+	MarketType     string           `json:"market_type" msgpack:"m"`
+	Timestamp      int64            `json:"timestamp" msgpack:"t"`
+	GoTimestamp    int64            `json:"go_timestamp" msgpack:"gt"`
+	IngestUnixNano int64            `json:"-" msgpack:"-"`
+	UpdateType     string           `json:"-" msgpack:"-"`
+	Bids           []OrderBookLevel `json:"bids" msgpack:"b"`
+	Asks           []OrderBookLevel `json:"asks" msgpack:"a"`
+	DataType       string           `json:"data_type" msgpack:"dt"`
 }
 
 // TradeUpdate ist die normalisierte Trade-Struktur.
 type TradeUpdate struct {
-	Exchange    string  `json:"exchange" msgpack:"e"`
-	Symbol      string  `json:"symbol" msgpack:"s"`
-	MarketType  string  `json:"market_type" msgpack:"m"`
-	Timestamp   int64   `json:"timestamp" msgpack:"t"`
-	GoTimestamp int64   `json:"go_timestamp" msgpack:"gt"`
-	Price       float64 `json:"price" msgpack:"p"`
-	Amount      float64 `json:"amount" msgpack:"a"`
-	Side        string  `json:"side" msgpack:"Si"`
-	TradeID     string  `json:"trade_id" msgpack:"ti"`
-	DataType    string  `json:"data_type" msgpack:"dt"`
+	Exchange       string  `json:"exchange" msgpack:"e"`
+	Symbol         string  `json:"symbol" msgpack:"s"`
+	MarketType     string  `json:"market_type" msgpack:"m"`
+	Timestamp      int64   `json:"timestamp" msgpack:"t"`
+	GoTimestamp    int64   `json:"go_timestamp" msgpack:"gt"`
+	IngestUnixNano int64   `json:"-" msgpack:"-"`
+	Price          float64 `json:"price" msgpack:"p"`
+	Amount         float64 `json:"amount" msgpack:"a"`
+	Side           string  `json:"side" msgpack:"Si"`
+	TradeID        string  `json:"trade_id" msgpack:"ti"`
+	DataType       string  `json:"data_type" msgpack:"dt"`
 }
 
 // ClientRequest

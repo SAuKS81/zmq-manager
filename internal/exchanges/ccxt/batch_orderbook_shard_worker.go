@@ -153,7 +153,8 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 				continue
 			}
 
-			goTimestamp := time.Now().UnixMilli()
+			ingestNow := time.Now()
+			goTimestamp := ingestNow.UnixMilli()
 
 			if orderbook.Symbol == nil {
 				continue
@@ -172,7 +173,7 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 				}
 			}
 
-			normalized, _ := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp)
+			normalized, _ := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 			if normalized != nil {
 				sw.dataCh <- normalized
 			}

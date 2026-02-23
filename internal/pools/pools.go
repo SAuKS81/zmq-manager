@@ -1,8 +1,8 @@
 package pools
 
 import (
-	"sync"
 	"bybit-watcher/internal/shared_types"
+	"sync"
 )
 
 var (
@@ -37,13 +37,15 @@ func PutOrderBookUpdate(ob *shared_types.OrderBookUpdate) {
 	ob.MarketType = ""
 	ob.Timestamp = 0
 	ob.GoTimestamp = 0
+	ob.IngestUnixNano = 0
+	ob.UpdateType = ""
 	ob.DataType = ""
-	
+
 	// OPTIMIERUNG: Slices nicht auf nil setzen!
 	// Wir behalten den Speicher (Capacity), setzen nur Länge auf 0.
 	ob.Bids = ob.Bids[:0]
 	ob.Asks = ob.Asks[:0]
-	
+
 	OrderBookUpdatePool.Put(ob)
 }
 
@@ -57,6 +59,7 @@ func PutTradeUpdate(t *shared_types.TradeUpdate) {
 	t.MarketType = ""
 	t.Timestamp = 0
 	t.GoTimestamp = 0
+	t.IngestUnixNano = 0
 	t.Price = 0
 	t.Amount = 0
 	t.Side = ""

@@ -11,7 +11,7 @@ import (
 
 // NormalizeTrade wandelt eine CCXT-Trade-Struktur in die standardisierte TradeUpdate-Struktur um.
 // Diese Version verwendet einen sync.Pool, um Speicher-Allokationen zu minimieren.
-func NormalizeTrade(trade ccxtpro.Trade, exchangeName, marketType string, goTimestamp int64) (*shared_types.TradeUpdate, error) {
+func NormalizeTrade(trade ccxtpro.Trade, exchangeName, marketType string, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
 
 	// 1. Kritische Felder prüfen (bleibt unverändert)
 	if trade.Symbol == nil || trade.Price == nil || trade.Side == nil || trade.Timestamp == nil {
@@ -60,11 +60,12 @@ func NormalizeTrade(trade ccxtpro.Trade, exchangeName, marketType string, goTime
 	normalized.MarketType = marketType
 	normalized.Timestamp = timestamp
 	normalized.GoTimestamp = goTimestamp
+	normalized.IngestUnixNano = ingestUnixNano
 	normalized.Price = price
 	normalized.Amount = amount
 	normalized.Side = side
 	normalized.TradeID = tradeID
-	
+
 	// 7. Gib das gefüllte Objekt zurück.
 	return normalized, nil
 }

@@ -1,8 +1,8 @@
 package bitget
 
 import (
-	"fmt"
 	"bybit-watcher/internal/shared_types"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -38,7 +38,7 @@ func TranslateSymbolFromExchange(bitgetSymbol, marketType string) string {
 		base = bitgetSymbol
 		quote = ""
 	}
-	
+
 	ccxtSymbol := base + "/" + quote
 	if marketType == "swap" {
 		return ccxtSymbol + ":" + quote
@@ -48,7 +48,7 @@ func TranslateSymbolFromExchange(bitgetSymbol, marketType string) string {
 
 // NormalizeTrade wandelt eine Bitget-Trade-Nachricht in die standardisierte TradeUpdate-Struktur um.
 // Bitget-Trade-Format: [Timestamp (string ms), Preis (string), Menge (string), Seite (string)]
-func NormalizeTrade(tradeData wsTradeData, arg wsSubArg, goTimestamp int64) (*shared_types.TradeUpdate, error) {
+func NormalizeTrade(tradeData wsTradeData, arg wsSubArg, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
 	// Konvertiere die String-Werte in die benötigten Typen.
 	timestamp, err := strconv.ParseInt(tradeData.Timestamp, 10, 64)
 	if err != nil {
@@ -72,15 +72,15 @@ func NormalizeTrade(tradeData wsTradeData, arg wsSubArg, goTimestamp int64) (*sh
 	}
 
 	return &shared_types.TradeUpdate{
-		Exchange:    "bitget",
-		Symbol:      TranslateSymbolFromExchange(arg.InstID, marketType),
-		MarketType:  marketType,
-		Timestamp:   timestamp,
-		GoTimestamp: goTimestamp,
-		Price:       price,
-		Amount:      amount,
-		Side:        strings.ToLower(tradeData.Side),
-		TradeID:     tradeData.TradeID, // Wir verwenden jetzt die echte Trade-ID von der API.
+		Exchange:       "bitget",
+		Symbol:         TranslateSymbolFromExchange(arg.InstID, marketType),
+		MarketType:     marketType,
+		Timestamp:      timestamp,
+		GoTimestamp:    goTimestamp,
+		IngestUnixNano: ingestUnixNano,
+		Price:          price,
+		Amount:         amount,
+		Side:           strings.ToLower(tradeData.Side),
+		TradeID:        tradeData.TradeID, // Wir verwenden jetzt die echte Trade-ID von der API.
 	}, nil
 }
-

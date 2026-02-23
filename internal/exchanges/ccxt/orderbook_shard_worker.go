@@ -106,7 +106,7 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 			// Die 'depth'-Variable aus der Funktion-Signatur wird bewusst ignoriert.
 			// ======================================================================
 			orderbook, err := sw.exchange.WatchOrderBook(symbol)
-			
+
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -115,8 +115,9 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			goTimestamp := time.Now().UnixMilli()
-			normalized, _ := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp)
+			ingestNow := time.Now()
+			goTimestamp := ingestNow.UnixMilli()
+			normalized, _ := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 			if normalized != nil {
 				select {
 				case sw.dataCh <- normalized:

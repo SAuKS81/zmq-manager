@@ -8,9 +8,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
 )
+
+type incomingOBMessage struct {
+	payload        []byte
+	ingestUnixNano int64
+}
 
 type OrderBookShardWorker struct {
 	wsURL         string
@@ -77,13 +83,13 @@ func (sw *OrderBookShardWorker) Run() {
 				continue
 			}
 		}
-		
+
 		reconnectAttempts = 0
 		if err := sw.readLoop(conn); err != nil {
 			log.Printf("[BINANCE-OB-SHARD] Disconnect: %v", err)
 		} else {
 			conn.Close()
-			return 
+			return
 		}
 		conn.Close()
 		reconnectAttempts++
@@ -104,17 +110,21 @@ func (sw *OrderBookShardWorker) batchAndSend(conn *websocket.Conn, method string
 	const batchSize = 40
 	for i := 0; i < len(streams); i += batchSize {
 		end := i + batchSize
-		if end > len(streams) { end = len(streams) }
+		if end > len(streams) {
+			end = len(streams)
+		}
 		batch := streams[i:end]
-		
+
 		req := wsRequest{
 			Method: method,
 			Params: batch,
 			ID:     sw.requestID.Add(1),
 		}
-		
-		if err := conn.WriteJSON(req); err != nil { return err }
-		
+
+		if err := conn.WriteJSON(req); err != nil {
+			return err
+		}
+
 		// Rate Limit: 350ms (Binance Limit ist 5 msgs/s)
 		time.Sleep(350 * time.Millisecond)
 	}
@@ -122,7 +132,7 @@ func (sw *OrderBookShardWorker) batchAndSend(conn *websocket.Conn, method string
 }
 
 func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
-	msgCh := make(chan []byte, 250)
+	msgCh := make(chan incomingOBMessage, 250)
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -134,10 +144,13 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 				errCh <- err
 				return
 			}
-			msgCh <- message
+			msgCh <- incomingOBMessage{
+				payload:        message,
+				ingestUnixNano: time.Now().UnixNano(),
+			}
 		}
 	}()
-	
+
 	batchTicker := time.NewTicker(500 * time.Millisecond)
 	defer batchTicker.Stop()
 
@@ -146,16 +159,24 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 
 	flushCmds := func() error {
 		if len(pendingSubs) > 0 {
-			if err := sw.batchAndSend(conn, "SUBSCRIBE", pendingSubs); err != nil { return err }
+			if err := sw.batchAndSend(conn, "SUBSCRIBE", pendingSubs); err != nil {
+				return err
+			}
 			sw.mu.Lock()
-			for _, s := range pendingSubs { sw.activeStreams[s] = true }
+			for _, s := range pendingSubs {
+				sw.activeStreams[s] = true
+			}
 			sw.mu.Unlock()
-			pendingSubs = pendingSubs[:0] 
+			pendingSubs = pendingSubs[:0]
 		}
 		if len(pendingUnsubs) > 0 {
-			if err := sw.batchAndSend(conn, "UNSUBSCRIBE", pendingUnsubs); err != nil { return err }
+			if err := sw.batchAndSend(conn, "UNSUBSCRIBE", pendingUnsubs); err != nil {
+				return err
+			}
 			sw.mu.Lock()
-			for _, s := range pendingUnsubs { delete(sw.activeStreams, s) }
+			for _, s := range pendingUnsubs {
+				delete(sw.activeStreams, s)
+			}
 			sw.mu.Unlock()
 			pendingUnsubs = pendingUnsubs[:0]
 		}
@@ -164,9 +185,11 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 
 	for {
 		select {
-		case msg, ok := <-msgCh:
-			if !ok { return <-errCh }
-			sw.handleMessage(msg)
+		case incoming, ok := <-msgCh:
+			if !ok {
+				return <-errCh
+			}
+			sw.handleMessage(incoming.payload, incoming.ingestUnixNano)
 
 		case cmd := <-sw.commandCh:
 			stream := getOBStreamName(cmd.Symbol, cmd.Depth)
@@ -176,11 +199,15 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 				pendingUnsubs = append(pendingUnsubs, stream)
 			}
 			if len(pendingSubs) >= 40 || len(pendingUnsubs) >= 40 {
-				if err := flushCmds(); err != nil { return err }
+				if err := flushCmds(); err != nil {
+					return err
+				}
 			}
 
 		case <-batchTicker.C:
-			if err := flushCmds(); err != nil { return err }
+			if err := flushCmds(); err != nil {
+				return err
+			}
 
 		case err := <-errCh:
 			return err
@@ -190,25 +217,29 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 	}
 }
 
-func (sw *OrderBookShardWorker) handleMessage(msg []byte) {
+func (sw *OrderBookShardWorker) handleMessage(msg []byte, ingestUnixNano int64) {
 	// OPTIMIERUNG: Combined Unmarshal
 	if strings.Contains(string(msg), `"stream"`) {
-		if !strings.Contains(string(msg), "@depth") { return }
-		
+		if !strings.Contains(string(msg), "@depth") {
+			return
+		}
+
 		var wrapper wsOrderBookCombined
 		if err := json.Unmarshal(msg, &wrapper); err == nil && wrapper.Stream != "" {
 			symbolFromStream := strings.Split(wrapper.Stream, "@")[0]
 			ob := wrapper.Data
 
-			hasData := (len(ob.BidsSpot) > 0 || len(ob.AsksSpot) > 0 || 
-					   len(ob.BidsFut) > 0 || len(ob.AsksFut) > 0)
+			hasData := (len(ob.BidsSpot) > 0 || len(ob.AsksSpot) > 0 ||
+				len(ob.BidsFut) > 0 || len(ob.AsksFut) > 0)
 
 			if hasData {
-				norm, _ := NormalizeOrderBook(ob, symbolFromStream, sw.marketType, time.Now().UnixMilli())
+				norm, _ := NormalizeOrderBook(ob, symbolFromStream, sw.marketType, time.Unix(0, ingestUnixNano).UnixMilli(), ingestUnixNano)
 				if norm != nil {
 					sw.dataCh <- norm
 				}
 			}
+		} else if err != nil {
+			metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
 		}
 	}
 }

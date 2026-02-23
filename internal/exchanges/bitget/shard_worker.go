@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
 )
@@ -174,7 +175,8 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 		case msg := <-msgCh:
 			// Debug-Ausgabe für jede eingehende Nachricht
 			//log.Printf("[BITGET-SHARD-RECV-VERBOSE] %s", string(msg))
-			goTimestamp := time.Now().UnixMilli()
+			ingestNow := time.Now()
+			goTimestamp := ingestNow.UnixMilli()
 			msgStr := string(msg)
 
 			if msgStr == "pong" {
@@ -184,11 +186,12 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 			if strings.Contains(msgStr, `"action":"update"`) && strings.Contains(msgStr, `"channel":"trade"`) {
 				var wsMsg wsMsg
 				if err := json.Unmarshal(msg, &wsMsg); err != nil {
+					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 					log.Printf("[BITGET-SHARD-WARN] Fehler beim Unmarshalling: %v", err)
 					continue
 				}
 				for _, trade := range wsMsg.Data {
-					normalizedTrade, err := NormalizeTrade(trade, wsMsg.Arg, goTimestamp)
+					normalizedTrade, err := NormalizeTrade(trade, wsMsg.Arg, goTimestamp, ingestNow.UnixNano())
 					if err != nil {
 						log.Printf("[BITGET-SHARD-WARN] Fehler beim Normalisieren: %v", err)
 						continue

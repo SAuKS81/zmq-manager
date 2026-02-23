@@ -147,9 +147,10 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			goTimestamp := time.Now().UnixMilli()
+			ingestNow := time.Now()
+			goTimestamp := ingestNow.UnixMilli()
 			for _, trade := range trades {
-				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp)
+				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 				if normalized != nil {
 					sw.dataCh <- normalized
 				}
@@ -157,4 +158,3 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		}
 	}
 }
-

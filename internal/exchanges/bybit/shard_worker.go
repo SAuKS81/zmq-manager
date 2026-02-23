@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
 	"time"
-	"math"
-	
+
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
 )
@@ -29,7 +30,7 @@ type ShardWorker struct {
 	stopCh         <-chan struct{}
 	dataCh         chan<- *shared_types.TradeUpdate
 	wg             *sync.WaitGroup
-	
+
 	// KORREKTUR: mu schützt den Zugriff auf activeSymbols von verschiedenen Goroutinen
 	mu            sync.Mutex
 	activeSymbols map[string]bool
@@ -57,7 +58,7 @@ func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-
 // Run startet die Hauptschleife des Workers.
 func (sw *ShardWorker) Run() {
 	defer sw.wg.Done()
-	
+
 	sw.mu.Lock()
 	symbolCount := len(sw.activeSymbols)
 	sw.mu.Unlock()
@@ -85,7 +86,7 @@ reconnectLoop:
 			// Füge zufälligen Jitter hinzu (z.B. +/- 500ms)
 			jitter := time.Duration(rand.Intn(1000)-500) * time.Millisecond
 			waitTime := backoff + jitter
-			
+
 			log.Printf("[SHARD-BACKOFF] Reconnect-Versuch #%d. Warte für %v...", reconnectAttempts, waitTime)
 			time.Sleep(waitTime)
 		}
@@ -96,7 +97,7 @@ reconnectLoop:
 			reconnectAttempts++ // Erhöhe den Zähler
 			continue
 		}
-		
+
 		sw.mu.Lock()
 		var symbolsToSub []string
 		for s := range sw.activeSymbols {
@@ -111,19 +112,19 @@ reconnectLoop:
 			reconnectAttempts++ // Erhöhe den Zähler
 			continue
 		}
-		
+
 		log.Printf("[SHARD-SUCCESS] (Re)Connect und Subscribe für %d Symbole erfolgreich.", len(symbolsToSub))
-		
+
 		// NEU: Setze den Zähler bei Erfolg zurück
 		reconnectAttempts = 0
-		
+
 		err = sw.readLoop(conn)
 		conn.Close()
 
 		if err == nil {
 			break reconnectLoop
 		}
-		
+
 		log.Printf("[SHARD-INFO] Verbindung unterbrochen (Fehler: %v), versuche Reconnect...", err)
 		reconnectAttempts++ // Erhöhe den Zähler
 	}
@@ -137,12 +138,12 @@ func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols
 		return nil
 	}
 	log.Printf("[SHARD-SEND] Sende '%s' für %d Symbole", op, len(symbols))
-	
+
 	args := make([]string, len(symbols))
 	for i, s := range symbols {
 		args[i] = fmt.Sprintf("publicTrade.%s", s)
 	}
-	
+
 	msg := map[string]interface{}{"op": op, "args": args}
 	err := conn.WriteJSON(msg)
 	if err != nil {
@@ -174,13 +175,19 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 		select {
 		case msg := <-msgCh:
 			// ... (Nachrichtenverarbeitung bleibt gleich)
-			goTimestamp := time.Now().UnixMilli()
+			ingestNow := time.Now()
+			goTimestamp := ingestNow.UnixMilli()
 			if strings.Contains(string(msg), `"topic":"publicTrade.`) {
 				var wsMsg wsMsg
-				if err := json.Unmarshal(msg, &wsMsg); err != nil { continue }
+				if err := json.Unmarshal(msg, &wsMsg); err != nil {
+					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
+					continue
+				}
 				for _, trade := range wsMsg.Data {
-					normalizedTrade, err := NormalizeTrade(trade, sw.marketType, goTimestamp)
-					if err != nil { continue }
+					normalizedTrade, err := NormalizeTrade(trade, sw.marketType, goTimestamp, ingestNow.UnixNano())
+					if err != nil {
+						continue
+					}
 					sw.dataCh <- normalizedTrade
 				}
 			}
@@ -190,7 +197,7 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 			if err := sw.sendSubscription(conn, cmd.Action, cmd.Symbols); err != nil {
 				return err // Erzwinge Reconnect bei Fehler
 			}
-			
+
 			// KORREKTUR: Schütze den Zugriff auf die Map mit einem Mutex
 			sw.mu.Lock()
 			for _, s := range cmd.Symbols {

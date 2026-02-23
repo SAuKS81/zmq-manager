@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
 )
@@ -99,16 +100,24 @@ func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}) {
 
 	flushCmds := func() error {
 		if len(pendingSubs) > 0 {
-			if err := sw.batchAndSend(conn, "SUBSCRIBE", pendingSubs); err != nil { return err }
+			if err := sw.batchAndSend(conn, "SUBSCRIBE", pendingSubs); err != nil {
+				return err
+			}
 			sw.mu.Lock()
-			for _, s := range pendingSubs { sw.activeStreams[s] = true }
+			for _, s := range pendingSubs {
+				sw.activeStreams[s] = true
+			}
 			sw.mu.Unlock()
 			pendingSubs = pendingSubs[:0]
 		}
 		if len(pendingUnsubs) > 0 {
-			if err := sw.batchAndSend(conn, "UNSUBSCRIBE", pendingUnsubs); err != nil { return err }
+			if err := sw.batchAndSend(conn, "UNSUBSCRIBE", pendingUnsubs); err != nil {
+				return err
+			}
 			sw.mu.Lock()
-			for _, s := range pendingUnsubs { delete(sw.activeStreams, s) }
+			for _, s := range pendingUnsubs {
+				delete(sw.activeStreams, s)
+			}
 			sw.mu.Unlock()
 			pendingUnsubs = pendingUnsubs[:0]
 		}
@@ -129,24 +138,28 @@ func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}) {
 				pendingUnsubs = append(pendingUnsubs, stream)
 			}
 			if len(pendingSubs) >= 40 || len(pendingUnsubs) >= 40 {
-				if err := flushCmds(); err != nil { return }
+				if err := flushCmds(); err != nil {
+					return
+				}
 			}
 		case <-batchTicker.C:
-			if err := flushCmds(); err != nil { return }
+			if err := flushCmds(); err != nil {
+				return
+			}
 		}
 	}
 }
 
 func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
 	defer close(done)
-	
+
 	// Initial Deadline setzen
 	readWait := 180 * time.Second
 	conn.SetReadDeadline(time.Now().Add(readWait))
-	
-	conn.SetPongHandler(func(string) error { 
+
+	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(readWait))
-		return nil 
+		return nil
 	})
 
 	for {
@@ -162,6 +175,7 @@ func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
 		// ---------------------------------------------------
 
 		msgStr := string(msg)
+		ingestNow := time.Now()
 
 		if strings.Contains(msgStr, `"stream"`) {
 			// ... Rest der Parsing Logik bleibt gleich ...
@@ -175,11 +189,13 @@ func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
 					continue
 				}
 
-				norm, err := NormalizeTrade(wrapper.Data, sw.marketType, time.Now().UnixMilli())
+				norm, err := NormalizeTrade(wrapper.Data, sw.marketType, ingestNow.UnixMilli(), ingestNow.UnixNano())
 				if err != nil || norm == nil {
 					continue
 				}
 				sw.dataCh <- norm
+			} else if err != nil {
+				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 			}
 		}
 	}
@@ -189,14 +205,16 @@ func (sw *ShardWorker) batchAndSend(conn *websocket.Conn, method string, streams
 	const batchSize = 40
 	for i := 0; i < len(streams); i += batchSize {
 		end := i + batchSize
-		if end > len(streams) { end = len(streams) }
-		
+		if end > len(streams) {
+			end = len(streams)
+		}
+
 		req := wsRequest{
 			Method: method,
 			Params: streams[i:end],
 			ID:     sw.requestID.Add(1),
 		}
-		
+
 		if err := conn.WriteJSON(req); err != nil {
 			return err
 		}

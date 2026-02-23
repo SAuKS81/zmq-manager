@@ -1,20 +1,18 @@
 package bybit
 
 import (
-	"bybit-watcher/internal/shared_types" // KORREKTUR
+	"bybit-watcher/internal/shared_types"
 	"strconv"
 	"strings"
 )
 
-// TranslateSymbolToExchange bleibt gleich...
 func TranslateSymbolToExchange(ccxtSymbol string) string {
 	s := strings.Split(ccxtSymbol, ":")[0]
 	s = strings.ReplaceAll(s, "/", "")
-	s = strings.ReplaceAll(s, "-", "") // NEUE ZEILE
+	s = strings.ReplaceAll(s, "-", "")
 	return s
 }
 
-// TranslateSymbolFromExchange bleibt gleich...
 func TranslateSymbolFromExchange(bybitSymbol, marketType string) string {
 	var base string
 	if strings.HasSuffix(bybitSymbol, "USDT") {
@@ -29,8 +27,7 @@ func TranslateSymbolFromExchange(bybitSymbol, marketType string) string {
 	return ccxtBase
 }
 
-// NormalizeTrade wandelt eine Bybit-WebSocket-Nachricht in die standardisierte TradeUpdate-Struktur um.
-func NormalizeTrade(trade wsTrade, marketType string, goTimestamp int64) (*shared_types.TradeUpdate, error) {
+func NormalizeTrade(trade wsTrade, marketType string, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
 	price, err := strconv.ParseFloat(trade.Price, 64)
 	if err != nil {
 		return nil, err
@@ -41,16 +38,15 @@ func NormalizeTrade(trade wsTrade, marketType string, goTimestamp int64) (*share
 	}
 
 	return &shared_types.TradeUpdate{
-		Exchange:    "bybit",
-		Symbol:      TranslateSymbolFromExchange(trade.Symbol, marketType),
-		MarketType:  marketType,
-		Timestamp:   trade.Timestamp, // Bybit Timestamp
-		GoTimestamp: goTimestamp,     // NEU: Hinzugefügt
-		Price:       price,
-		Amount:      amount,
-		Side:        strings.ToLower(trade.Side),
-		TradeID:     trade.TradeID,
+		Exchange:       "bybit",
+		Symbol:         TranslateSymbolFromExchange(trade.Symbol, marketType),
+		MarketType:     marketType,
+		Timestamp:      trade.Timestamp,
+		GoTimestamp:    goTimestamp,
+		IngestUnixNano: ingestUnixNano,
+		Price:          price,
+		Amount:         amount,
+		Side:           strings.ToLower(trade.Side),
+		TradeID:        trade.TradeID,
 	}, nil
 }
-
-

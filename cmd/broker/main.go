@@ -7,17 +7,22 @@ import (
 	"syscall"
 
 	"bybit-watcher/internal/broker"
+	"bybit-watcher/internal/metrics"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
 	_ "net/http/pprof" // Der _ import registriert die pprof-Handler
 )
 
 func main() {
+	metrics.Init()
+	http.Handle("/metrics", promhttp.Handler())
+
 	go func() {
 		log.Println("Starte pprof-Server auf http://localhost:6060")
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	
+
 	log.Println("Starte Bybit-Daten-Broker...")
 
 	// 1. Erstelle den SubscriptionManager. Er benötigt einen Kanal,
@@ -25,7 +30,7 @@ func main() {
 	// Wir holen uns diesen Kanal vom ClientManager, nachdem er erstellt wurde.
 	var clientMgr *broker.ClientManager
 	subMgr := broker.NewSubscriptionManager(nil) // Temporär nil
-	
+
 	// 2. Erstelle den ClientManager. Er benötigt einen Kanal,
 	//    um Anfragen an den SubscriptionManager zu senden.
 	clientMgr = broker.NewClientManager(subMgr.RequestCh)

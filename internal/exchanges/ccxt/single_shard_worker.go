@@ -99,7 +99,6 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 	}
 }
 
-
 // Die runSingleWatch Funktion muss ebenfalls das nicht-blockierende Senden verwenden,
 // um gegen die fehlerhafte KuCoin-Bibliothek immun zu sein.
 func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol string) {
@@ -121,9 +120,10 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			goTimestamp := time.Now().UnixMilli()
+			ingestNow := time.Now()
+			goTimestamp := ingestNow.UnixMilli()
 			for _, trade := range trades {
-				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp)
+				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 				if normalized != nil {
 					// KORREKTUR: Auch hier muss nicht-blockierend gesendet werden,
 					// um einen Rückstau zu verhindern, falls kein Logger läuft.
@@ -140,4 +140,3 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 		}
 	}
 }
-

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/go-zeromq/zmq4"
 	json "github.com/goccy/go-json"
@@ -16,18 +17,23 @@ import (
 )
 
 const (
-	pingInterval  = 15 * time.Second
-	clientTimeout = 45 * time.Second
-	// zmqBindAddress = "tcp://*:5555"
+	pingInterval   = 15 * time.Second
+	clientTimeout  = 45 * time.Second
 	HeaderJSON     = "J"
-	HeaderTradeBin = "T" // Trades Binary (MsgPack)
-	HeaderOBBin    = "O" // OrderBooks Binary (MsgPack)
+	HeaderTradeBin = "T"
+	HeaderOBBin    = "O"
 )
 
 type Client struct {
 	ID       []byte
 	LastPong time.Time
-	Encoding string // "json" or "msgpack"
+	Encoding string
+}
+
+type outboundEnvelope struct {
+	msg         zmq4.Msg
+	metricType  string
+	ingestNanos []int64
 }
 
 type ClientManager struct {
@@ -36,7 +42,7 @@ type ClientManager struct {
 	clientsMu      sync.RWMutex
 	requestCh      chan<- *shared_types.ClientRequest
 	DistributionCh chan *DistributionMessage
-	sendCh         chan zmq4.Msg
+	sendCh         chan outboundEnvelope
 	bindAddress    string
 }
 
@@ -78,7 +84,7 @@ func NewClientManager(requestCh chan<- *shared_types.ClientRequest) *ClientManag
 		clients:        make(map[string]*Client),
 		requestCh:      requestCh,
 		DistributionCh: make(chan *DistributionMessage, 10000),
-		sendCh:         make(chan zmq4.Msg, 4096),
+		sendCh:         make(chan outboundEnvelope, 4096),
 		bindAddress:    bindAddr,
 	}
 }
@@ -101,23 +107,17 @@ func (cm *ClientManager) readLoop() {
 			continue
 		}
 
-		var clientID, payload []byte
-		if len(msg.Frames) >= 2 {
-			clientID = msg.Frames[0]
-			payload = msg.Frames[len(msg.Frames)-1]
-		} else {
+		if len(msg.Frames) < 2 {
 			continue
 		}
+		clientID := msg.Frames[0]
+		payload := msg.Frames[len(msg.Frames)-1]
 
 		clientIDStr := string(clientID)
 		cm.clientsMu.Lock()
 		if _, ok := cm.clients[clientIDStr]; !ok {
 			log.Printf("[CLIENT-MANAGER] Neuer Client verbunden: %s", clientIDStr)
-			cm.clients[clientIDStr] = &Client{
-				ID:       append([]byte(nil), clientID...),
-				LastPong: time.Now(),
-				Encoding: "json",
-			}
+			cm.clients[clientIDStr] = &Client{ID: append([]byte(nil), clientID...), LastPong: time.Now(), Encoding: "json"}
 		}
 		cm.clientsMu.Unlock()
 
@@ -130,12 +130,35 @@ func (cm *ClientManager) distributionLoop() {
 		var jsonCache []byte
 		var msgpackCache []byte
 
-		var msgTypeHeader string
-		switch msg.RawPayload.(type) {
+		metricType := metrics.TypeOBUpdate
+		msgTypeHeader := HeaderOBBin
+		ingestNanos := make([]int64, 0)
+
+		switch payload := msg.RawPayload.(type) {
 		case []*shared_types.TradeUpdate:
 			msgTypeHeader = HeaderTradeBin
+			metricType = metrics.TypeTrade
+			ingestNanos = make([]int64, 0, len(payload))
+			for _, t := range payload {
+				if t != nil && t.IngestUnixNano > 0 {
+					ingestNanos = append(ingestNanos, t.IngestUnixNano)
+				}
+			}
 		case []*shared_types.OrderBookUpdate:
-			msgTypeHeader = HeaderOBBin
+			if len(payload) > 0 && payload[0] != nil && payload[0].UpdateType == metrics.TypeOBSnapshot {
+				metricType = metrics.TypeOBSnapshot
+			}
+			ingestNanos = make([]int64, 0, len(payload))
+			for _, ob := range payload {
+				if ob != nil {
+					if ob.UpdateType == metrics.TypeOBSnapshot {
+						metricType = metrics.TypeOBSnapshot
+					}
+					if ob.IngestUnixNano > 0 {
+						ingestNanos = append(ingestNanos, ob.IngestUnixNano)
+					}
+				}
+			}
 		default:
 			continue
 		}
@@ -159,26 +182,24 @@ func (cm *ClientManager) distributionLoop() {
 					var err error
 					msgpackCache, err = msgpack.Marshal(msg.RawPayload)
 					if err != nil {
+						metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
 						log.Printf("[MSGPACK ERROR] %v", err)
 						continue
 					}
 				}
-
-				cm.enqueueSocketSend(zmq4.NewMsgFrom(
-					clientID,
-					[]byte(msgTypeHeader),
-					msgpackCache,
-				))
+				cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(clientID, []byte(msgTypeHeader), msgpackCache), metricType: metricType, ingestNanos: ingestNanos})
 			} else {
 				if jsonCache == nil {
 					var err error
 					jsonCache, err = json.Marshal(msg.RawPayload)
 					if err != nil {
+						metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
 						continue
 					}
 				}
-				cm.enqueueSocketSend(zmq4.NewMsgFrom(clientID, jsonCache))
+				cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(clientID, jsonCache), metricType: metricType, ingestNanos: ingestNanos})
 			}
+			metrics.RecordPublish(metricType)
 		}
 
 		if msg.OnComplete != nil {
@@ -189,7 +210,16 @@ func (cm *ClientManager) distributionLoop() {
 
 func (cm *ClientManager) writeLoop() {
 	for outbound := range cm.sendCh {
-		_ = cm.socket.Send(outbound)
+		now := time.Now()
+		if err := cm.socket.Send(outbound.msg); err != nil {
+			metrics.RecordDropped(metrics.ReasonInternalErr, outbound.metricType)
+			continue
+		}
+		for _, ingest := range outbound.ingestNanos {
+			if ingest > 0 {
+				metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, ingest)).Seconds())
+			}
+		}
 	}
 }
 
@@ -211,11 +241,7 @@ func (cm *ClientManager) healthCheckLoop() {
 		cm.clientsMu.RLock()
 		snapshots := make([]clientSnapshot, 0, len(cm.clients))
 		for id, client := range cm.clients {
-			snapshots = append(snapshots, clientSnapshot{
-				id:       id,
-				clientID: append([]byte(nil), client.ID...),
-				lastPong: client.LastPong,
-			})
+			snapshots = append(snapshots, clientSnapshot{id: id, clientID: append([]byte(nil), client.ID...), lastPong: client.LastPong})
 		}
 		cm.clientsMu.RUnlock()
 
@@ -224,12 +250,11 @@ func (cm *ClientManager) healthCheckLoop() {
 				clientsToRemove = append(clientsToRemove, client.id)
 				continue
 			}
-			cm.enqueueSocketSend(zmq4.NewMsgFrom(client.clientID, []byte{}, pingPayload))
+			cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(client.clientID, []byte{}, pingPayload), metricType: metrics.TypeTrade})
 		}
 
 		for _, id := range clientsToRemove {
 			var removedClientID []byte
-
 			cm.clientsMu.Lock()
 			if client, ok := cm.clients[id]; ok {
 				if now.Sub(client.LastPong) > clientTimeout {
@@ -238,16 +263,11 @@ func (cm *ClientManager) healthCheckLoop() {
 				}
 			}
 			cm.clientsMu.Unlock()
-
 			if len(removedClientID) == 0 {
 				continue
 			}
-
 			log.Printf("[CLIENT-MANAGER] Client %s wegen Timeout entfernt.", id)
-			cm.enqueueRequest(&shared_types.ClientRequest{
-				ClientID: removedClientID,
-				Action:   "disconnect",
-			})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: removedClientID, Action: "disconnect"})
 		}
 	}
 }
@@ -255,12 +275,12 @@ func (cm *ClientManager) healthCheckLoop() {
 func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 	var req incomingClientMessage
 	if err := json.Unmarshal(payload, &req); err != nil {
+		metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 		cm.sendClientError(clientID, "invalid_json", "payload must be valid JSON")
 		return
 	}
 
 	clientIDStr := string(clientID)
-
 	if req.Message == "pong" {
 		cm.clientsMu.Lock()
 		if client, exists := cm.clients[clientIDStr]; exists {
@@ -276,13 +296,11 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			cm.sendClientError(clientID, "invalid_encoding", "encoding must be one of: json, msgpack, binary")
 			return
 		}
-
 		cm.clientsMu.Lock()
 		if client, exists := cm.clients[clientIDStr]; exists {
 			client.Encoding = encoding
 		}
 		cm.clientsMu.Unlock()
-
 		log.Printf("[CLIENT-MANAGER] Client %s setzt Encoding auf: %s", clientIDStr, encoding)
 	}
 
@@ -292,7 +310,6 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		}
 		return
 	}
-
 	if req.DataType == "" {
 		req.DataType = "trades"
 	}
@@ -303,57 +320,33 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			cm.sendClientError(clientID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
 			return
 		}
-
 		log.Printf("[CLIENT-MANAGER] 'subscribe_bulk': %d Symbole von %s", len(req.Symbols), clientIDStr)
 		for _, symbol := range req.Symbols {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{
-				ClientID:       clientID,
-				Action:         "subscribe",
-				Exchange:       req.Exchange,
-				Symbol:         symbol,
-				MarketType:     req.MarketType,
-				DataType:       req.DataType,
-				OrderBookDepth: req.OrderBookDepth,
-			})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, OrderBookDepth: req.OrderBookDepth})
 		}
 		return
-
 	case "subscribe_all":
 		if req.Exchange == "" || req.MarketType == "" {
 			cm.sendClientError(clientID, "invalid_request", "subscribe_all requires exchange and market_type")
 			return
 		}
-
 	case "subscribe", "unsubscribe":
 		if req.Exchange == "" || req.MarketType == "" || req.Symbol == "" {
 			cm.sendClientError(clientID, "invalid_request", "subscribe/unsubscribe requires exchange, symbol and market_type")
 			return
 		}
-
 	case "disconnect":
-		cm.enqueueRequest(&shared_types.ClientRequest{
-			ClientID: clientID,
-			Action:   "disconnect",
-		})
+		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect"})
 		return
-
 	default:
 		cm.sendClientError(clientID, "unknown_action", "unsupported action")
 		return
 	}
 
-	cm.enqueueRequest(&shared_types.ClientRequest{
-		ClientID:       clientID,
-		Action:         req.Action,
-		Exchange:       req.Exchange,
-		Symbol:         req.Symbol,
-		MarketType:     req.MarketType,
-		DataType:       req.DataType,
-		OrderBookDepth: req.OrderBookDepth,
-	})
+	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, OrderBookDepth: req.OrderBookDepth})
 }
 
 func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {
@@ -364,15 +357,12 @@ func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {
 }
 
 func (cm *ClientManager) sendClientError(clientID []byte, code, message string) {
-	payload, err := json.Marshal(map[string]string{
-		"type":    "error",
-		"code":    code,
-		"message": message,
-	})
+	payload, err := json.Marshal(map[string]string{"type": "error", "code": code, "message": message})
 	if err != nil {
+		metrics.RecordDropped(metrics.ReasonInternalErr, metrics.TypeTrade)
 		return
 	}
-	cm.enqueueSocketSend(zmq4.NewMsgFrom(clientID, payload))
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(clientID, payload), metricType: metrics.TypeTrade})
 }
 
 func normalizeClientEncoding(input string) (string, bool) {
@@ -386,9 +376,10 @@ func normalizeClientEncoding(input string) (string, bool) {
 	}
 }
 
-func (cm *ClientManager) enqueueSocketSend(msg zmq4.Msg) {
+func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) {
 	select {
-	case cm.sendCh <- msg:
+	case cm.sendCh <- envelope:
 	default:
+		metrics.RecordDropped(metrics.ReasonBufferFull, envelope.metricType)
 	}
 }

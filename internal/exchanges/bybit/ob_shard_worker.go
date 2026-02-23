@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
@@ -134,6 +135,7 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 				log.Printf("[BYBIT-OB-SHARD-ERROR] Fehler beim Lesen: %v", err)
 				return
 			}
+			ingestUnixNano := time.Now().UnixNano()
 
 			// +++ LOGGING 1 +++
 			// Wir protokollieren die rohe Nachricht, aber nur, wenn es ein Orderbuch ist.
@@ -147,9 +149,10 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 
 			var obMsg wsOrderBookMsg
 			if err := json.Unmarshal(msg, &obMsg); err != nil {
+				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
 				continue
 			}
-			
+
 			if obMsg.Topic == "" {
 				continue
 			}
@@ -158,10 +161,9 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 
 			sw.mu.Lock()
 			if obMsg.Type == "snapshot" {
-				// Verwenden wir die "intelligente" Snapshot-Logik.
-				updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp)
+				updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
 			} else if obMsg.Type == "delta" {
-				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp)
+				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
 			}
 			sw.mu.Unlock()
 
@@ -169,9 +171,9 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 				// +++ LOGGING 2 +++
 				// Wir protokollieren das normalisierte Objekt, das wir versenden.
 				// Um die Ausgabe lesbar zu halten, protokollieren wir nur die Anzahl der Bids/Asks.
-				// log.Printf("[BYBIT-OB-SHARD-SEND] Sende Update für %s: Bids=%d, Asks=%d", 
+				// log.Printf("[BYBIT-OB-SHARD-SEND] Sende Update für %s: Bids=%d, Asks=%d",
 				// 	updateToSend.Symbol, len(updateToSend.Bids), len(updateToSend.Asks))
-				
+
 				sw.dataCh <- updateToSend
 			}
 		}
@@ -179,7 +181,7 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 }
 
 // Ich habe die intelligente Snapshot-Funktion umbenannt, um sie klar zu kennzeichnen.
-func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		book = &localOrderbook{
@@ -203,16 +205,17 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 		}
 	}
 	// ts weitergeben
-	return sw.createUpdate(topic, ts)
+	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBSnapshot)
 }
 
 // FIX: Parameter 'ts int64' hinzugefügt
-func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
 	}
 	if data.UpdateID <= book.LastUpdateID {
+		metrics.RecordDropped(metrics.ReasonStaleSeq, metrics.TypeOBUpdate)
 		return nil
 	}
 
@@ -232,10 +235,10 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 		}
 	}
 	// ts weitergeben
-	return sw.createUpdate(topic, ts)
+	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBUpdate)
 }
 
-func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, ingestUnixNano int64, updateType string) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
@@ -251,17 +254,18 @@ func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64) *shared_typ
 	update.Exchange = "bybit"
 	update.Symbol = TranslateSymbolFromExchange(symbol, sw.marketType)
 	update.MarketType = sw.marketType
-	
-    // KORREKTUR: Wir nutzen den echten Timestamp von Bybit, nicht die ID!
-	update.Timestamp = ts 
+
+	// KORREKTUR: Wir nutzen den echten Timestamp von Bybit, nicht die ID!
+	update.Timestamp = ts
 	update.GoTimestamp = time.Now().UnixMilli()
+	update.IngestUnixNano = ingestUnixNano
+	update.UpdateType = updateType
 
 	update.Bids = mapToSlice(book.Bids, update.Bids, true)
 	update.Asks = mapToSlice(book.Asks, update.Asks, false)
 
 	return update
 }
-
 
 func (sw *OrderBookShardWorker) sendSubscription(op string, topics []string) {
 	if len(topics) == 0 || sw.conn == nil {

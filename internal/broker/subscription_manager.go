@@ -12,6 +12,7 @@ import (
 	"bybit-watcher/internal/exchanges/bitget"
 	"bybit-watcher/internal/exchanges/bybit"
 	"bybit-watcher/internal/exchanges/ccxt"
+	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 )
 
@@ -67,6 +68,7 @@ func (sm *SubscriptionManager) Run() {
 			sm.incomingTradeCounter.Add(1)
 			sm.totalDataReceived.Add(1)
 			firstTrade.DataType = "trades"
+			metrics.RecordIngest(firstTrade.Exchange, metrics.TypeTrade)
 			tradeBatch = append(tradeBatch, firstTrade)
 
 			// 2. "Greedy" Loop: Schau, ob noch mehr im Channel ist, bis Batch voll
@@ -77,6 +79,7 @@ func (sm *SubscriptionManager) Run() {
 					sm.incomingTradeCounter.Add(1)
 					sm.totalDataReceived.Add(1)
 					nextTrade.DataType = "trades"
+					metrics.RecordIngest(nextTrade.Exchange, metrics.TypeTrade)
 					tradeBatch = append(tradeBatch, nextTrade)
 				default:
 					// Channel leer? Sofort senden! Nicht warten!
@@ -95,6 +98,7 @@ func (sm *SubscriptionManager) Run() {
 			sm.incomingOBCounter.Add(1)
 			sm.totalDataReceived.Add(1)
 			firstOB.DataType = "orderbooks"
+			metrics.RecordIngest(firstOB.Exchange, orderBookMetricType(firstOB))
 			obBatch = append(obBatch, firstOB)
 
 		OBLoop:
@@ -104,6 +108,7 @@ func (sm *SubscriptionManager) Run() {
 					sm.incomingOBCounter.Add(1)
 					sm.totalDataReceived.Add(1)
 					nextOB.DataType = "orderbooks"
+					metrics.RecordIngest(nextOB.Exchange, orderBookMetricType(nextOB))
 					obBatch = append(obBatch, nextOB)
 				default:
 					break OBLoop
@@ -261,6 +266,13 @@ func (sm *SubscriptionManager) logIncomingRate() {
 
 func (sm *SubscriptionManager) GetTotalTradesReceived() uint64 {
 	return sm.totalDataReceived.Load()
+}
+
+func orderBookMetricType(ob *shared_types.OrderBookUpdate) string {
+	if ob != nil && ob.UpdateType == metrics.TypeOBSnapshot {
+		return metrics.TypeOBSnapshot
+	}
+	return metrics.TypeOBUpdate
 }
 
 func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
