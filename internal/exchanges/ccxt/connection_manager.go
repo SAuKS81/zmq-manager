@@ -45,6 +45,9 @@ type ConnectionManager struct {
 
 	wg sync.WaitGroup
 	mu sync.Mutex
+
+	stopOnce sync.Once
+	runDone  chan struct{}
 }
 
 func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate) *ConnectionManager {
@@ -60,10 +63,12 @@ func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig
 		tradeShardLoad:     make(map[IShardWorker]int),
 		symbolToOBShard:    make(map[string]IShardWorker),
 		obShardLoad:        make(map[IShardWorker]int),
+		runDone:            make(chan struct{}),
 	}
 }
 
 func (cm *ConnectionManager) Run() {
+	defer close(cm.runDone)
 	log.Printf("[CCXT-CONN-MANAGER] Starte Manager für %s/%s", cm.exchangeName, cm.marketType)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -322,6 +327,14 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 }
 
 func (cm *ConnectionManager) Stop(wg *sync.WaitGroup) {
+	if wg != nil {
+		defer wg.Done()
+	}
+
 	log.Printf("[CCXT-CONN-MANAGER] Stoppe Manager für %s/%s", cm.exchangeName, cm.marketType)
-	close(cm.stopCh)
+	cm.stopOnce.Do(func() {
+		close(cm.stopCh)
+	})
+
+	<-cm.runDone
 }

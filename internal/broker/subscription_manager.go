@@ -83,10 +83,10 @@ func (sm *SubscriptionManager) Run() {
 					break TradeLoop
 				}
 			}
-			
+
 			// 3. Verarbeiten & Senden
 			sm.processTradeBatch(tradeBatch)
-			
+
 			// 4. Batch leeren (Kapazität behalten)
 			tradeBatch = tradeBatch[:0]
 
@@ -117,20 +117,22 @@ func (sm *SubscriptionManager) Run() {
 }
 
 func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpdate) {
-	if len(batch) == 0 { return }
+	if len(batch) == 0 {
+		return
+	}
 
 	clientBatches := make(map[string][]*shared_types.TradeUpdate)
-	
+
 	for _, trade := range batch {
 		subID := getSubscriptionID(trade.Exchange, trade.Symbol, trade.MarketType)
 		targetClients := make(map[string]bool)
-		
+
 		if clients, ok := sm.tradeSubscriptions[subID]; ok {
 			for clientIDStr := range clients {
 				targetClients[clientIDStr] = true
 			}
 		}
-		
+
 		wildcardID := trade.Exchange + "-" + trade.MarketType + "-all"
 		if wildClients, ok := sm.wildcardSubscribers[wildcardID]; ok {
 			for clientIDStr := range wildClients {
@@ -152,7 +154,9 @@ func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpda
 }
 
 func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.OrderBookUpdate) {
-	if len(batch) == 0 { return }
+	if len(batch) == 0 {
+		return
+	}
 
 	clientBatches := make(map[string][]*shared_types.OrderBookUpdate)
 
@@ -170,7 +174,7 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 		if len(updates) > 0 {
 			debugSym = updates[0].Symbol
 		}
-		
+
 		sm.DistributionCh <- &DistributionMessage{
 			ClientIDs:   [][]byte{[]byte(clientIDStr)},
 			RawPayload:  updates,
@@ -212,9 +216,12 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	case "unsubscribe":
 		if clients, ok := subMap[subID]; ok {
 			delete(clients, clientIDStr)
+			if len(clients) == 0 {
+				delete(subMap, subID)
+			}
 		}
 	case "disconnect":
-		// TODO: Cleanup
+		sm.cleanupClientSubscriptions(clientIDStr)
 		return
 	}
 
@@ -244,7 +251,7 @@ func (sm *SubscriptionManager) logIncomingRate() {
 		tradesCount := sm.incomingTradeCounter.Swap(0)
 		obCount := sm.incomingOBCounter.Swap(0)
 		totalCount := sm.totalDataReceived.Load()
-		
+
 		log.Printf(
 			"[STATS] 10s Rate -> Trades: %d | OrderBooks: %d || Gesamt-Events: %d",
 			tradesCount, obCount, totalCount,
@@ -254,4 +261,27 @@ func (sm *SubscriptionManager) logIncomingRate() {
 
 func (sm *SubscriptionManager) GetTotalTradesReceived() uint64 {
 	return sm.totalDataReceived.Load()
+}
+
+func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
+	for subID, clients := range sm.tradeSubscriptions {
+		delete(clients, clientID)
+		if len(clients) == 0 {
+			delete(sm.tradeSubscriptions, subID)
+		}
+	}
+
+	for subID, clients := range sm.orderBookSubscriptions {
+		delete(clients, clientID)
+		if len(clients) == 0 {
+			delete(sm.orderBookSubscriptions, subID)
+		}
+	}
+
+	for wildcardID, clients := range sm.wildcardSubscribers {
+		delete(clients, clientID)
+		if len(clients) == 0 {
+			delete(sm.wildcardSubscribers, wildcardID)
+		}
+	}
 }
