@@ -20,16 +20,16 @@ type wsMsg struct {
 
 // wsOrderBookData ist die 'data'-Struktur für Orderbuch-Nachrichten.
 type wsOrderBookData struct {
-	Symbol   string     `json:"s"`
-	Bids     [][]string `json:"b"` // Array von ["preis", "menge"]
-	Asks     [][]string `json:"a"` // Array von ["preis", "menge"]
-	UpdateID int64      `json:"u"`
+	Symbol   string      `json:"s"`
+	Bids     [][2]string `json:"b"` // Array von ["preis", "menge"]
+	Asks     [][2]string `json:"a"` // Array von ["preis", "menge"]
+	UpdateID int64       `json:"u"`
 }
 
 // wsOrderBookMsg ist die Hüllstruktur für Orderbuch-Nachrichten.
 type wsOrderBookMsg struct {
 	Topic     string          `json:"topic"`
-	Type      string          `json:"type"` 
-	Timestamp int64           `json:"ts"`   // <--- NEU: Das fehlte!
+	Type      string          `json:"type"`
+	Timestamp int64           `json:"ts"` // <--- NEU: Das fehlte!
 	Data      wsOrderBookData `json:"data"`
 }

@@ -192,7 +192,7 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 	if len(data.Bids) > 0 {
 		clear(book.Bids)
 		for _, level := range data.Bids {
-			if len(level) < 2 {
+			if level[0] == "" || level[1] == "" {
 				continue
 			}
 			price, err := strconv.ParseFloat(level[0], 64)
@@ -209,7 +209,7 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 	if len(data.Asks) > 0 {
 		clear(book.Asks)
 		for _, level := range data.Asks {
-			if len(level) < 2 {
+			if level[0] == "" || level[1] == "" {
 				continue
 			}
 			price, err := strconv.ParseFloat(level[0], 64)
@@ -238,7 +238,7 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 
 	book.LastUpdateID = data.UpdateID
 	for _, level := range data.Bids {
-		if len(level) < 2 {
+		if level[0] == "" || level[1] == "" {
 			continue
 		}
 		if level[1] == "0" {
@@ -261,7 +261,7 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 		}
 	}
 	for _, level := range data.Asks {
-		if len(level) < 2 {
+		if level[0] == "" || level[1] == "" {
 			continue
 		}
 		if level[1] == "0" {
