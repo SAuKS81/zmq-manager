@@ -38,6 +38,7 @@ type smokeConfig struct {
 	duration       time.Duration
 	rateLog        time.Duration
 	randomize      bool
+	marketTypesCSV string
 	marketType     string
 	subscribePause time.Duration
 	brokerAddress  string
@@ -81,8 +82,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("[SMOKE] broker=%s exchanges=%d symbols=%d requests=%d duration=%s encoding=%s\n",
-		cfg.brokerAddress, len(exchanges), len(symbols), len(plan), cfg.duration, cfg.encoding)
+	marketTypes := resolveMarketTypes(cfg)
+	fmt.Printf("[SMOKE] broker=%s exchanges=%d symbols=%d market_types=%d requests=%d duration=%s encoding=%s\n",
+		cfg.brokerAddress, len(exchanges), len(symbols), len(marketTypes), len(plan), cfg.duration, cfg.encoding)
 
 	for i, req := range plan {
 		payload, err := json.Marshal(req)
@@ -98,7 +100,7 @@ func main() {
 			time.Sleep(cfg.subscribePause)
 		}
 	}
-	fmt.Printf("[SMOKE] SUBSCRIBE_DONE requests=%d exchanges=%d symbols=%d\n", len(plan), len(exchanges), len(symbols))
+	fmt.Printf("[SMOKE] SUBSCRIBE_DONE requests=%d exchanges=%d symbols=%d market_types=%d\n", len(plan), len(exchanges), len(symbols), len(marketTypes))
 
 	consumeLoop(socket, cfg)
 }
@@ -239,6 +241,7 @@ func parseFlags() smokeConfig {
 	flag.DurationVar(&cfg.duration, "duration", 60*time.Second, "consume duration")
 	flag.DurationVar(&cfg.rateLog, "rate-log", 10*time.Second, "stats interval")
 	flag.BoolVar(&cfg.randomize, "randomize-symbols", false, "deterministically shuffle symbols with fixed seed")
+	flag.StringVar(&cfg.marketTypesCSV, "market-types", "", "comma-separated market types (overrides --market-type), e.g. spot,swap")
 	flag.StringVar(&cfg.marketType, "market-type", "spot", "market type for subscriptions")
 	flag.DurationVar(&cfg.subscribePause, "subscribe-pause", 50*time.Millisecond, "pause between subscribe requests")
 	flag.StringVar(&cfg.brokerAddress, "broker", defaultBrokerAddress(), "broker endpoint")
@@ -265,6 +268,15 @@ func validateConfig(cfg smokeConfig) error {
 	}
 	if cfg.obDepth < 0 {
 		return fmt.Errorf("--ob-depth must be >= 0")
+	}
+	marketTypes := resolveMarketTypes(cfg)
+	if len(marketTypes) == 0 {
+		return fmt.Errorf("at least one market type is required")
+	}
+	for _, mt := range marketTypes {
+		if mt != "spot" && mt != "swap" {
+			return fmt.Errorf("invalid market type %q (allowed: spot,swap)", mt)
+		}
 	}
 	return nil
 }
@@ -321,33 +333,44 @@ func selectSymbols(input []string, limit int, randomize bool) []string {
 }
 
 func buildPlan(exchanges []string, symbols []string, cfg smokeConfig) []subscribeRequest {
-	plan := make([]subscribeRequest, 0, len(exchanges)*len(symbols)*2)
+	marketTypes := resolveMarketTypes(cfg)
+	plan := make([]subscribeRequest, 0, len(exchanges)*len(symbols)*len(marketTypes)*2)
 	for _, ex := range exchanges {
-		for _, symbol := range symbols {
-			if cfg.trades {
-				plan = append(plan, subscribeRequest{
-					Action:     "subscribe",
-					Exchange:   ex,
-					Symbol:     symbol,
-					MarketType: cfg.marketType,
-					DataType:   "trades",
-					Encoding:   cfg.encoding,
-				})
-			}
-			if cfg.orderbooks {
-				plan = append(plan, subscribeRequest{
-					Action:     "subscribe",
-					Exchange:   ex,
-					Symbol:     symbol,
-					MarketType: cfg.marketType,
-					DataType:   "orderbooks",
-					Depth:      cfg.obDepth,
-					Encoding:   cfg.encoding,
-				})
+		for _, marketType := range marketTypes {
+			for _, symbol := range symbols {
+				if cfg.trades {
+					plan = append(plan, subscribeRequest{
+						Action:     "subscribe",
+						Exchange:   ex,
+						Symbol:     symbol,
+						MarketType: marketType,
+						DataType:   "trades",
+						Encoding:   cfg.encoding,
+					})
+				}
+				if cfg.orderbooks {
+					plan = append(plan, subscribeRequest{
+						Action:     "subscribe",
+						Exchange:   ex,
+						Symbol:     symbol,
+						MarketType: marketType,
+						DataType:   "orderbooks",
+						Depth:      cfg.obDepth,
+						Encoding:   cfg.encoding,
+					})
+				}
 			}
 		}
 	}
 	return plan
+}
+
+func resolveMarketTypes(cfg smokeConfig) []string {
+	raw := cfg.marketType
+	if strings.TrimSpace(cfg.marketTypesCSV) != "" {
+		raw = cfg.marketTypesCSV
+	}
+	return parseExchanges(raw)
 }
 
 func defaultBrokerAddress() string {

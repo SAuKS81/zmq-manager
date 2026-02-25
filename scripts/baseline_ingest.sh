@@ -12,6 +12,7 @@ ENCODING="msgpack"
 OB_DEPTH="5"
 SUBSCRIBE_PAUSE="1ms"
 MARKET_TYPE="spot"
+MARKET_TYPES=""
 
 RUN_DIR=""
 SMOKE_PID=""
@@ -31,7 +32,8 @@ Usage:
     [--encoding msgpack] \
     [--ob-depth 5] \
     [--subscribe-pause 1ms] \
-    [--market-type spot|swap]
+    [--market-type spot|swap] \
+    [--market-types spot,swap]
 EOF
 }
 
@@ -77,6 +79,8 @@ while [[ $# -gt 0 ]]; do
       SUBSCRIBE_PAUSE="${2:-}"; shift 2 ;;
     --market-type)
       MARKET_TYPE="${2:-}"; shift 2 ;;
+    --market-types)
+      MARKET_TYPES="${2:-}"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -95,6 +99,15 @@ fi
 if [[ "${MARKET_TYPE}" != "spot" && "${MARKET_TYPE}" != "swap" ]]; then
   echo "[BASELINE] invalid --market-type: ${MARKET_TYPE} (allowed: spot|swap)" >&2
   exit 2
+fi
+
+if [[ -n "${MARKET_TYPES}" ]]; then
+  for mt in $(echo "${MARKET_TYPES}" | tr ',' ' '); do
+    if [[ "${mt}" != "spot" && "${mt}" != "swap" ]]; then
+      echo "[BASELINE] invalid market type in --market-types: ${mt} (allowed: spot|swap)" >&2
+      exit 2
+    fi
+  done
 fi
 
 if [[ ! -f "${SYMBOLS_FILE}" ]]; then
@@ -117,6 +130,11 @@ mkdir -p "${RUN_DIR}"
 curl -fsS "${PPROF_ENDPOINT}/metrics" -o "${RUN_DIR}/metrics_pre.txt"
 
 # 4) Start smoke client in background (nohup)
+SMOKE_MARKET_FLAG=(--market-type="${MARKET_TYPE}")
+if [[ -n "${MARKET_TYPES}" ]]; then
+  SMOKE_MARKET_FLAG=(--market-types="${MARKET_TYPES}")
+fi
+
 nohup go run ./clients/smoke_client.go \
   --exchanges="${EXCHANGES}" \
   --symbols-file="${SYMBOLS_FILE}" \
@@ -128,7 +146,7 @@ nohup go run ./clients/smoke_client.go \
   --encoding="${ENCODING}" \
   --broker="${BROKER_ENDPOINT}" \
   --subscribe-pause="${SUBSCRIBE_PAUSE}" \
-  --market-type="${MARKET_TYPE}" \
+  "${SMOKE_MARKET_FLAG[@]}" \
   --rate-log=10s \
   >"${RUN_DIR}/smoke.log" 2>&1 &
 SMOKE_PID=$!
@@ -233,6 +251,7 @@ cat >"${RUN_DIR}/meta.json" <<EOF
   "exchanges": "${EXCHANGES}",
   "duration": "${DURATION}",
   "market_type": "${MARKET_TYPE}",
+  "market_types": "${MARKET_TYPES}",
   "git_commit": "${GIT_COMMIT}",
   "hostname": "${HOSTNAME_VALUE}",
   "go_version": "${GO_VERSION_VALUE}",
