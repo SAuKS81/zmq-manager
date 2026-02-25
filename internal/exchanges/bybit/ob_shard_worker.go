@@ -18,8 +18,8 @@ import (
 
 // localOrderbook hält den Zustand und die UpdateID
 type localOrderbook struct {
-	Bids         map[string]string
-	Asks         map[string]string
+	Bids         map[string]shared_types.OrderBookLevel
+	Asks         map[string]shared_types.OrderBookLevel
 	LastUpdateID int64
 }
 
@@ -184,23 +184,45 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		book = &localOrderbook{
-			Bids: make(map[string]string),
-			Asks: make(map[string]string),
+			Bids: make(map[string]shared_types.OrderBookLevel),
+			Asks: make(map[string]shared_types.OrderBookLevel),
 		}
 		sw.orderbooks[topic] = book
 	}
 	book.LastUpdateID = data.UpdateID
 
 	if len(data.Bids) > 0 {
-		book.Bids = make(map[string]string)
+		book.Bids = make(map[string]shared_types.OrderBookLevel)
 		for _, level := range data.Bids {
-			book.Bids[level[0]] = level[1]
+			if len(level) < 2 {
+				continue
+			}
+			price, err := strconv.ParseFloat(level[0], 64)
+			if err != nil {
+				continue
+			}
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			book.Bids[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
 	if len(data.Asks) > 0 {
-		book.Asks = make(map[string]string)
+		book.Asks = make(map[string]shared_types.OrderBookLevel)
 		for _, level := range data.Asks {
-			book.Asks[level[0]] = level[1]
+			if len(level) < 2 {
+				continue
+			}
+			price, err := strconv.ParseFloat(level[0], 64)
+			if err != nil {
+				continue
+			}
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
 	// ts weitergeben
@@ -220,17 +242,39 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 
 	book.LastUpdateID = data.UpdateID
 	for _, level := range data.Bids {
+		if len(level) < 2 {
+			continue
+		}
 		if level[1] == "0" {
 			delete(book.Bids, level[0])
 		} else {
-			book.Bids[level[0]] = level[1]
+			price, err := strconv.ParseFloat(level[0], 64)
+			if err != nil {
+				continue
+			}
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			book.Bids[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
 	for _, level := range data.Asks {
+		if len(level) < 2 {
+			continue
+		}
 		if level[1] == "0" {
 			delete(book.Asks, level[0])
 		} else {
-			book.Asks[level[0]] = level[1]
+			price, err := strconv.ParseFloat(level[0], 64)
+			if err != nil {
+				continue
+			}
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
 	// ts weitergeben
@@ -297,7 +341,7 @@ func (sw *OrderBookShardWorker) resubscribeAll() {
 	}
 }
 
-func mapToTopLevels(priceMap map[string]string, slice []shared_types.OrderBookLevel, sortDesc bool, limit int) []shared_types.OrderBookLevel {
+func mapToTopLevels(priceMap map[string]shared_types.OrderBookLevel, slice []shared_types.OrderBookLevel, sortDesc bool, limit int) []shared_types.OrderBookLevel {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -308,10 +352,8 @@ func mapToTopLevels(priceMap map[string]string, slice []shared_types.OrderBookLe
 		return slice
 	}
 
-	for p, s := range priceMap {
-		price, _ := strconv.ParseFloat(p, 64)
-		size, _ := strconv.ParseFloat(s, 64)
-		level := shared_types.OrderBookLevel{Price: price, Amount: size}
+	for _, level := range priceMap {
+		price := level.Price
 
 		insertAt := 0
 		for insertAt < len(slice) {
