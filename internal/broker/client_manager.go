@@ -213,20 +213,6 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		return
 	}
 
-	// Precompute latest P2 update index per series once per batch.
-	latestP2Idx := make(map[orderBookSeriesKey]int, 32)
-	for idx, ob := range updates {
-		if ob == nil || classifyOrderBookPriority(ob) != priorityP2 {
-			continue
-		}
-		key := orderBookSeriesKey{
-			exchange:   ob.Exchange,
-			marketType: ob.MarketType,
-			symbol:     ob.Symbol,
-		}
-		latestP2Idx[key] = idx
-	}
-
 	// Reuse serialized single-update envelopes across clients in this batch.
 	// This removes repeated msgpack/json marshal for identical OB pointers.
 	encodedCache := perEncodingOrderBookCache{
@@ -239,6 +225,20 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		encoding, exists := cm.clientEncoding(clientIDStr)
 		if !exists {
 			continue
+		}
+
+		// First pass: remember latest P2 update index per series in this batch.
+		latestP2Idx := make(map[orderBookSeriesKey]int, 32)
+		for idx, ob := range updates {
+			if ob == nil || classifyOrderBookPriority(ob) != priorityP2 {
+				continue
+			}
+			key := orderBookSeriesKey{
+				exchange:   ob.Exchange,
+				marketType: ob.MarketType,
+				symbol:     ob.Symbol,
+			}
+			latestP2Idx[key] = idx
 		}
 
 		// Second pass: enqueue P1 immediately, enqueue only latest P2 per series.
