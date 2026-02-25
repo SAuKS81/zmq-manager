@@ -1,17 +1,17 @@
 package bybit
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"log"
 	"math"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
+	gjson "github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 )
 
@@ -35,6 +35,11 @@ type ShardWorker struct {
 	mu            sync.Mutex
 	activeSymbols map[string]bool
 }
+
+var (
+	bybitTradeTopicNeedle = []byte(`"topic":"publicTrade.`)
+	bybitTradePongNeedle  = []byte(`"op":"pong"`)
+)
 
 // NewShardWorker erstellt einen neuen Worker.
 func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *ShardWorker {
@@ -154,7 +159,7 @@ func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols
 
 // readLoop ist die Hauptschleife zum Lesen von WebSocket-Nachrichten und Befehlen.
 func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
-	msgCh := make(chan []byte)
+	msgCh := make(chan []byte, 256)
 	errCh := make(chan error, 1)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
 	defer pingTicker.Stop()
@@ -177,9 +182,12 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 			// ... (Nachrichtenverarbeitung bleibt gleich)
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
-			if strings.Contains(string(msg), `"topic":"publicTrade.`) {
+			if bytes.Contains(msg, bybitTradePongNeedle) {
+				continue
+			}
+			if bytes.Contains(msg, bybitTradeTopicNeedle) {
 				var wsMsg wsMsg
-				if err := json.Unmarshal(msg, &wsMsg); err != nil {
+				if err := gjson.Unmarshal(msg, &wsMsg); err != nil {
 					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 					continue
 				}
