@@ -143,18 +143,31 @@ drain:
 
 // Umbenannt zu runWorkerBatch, da die Funktion jetzt einen Batch verarbeitet.
 func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []string) {
+	currentBatch := append([]string(nil), symbolsBatch...)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 			// Die Funktion verarbeitet jetzt den übergebenen Batch, nicht mehr die ganze Liste.
-			orderbook, err := sw.safeWatchOrderBookForSymbols(symbolsBatch)
+			orderbook, err := sw.safeWatchOrderBookForSymbols(currentBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
 				}
-				log.Printf("[CCXT-BATCH-OB-ERROR] `watchOrderBookForSymbols` für Batch (%d Symbole) fehlgeschlagen: %v. Warte 5s.", len(symbolsBatch), err)
+				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
+					log.Printf("[CCXT-BATCH-OB-WARN] Entferne ungültiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
+					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
+					sw.mu.Lock()
+					delete(sw.activeSymbols, missingSymbol)
+					sw.mu.Unlock()
+					if len(currentBatch) == 0 {
+						log.Printf("[CCXT-BATCH-OB-WARN] Batch leer nach Symbol-Filter (%s/%s), Worker beendet.", sw.exchangeName, sw.marketType)
+						return
+					}
+					continue
+				}
+				log.Printf("[CCXT-BATCH-OB-ERROR] `watchOrderBookForSymbols` für Batch (%d Symbole) fehlgeschlagen: %v. Warte 5s.", len(currentBatch), err)
 				time.Sleep(5 * time.Second)
 				continue
 			}
