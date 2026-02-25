@@ -27,6 +27,16 @@ type subscribeRequest struct {
 	Encoding   string `json:"encoding,omitempty"`
 }
 
+type subscribeBulkRequest struct {
+	Action     string   `json:"action"`
+	Exchange   string   `json:"exchange"`
+	Symbols    []string `json:"symbols"`
+	MarketType string   `json:"market_type"`
+	DataType   string   `json:"data_type"`
+	Depth      int      `json:"depth,omitempty"`
+	Encoding   string   `json:"encoding,omitempty"`
+}
+
 type smokeConfig struct {
 	exchangesCSV   string
 	symbolsFile    string
@@ -38,6 +48,7 @@ type smokeConfig struct {
 	trades         bool
 	orderbooks     bool
 	obDepth        int
+	bulkSize       int
 	encoding       string
 	duration       time.Duration
 	rateLog        time.Duration
@@ -243,6 +254,7 @@ func parseFlags() smokeConfig {
 	flag.BoolVar(&cfg.trades, "trades", true, "subscribe trades")
 	flag.BoolVar(&cfg.orderbooks, "orderbooks", true, "subscribe orderbooks")
 	flag.IntVar(&cfg.obDepth, "ob-depth", 5, "orderbook depth")
+	flag.IntVar(&cfg.bulkSize, "bulk-size", 100, "symbols per subscribe_bulk request (<=1 disables bulk)")
 	flag.StringVar(&cfg.encoding, "encoding", "msgpack", "msgpack|json")
 	flag.DurationVar(&cfg.duration, "duration", 60*time.Second, "consume duration")
 	flag.DurationVar(&cfg.rateLog, "rate-log", 10*time.Second, "stats interval")
@@ -271,6 +283,9 @@ func validateConfig(cfg smokeConfig) error {
 	}
 	if cfg.obDepth < 0 {
 		return fmt.Errorf("--ob-depth must be >= 0")
+	}
+	if cfg.bulkSize < 0 {
+		return fmt.Errorf("--bulk-size must be >= 0")
 	}
 	marketTypes := resolveMarketTypes(cfg)
 	if len(marketTypes) == 0 {
@@ -345,38 +360,59 @@ func selectSymbols(input []string, limit int, randomize bool) []string {
 	return selected
 }
 
-func buildPlan(exchanges []string, marketTypes []string, symbolsByMarket map[string][]string, cfg smokeConfig) []subscribeRequest {
+func buildPlan(exchanges []string, marketTypes []string, symbolsByMarket map[string][]string, cfg smokeConfig) []any {
 	totalSymbols := 0
 	for _, mt := range marketTypes {
 		totalSymbols += len(symbolsByMarket[mt])
 	}
-	plan := make([]subscribeRequest, 0, len(exchanges)*totalSymbols*2)
+	plan := make([]any, 0, len(exchanges)*totalSymbols*2)
 	for _, ex := range exchanges {
 		for _, marketType := range marketTypes {
-			for _, symbol := range symbolsByMarket[marketType] {
-				if cfg.trades {
-					plan = append(plan, subscribeRequest{
-						Action:     "subscribe",
-						Exchange:   ex,
-						Symbol:     symbol,
-						MarketType: marketType,
-						DataType:   "trades",
-						Encoding:   cfg.encoding,
-					})
-				}
-				if cfg.orderbooks {
-					plan = append(plan, subscribeRequest{
-						Action:     "subscribe",
-						Exchange:   ex,
-						Symbol:     symbol,
-						MarketType: marketType,
-						DataType:   "orderbooks",
-						Depth:      cfg.obDepth,
-						Encoding:   cfg.encoding,
-					})
-				}
+			symbols := symbolsByMarket[marketType]
+			if cfg.trades {
+				plan = appendRequests(plan, ex, marketType, "trades", 0, symbols, cfg)
+			}
+			if cfg.orderbooks {
+				plan = appendRequests(plan, ex, marketType, "orderbooks", cfg.obDepth, symbols, cfg)
 			}
 		}
+	}
+	return plan
+}
+
+func appendRequests(plan []any, exchange, marketType, dataType string, depth int, symbols []string, cfg smokeConfig) []any {
+	bulkSize := cfg.bulkSize
+	if bulkSize <= 1 {
+		for _, symbol := range symbols {
+			req := subscribeRequest{
+				Action:     "subscribe",
+				Exchange:   exchange,
+				Symbol:     symbol,
+				MarketType: marketType,
+				DataType:   dataType,
+				Depth:      depth,
+				Encoding:   cfg.encoding,
+			}
+			plan = append(plan, req)
+		}
+		return plan
+	}
+
+	for start := 0; start < len(symbols); start += bulkSize {
+		end := start + bulkSize
+		if end > len(symbols) {
+			end = len(symbols)
+		}
+		req := subscribeBulkRequest{
+			Action:     "subscribe_bulk",
+			Exchange:   exchange,
+			Symbols:    symbols[start:end],
+			MarketType: marketType,
+			DataType:   dataType,
+			Depth:      depth,
+			Encoding:   cfg.encoding,
+		}
+		plan = append(plan, req)
 	}
 	return plan
 }

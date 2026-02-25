@@ -17,6 +17,7 @@ OB_DEPTH="5"
 SUBSCRIBE_PAUSE="1ms"
 MARKET_TYPE="spot"
 MARKET_TYPES=""
+BULK_SIZE="100"
 
 RUN_DIR=""
 SMOKE_PID=""
@@ -41,7 +42,8 @@ Usage:
     [--ob-depth 5] \
     [--subscribe-pause 1ms] \
     [--market-type spot|swap] \
-    [--market-types spot,swap]
+    [--market-types spot,swap] \
+    [--bulk-size 100]
 EOF
 }
 
@@ -97,6 +99,8 @@ while [[ $# -gt 0 ]]; do
       MARKET_TYPE="${2:-}"; shift 2 ;;
     --market-types)
       MARKET_TYPES="${2:-}"; shift 2 ;;
+    --bulk-size)
+      BULK_SIZE="${2:-}"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -186,6 +190,7 @@ nohup go run ./clients/smoke_client.go \
   --trades=true \
   --orderbooks=true \
   --ob-depth="${OB_DEPTH}" \
+  --bulk-size="${BULK_SIZE}" \
   --duration="${DURATION}" \
   --encoding="${ENCODING}" \
   --broker="${BROKER_ENDPOINT}" \
@@ -206,6 +211,16 @@ done
 if ! grep -q "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
   echo "[BASELINE] smoke client did not reach SUBSCRIBE_DONE within timeout" >&2
   exit 1
+fi
+
+SUBSCRIBE_DONE_LINE="$(grep "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log" | tail -n1)"
+EFFECTIVE_SYMBOLS_TOTAL="$(echo "${SUBSCRIBE_DONE_LINE}" | sed -n 's/.*symbols=\([0-9][0-9]*\).*/\1/p')"
+SUBSCRIBE_REQUESTS="$(echo "${SUBSCRIBE_DONE_LINE}" | sed -n 's/.*requests=\([0-9][0-9]*\).*/\1/p')"
+if [[ -z "${EFFECTIVE_SYMBOLS_TOTAL}" ]]; then
+  EFFECTIVE_SYMBOLS_TOTAL=0
+fi
+if [[ -z "${SUBSCRIBE_REQUESTS}" ]]; then
+  SUBSCRIBE_REQUESTS=0
 fi
 
 # 6) Fixed warmup after steady-state subscription setup
@@ -296,6 +311,9 @@ cat >"${RUN_DIR}/meta.json" <<EOF
   "duration": "${DURATION}",
   "market_type": "${MARKET_TYPE}",
   "market_types": "${MARKET_TYPES}",
+  "effective_symbols_total": ${EFFECTIVE_SYMBOLS_TOTAL},
+  "subscribe_requests": ${SUBSCRIBE_REQUESTS},
+  "bulk_size": ${BULK_SIZE},
   "git_commit": "${GIT_COMMIT}",
   "hostname": "${HOSTNAME_VALUE}",
   "go_version": "${GO_VERSION_VALUE}",
