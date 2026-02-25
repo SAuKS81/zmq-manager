@@ -11,6 +11,7 @@ BROKER_ENDPOINT="ipc:///tmp/feed_broker.ipc"
 ENCODING="msgpack"
 OB_DEPTH="5"
 SUBSCRIBE_PAUSE="1ms"
+MARKET_TYPE="spot"
 
 RUN_DIR=""
 SMOKE_PID=""
@@ -29,7 +30,8 @@ Usage:
     [--broker-endpoint ipc:///tmp/feed_broker.ipc] \
     [--encoding msgpack] \
     [--ob-depth 5] \
-    [--subscribe-pause 1ms]
+    [--subscribe-pause 1ms] \
+    [--market-type spot|swap]
 EOF
 }
 
@@ -73,6 +75,8 @@ while [[ $# -gt 0 ]]; do
       OB_DEPTH="${2:-}"; shift 2 ;;
     --subscribe-pause)
       SUBSCRIBE_PAUSE="${2:-}"; shift 2 ;;
+    --market-type)
+      MARKET_TYPE="${2:-}"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -85,6 +89,11 @@ done
 if [[ -z "${RUN_NAME}" || -z "${SYMBOLS_FILE}" || -z "${SYMBOLS_LIMIT}" || -z "${EXCHANGES}" ]]; then
   echo "[BASELINE] missing required args" >&2
   usage
+  exit 2
+fi
+
+if [[ "${MARKET_TYPE}" != "spot" && "${MARKET_TYPE}" != "swap" ]]; then
+  echo "[BASELINE] invalid --market-type: ${MARKET_TYPE} (allowed: spot|swap)" >&2
   exit 2
 fi
 
@@ -119,6 +128,7 @@ nohup go run ./clients/smoke_client.go \
   --encoding="${ENCODING}" \
   --broker="${BROKER_ENDPOINT}" \
   --subscribe-pause="${SUBSCRIBE_PAUSE}" \
+  --market-type="${MARKET_TYPE}" \
   --rate-log=10s \
   >"${RUN_DIR}/smoke.log" 2>&1 &
 SMOKE_PID=$!
@@ -222,6 +232,7 @@ cat >"${RUN_DIR}/meta.json" <<EOF
   "symbols_limit": ${SYMBOLS_LIMIT},
   "exchanges": "${EXCHANGES}",
   "duration": "${DURATION}",
+  "market_type": "${MARKET_TYPE}",
   "git_commit": "${GIT_COMMIT}",
   "hostname": "${HOSTNAME_VALUE}",
   "go_version": "${GO_VERSION_VALUE}",
