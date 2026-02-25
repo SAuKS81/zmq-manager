@@ -17,6 +17,7 @@
 - Ingest scaling 1000+ Streams ueber mehrere Exchanges absichern
 - Drop-Ursachen weiter reduzieren (`buffer_full`)
 - Gate-Report-Automation fuer Vergleich mehrerer Runs
+- Prio1 Gate explizit ausweisen: Trades+ToB drops_delta = 0 bei ingest500
 
 ## Letzte Messungen
 

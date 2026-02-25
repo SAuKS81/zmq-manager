@@ -67,7 +67,8 @@ func sampleQueueMetrics(sm *broker.SubscriptionManager, cm *broker.ClientManager
 		metrics.SetQueueSample("broker_request", len(sm.RequestCh), cap(sm.RequestCh))
 		metrics.SetQueueSample("broker_to_distribution", len(cm.DistributionCh), cap(cm.DistributionCh))
 
-		sendLen, sendCap := cm.SendQueueStats()
-		metrics.SetQueueSample("router_send", sendLen, sendCap)
+		p1Len, p1Cap, p2Len, p2Cap := cm.SendQueueStats()
+		metrics.SetQueueSample("router_send_p1", p1Len, p1Cap)
+		metrics.SetQueueSample("router_send_p2_latest", p2Len, p2Cap)
 	}
 }

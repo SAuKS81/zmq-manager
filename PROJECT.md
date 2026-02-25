@@ -33,10 +33,18 @@ IPC Endpoint:
 
 ## Daten-Prioritaet & Regeln
 
+- Prio 1: Trades und Orderbook ToB/L1 gleich priorisiert (Happy-Path drop-frei)
+- Prio 2: Orderbook Level >1 bis max 20 ist sekundär (darf deterministisch degradiert werden, immer gezählt)
 - Trades: sofort senden, keine Aggregation
 - Orderbooks: Default Level 1-5
 - Orderbooks max depth: 20
 - Drop nur explizit zaehlen, nie still
+
+## Baseline-Vertrag (Team)
+
+- Happy Path Gate: `ingest500` + smoke client + `drops_delta` fuer Prio 1 = `0`
+- Prio 2 Degradation ist erlaubt, aber als separates Gate auszuweisen
+- `RecordPublish` muss einer erfolgreichen Send-Weitergabe entsprechen (keine Fake-Publishes)
 
 ## Observer Gates (Blocker)
 

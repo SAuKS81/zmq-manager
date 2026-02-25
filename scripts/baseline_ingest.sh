@@ -140,8 +140,28 @@ fi
 wait "${SMOKE_PID}" 2>/dev/null || true
 SMOKE_PID=""
 
-# Gate check: drops detected?
-DROPS_TOTAL="$(awk '/^zmq_dropped_messages_total\{/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_post.txt")"
+# Gate check: drops delta detected?
+DROPS_PRE_TOTAL="$(awk '/^zmq_dropped_messages_total\{/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_pre.txt")"
+DROPS_POST_TOTAL="$(awk '/^zmq_dropped_messages_total\{/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_post.txt")"
+DROPS_TOTAL=$((DROPS_POST_TOTAL - DROPS_PRE_TOTAL))
+if [[ "${DROPS_TOTAL}" -lt 0 ]]; then
+  DROPS_TOTAL=0
+fi
+
+DROPS_TRADE_PRE="$(awk '/^zmq_dropped_messages_total\{.*type="trade"/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_pre.txt")"
+DROPS_TRADE_POST="$(awk '/^zmq_dropped_messages_total\{.*type="trade"/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_post.txt")"
+DROPS_TRADE_DELTA=$((DROPS_TRADE_POST - DROPS_TRADE_PRE))
+if [[ "${DROPS_TRADE_DELTA}" -lt 0 ]]; then
+  DROPS_TRADE_DELTA=0
+fi
+
+DROPS_OB_PRE="$(awk '/^zmq_dropped_messages_total\{.*type="ob_update"/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_pre.txt")"
+DROPS_OB_POST="$(awk '/^zmq_dropped_messages_total\{.*type="ob_update"/ {sum += $NF} END {if (sum == "") sum = 0; printf "%.0f", sum}' "${RUN_DIR}/metrics_post.txt")"
+DROPS_OB_DELTA=$((DROPS_OB_POST - DROPS_OB_PRE))
+if [[ "${DROPS_OB_DELTA}" -lt 0 ]]; then
+  DROPS_OB_DELTA=0
+fi
+
 GATE_STATUS="PASS"
 if [[ "${DROPS_TOTAL}" -gt 0 ]]; then
   GATE_STATUS="FAIL_DROPS_DETECTED"
@@ -188,6 +208,9 @@ cat >"${RUN_DIR}/meta.json" <<EOF
   "hostname": "${HOSTNAME_VALUE}",
   "go_version": "${GO_VERSION_VALUE}",
   "gate_status": "${GATE_STATUS}",
+  "drops_delta_total": ${DROPS_TOTAL},
+  "drops_delta_trade": ${DROPS_TRADE_DELTA},
+  "drops_delta_ob_update": ${DROPS_OB_DELTA},
   "queue_hwm": ${QUEUE_HWM_JSON}
 }
 EOF
@@ -200,5 +223,5 @@ EOF
 BUNDLE_DONE=1
 
 echo "[BASELINE] run complete: ${RUN_DIR}"
-echo "[BASELINE] gate_status=${GATE_STATUS} drops_total=${DROPS_TOTAL}"
+echo "[BASELINE] gate_status=${GATE_STATUS} drops_delta_total=${DROPS_TOTAL} trade=${DROPS_TRADE_DELTA} ob_update=${DROPS_OB_DELTA}"
 echo "[BASELINE] bundle=${RUN_DIR}/bundle.tar.gz"
