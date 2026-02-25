@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import (
@@ -158,3 +161,4 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		}
 	}
 }
+

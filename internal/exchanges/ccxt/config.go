@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import "time"

@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import (
@@ -66,3 +69,4 @@ func waitChanOrTimeout(t *testing.T, ch <-chan struct{}, timeout time.Duration, 
 		t.Fatalf("%s", msg)
 	}
 }
+

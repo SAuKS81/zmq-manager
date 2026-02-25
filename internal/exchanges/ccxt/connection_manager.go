@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import (
@@ -338,3 +341,4 @@ func (cm *ConnectionManager) Stop(wg *sync.WaitGroup) {
 
 	<-cm.runDone
 }
+

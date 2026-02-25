@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import (
@@ -69,3 +72,4 @@ func NormalizeTrade(trade ccxtpro.Trade, exchangeName, marketType string, goTime
 	// 7. Gib das gefüllte Objekt zurück.
 	return normalized, nil
 }
+

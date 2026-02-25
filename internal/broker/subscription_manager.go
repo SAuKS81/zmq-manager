@@ -11,7 +11,6 @@ import (
 	"bybit-watcher/internal/exchanges/binance"
 	"bybit-watcher/internal/exchanges/bitget"
 	"bybit-watcher/internal/exchanges/bybit"
-	"bybit-watcher/internal/exchanges/ccxt"
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 )
@@ -44,7 +43,7 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh)
 	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh)
 	sm.exchangeRegistry["bitget_native"] = bitget.NewBitgetExchange(sm.RequestCh, sm.TradeDataCh)
-	sm.exchangeRegistry["ccxt_generic"] = ccxt.NewCCXTExchange(sm.TradeDataCh, sm.OrderBookCh)
+	registerCCXT(sm)
 	return sm
 }
 

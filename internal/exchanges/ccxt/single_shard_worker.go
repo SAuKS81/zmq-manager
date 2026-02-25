@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 // --- START OF FILE internal/exchanges/ccxt/single_shard_worker.go.txt ---
 
 package ccxt
@@ -140,3 +143,4 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 		}
 	}
 }
+

@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import (
@@ -39,3 +42,4 @@ func NormalizeOrderBook(ob ccxtpro.OrderBook, exchangeName, marketType string, g
 
 	return normalized, nil
 }
+
