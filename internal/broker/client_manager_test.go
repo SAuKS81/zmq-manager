@@ -27,7 +27,7 @@ func TestHandleMessageSubscribeBulk(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[string]outboundEnvelope),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"action":"subscribe_bulk","exchange":"binance_native","symbols":["BTC/USDT","ETH/USDT"],"market_type":"swap","depth":1}`)
@@ -56,7 +56,7 @@ func TestHandleMessageInvalidJSONNoPanic(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[string]outboundEnvelope),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"action":`))
@@ -72,7 +72,7 @@ func TestHandleMessageUnknownActionNoForward(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[string]outboundEnvelope),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"action":"do_magic","exchange":"bybit_native","symbol":"BTC/USDT","market_type":"spot"}`))
@@ -87,7 +87,7 @@ func TestHandleMessageEncodingUpdate(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[string]outboundEnvelope),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"encoding":"binary"}`))
@@ -107,7 +107,7 @@ func TestHandleMessageConcurrentClientStateAccess(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[string]outboundEnvelope),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	pongPayload := []byte(`{"message":"pong"}`)
@@ -148,7 +148,7 @@ func TestHandleMessageConcurrentClientStateAccess(t *testing.T) {
 func TestEnqueueSocketSendDoesNotBlockWhenChannelFull(t *testing.T) {
 	cm := &ClientManager{
 		sendChP1: make(chan outboundEnvelope, 1),
-		p2Latest: make(map[string]outboundEnvelope),
+		p2Latest: make(map[p2LatestKey]outboundEnvelope),
 	}
 	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsg([]byte("filled")), metricType: "trade", priority: priorityP1}
 

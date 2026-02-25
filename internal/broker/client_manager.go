@@ -38,7 +38,7 @@ type outboundEnvelope struct {
 	ingestNano  int64
 	ingestNanos []int64
 	priority    sendPriority
-	coalesceKey string
+	p2Key       p2LatestKey
 }
 
 type sendPriority uint8
@@ -64,6 +64,13 @@ type perEncodingOrderBookCache struct {
 	msgpackByOB map[*shared_types.OrderBookUpdate][]byte
 }
 
+type p2LatestKey struct {
+	clientID   string
+	exchange   string
+	marketType string
+	symbol     string
+}
+
 type ClientManager struct {
 	socket         zmq4.Socket
 	clients        map[string]*Client
@@ -72,7 +79,7 @@ type ClientManager struct {
 	DistributionCh chan *DistributionMessage
 	sendChP1       chan outboundEnvelope
 	p2Mu           sync.Mutex
-	p2Latest       map[string]outboundEnvelope
+	p2Latest       map[p2LatestKey]outboundEnvelope
 	bindAddress    string
 }
 
@@ -115,7 +122,7 @@ func NewClientManager(requestCh chan<- *shared_types.ClientRequest) *ClientManag
 		requestCh:      requestCh,
 		DistributionCh: make(chan *DistributionMessage, 10000),
 		sendChP1:       make(chan outboundEnvelope, 4096),
-		p2Latest:       make(map[string]outboundEnvelope, 4096),
+		p2Latest:       make(map[p2LatestKey]outboundEnvelope, 4096),
 		bindAddress:    bindAddr,
 	}
 }
@@ -244,7 +251,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 				p2ByKey[key] = pendingOrderBookEnvelope{ob: ob, metricType: metricType}
 				continue
 			}
-			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, "", &encodedCache)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, &encodedCache)
 		}
 
 		if len(p2ByKey) == 0 {
@@ -274,7 +281,6 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 				pending.ob,
 				pending.metricType,
 				priorityP2,
-				buildOrderBookCoalesceKey(clientIDStr, pending.ob),
 				&encodedCache,
 			)
 		}
@@ -288,7 +294,6 @@ func (cm *ClientManager) enqueueOrderBookEnvelope(
 	ob *shared_types.OrderBookUpdate,
 	metricType string,
 	priority sendPriority,
-	coalesceKey string,
 	encodedCache *perEncodingOrderBookCache,
 ) {
 	if ob == nil {
@@ -299,16 +304,22 @@ func (cm *ClientManager) enqueueOrderBookEnvelope(
 		return
 	}
 
-	if priority == priorityP2 && coalesceKey == "" {
-		coalesceKey = buildOrderBookCoalesceKey(clientIDStr, ob)
+	var p2Key p2LatestKey
+	if priority == priorityP2 {
+		p2Key = p2LatestKey{
+			clientID:   clientIDStr,
+			exchange:   ob.Exchange,
+			marketType: ob.MarketType,
+			symbol:     ob.Symbol,
+		}
 	}
 
 	cm.enqueueSocketSend(outboundEnvelope{
-		msg:         msg,
-		metricType:  metricType,
-		ingestNano:  ob.IngestUnixNano,
-		priority:    priority,
-		coalesceKey: coalesceKey,
+		msg:        msg,
+		metricType: metricType,
+		ingestNano: ob.IngestUnixNano,
+		priority:   priority,
+		p2Key:      p2Key,
 	})
 }
 
@@ -414,22 +425,6 @@ func classifyOrderBookPriority(ob *shared_types.OrderBookUpdate) sendPriority {
 		return priorityP1
 	}
 	return priorityP2
-}
-
-func buildOrderBookCoalesceKey(clientID string, ob *shared_types.OrderBookUpdate) string {
-	if ob == nil {
-		return clientID
-	}
-	var b strings.Builder
-	b.Grow(len(clientID) + len(ob.Exchange) + len(ob.MarketType) + len(ob.Symbol) + 3)
-	b.WriteString(clientID)
-	b.WriteByte('|')
-	b.WriteString(ob.Exchange)
-	b.WriteByte('|')
-	b.WriteString(ob.MarketType)
-	b.WriteByte('|')
-	b.WriteString(ob.Symbol)
-	return b.String()
 }
 
 func (cm *ClientManager) writeLoop() {
@@ -626,13 +621,13 @@ func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) bool {
 }
 
 func (cm *ClientManager) enqueueP2Latest(envelope outboundEnvelope) bool {
-	if envelope.coalesceKey == "" {
+	if envelope.p2Key.clientID == "" {
 		metrics.RecordDropped(metrics.ReasonInternalErr, envelope.metricType)
 		return false
 	}
 
 	cm.p2Mu.Lock()
-	if _, exists := cm.p2Latest[envelope.coalesceKey]; !exists && len(cm.p2Latest) >= p2LatestMax {
+	if _, exists := cm.p2Latest[envelope.p2Key]; !exists && len(cm.p2Latest) >= p2LatestMax {
 		cm.p2Mu.Unlock()
 		metrics.RecordDropped(metrics.ReasonBufferFull, envelope.metricType)
 		if caller, stack, ok := logDropCallsite(envelope.metricType, metrics.ReasonBufferFull); ok {
@@ -640,7 +635,7 @@ func (cm *ClientManager) enqueueP2Latest(envelope outboundEnvelope) bool {
 		}
 		return false
 	}
-	cm.p2Latest[envelope.coalesceKey] = envelope
+	cm.p2Latest[envelope.p2Key] = envelope
 	cm.p2Mu.Unlock()
 	return true
 }
@@ -653,16 +648,33 @@ func (cm *ClientManager) popP2LatestDeterministic() (outboundEnvelope, bool) {
 		return outboundEnvelope{}, false
 	}
 
-	minKey := ""
+	var (
+		minKey p2LatestKey
+		hasKey bool
+	)
 	for key := range cm.p2Latest {
-		if minKey == "" || key < minKey {
+		if !hasKey || lessP2Key(key, minKey) {
 			minKey = key
+			hasKey = true
 		}
 	}
 
 	outbound := cm.p2Latest[minKey]
 	delete(cm.p2Latest, minKey)
 	return outbound, true
+}
+
+func lessP2Key(a, b p2LatestKey) bool {
+	if a.clientID != b.clientID {
+		return a.clientID < b.clientID
+	}
+	if a.exchange != b.exchange {
+		return a.exchange < b.exchange
+	}
+	if a.marketType != b.marketType {
+		return a.marketType < b.marketType
+	}
+	return a.symbol < b.symbol
 }
 
 func (cm *ClientManager) drainP1() bool {
