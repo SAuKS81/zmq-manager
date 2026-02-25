@@ -4,6 +4,10 @@ set -euo pipefail
 RUN_NAME=""
 SYMBOLS_FILE=""
 SYMBOLS_LIMIT=""
+SYMBOLS_FILE_SPOT=""
+SYMBOLS_FILE_SWAP=""
+SYMBOLS_LIMIT_SPOT=""
+SYMBOLS_LIMIT_SWAP=""
 EXCHANGES=""
 DURATION="60s"
 PPROF_ENDPOINT="http://127.0.0.1:6060"
@@ -23,8 +27,12 @@ usage() {
 Usage:
   ./scripts/baseline_ingest.sh \
     --run-name <name> \
-    --symbols-file <path> \
+    [--symbols-file <path>] \
     --symbols-limit <n> \
+    [--symbols-file-spot <path>] \
+    [--symbols-file-swap <path>] \
+    [--symbols-limit-spot <n>] \
+    [--symbols-limit-swap <n>] \
     --exchanges <csv> \
     [--duration 60s] \
     [--pprof-endpoint http://127.0.0.1:6060] \
@@ -63,6 +71,14 @@ while [[ $# -gt 0 ]]; do
       SYMBOLS_FILE="${2:-}"; shift 2 ;;
     --symbols-limit)
       SYMBOLS_LIMIT="${2:-}"; shift 2 ;;
+    --symbols-file-spot)
+      SYMBOLS_FILE_SPOT="${2:-}"; shift 2 ;;
+    --symbols-file-swap)
+      SYMBOLS_FILE_SWAP="${2:-}"; shift 2 ;;
+    --symbols-limit-spot)
+      SYMBOLS_LIMIT_SPOT="${2:-}"; shift 2 ;;
+    --symbols-limit-swap)
+      SYMBOLS_LIMIT_SWAP="${2:-}"; shift 2 ;;
     --exchanges)
       EXCHANGES="${2:-}"; shift 2 ;;
     --duration)
@@ -90,7 +106,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${RUN_NAME}" || -z "${SYMBOLS_FILE}" || -z "${SYMBOLS_LIMIT}" || -z "${EXCHANGES}" ]]; then
+if [[ -z "${RUN_NAME}" || -z "${SYMBOLS_LIMIT}" || -z "${EXCHANGES}" ]]; then
   echo "[BASELINE] missing required args" >&2
   usage
   exit 2
@@ -110,8 +126,23 @@ if [[ -n "${MARKET_TYPES}" ]]; then
   done
 fi
 
-if [[ ! -f "${SYMBOLS_FILE}" ]]; then
+if [[ -z "${SYMBOLS_FILE}" && -z "${SYMBOLS_FILE_SPOT}" && -z "${SYMBOLS_FILE_SWAP}" ]]; then
+  echo "[BASELINE] missing symbols source: provide --symbols-file and/or market-specific files" >&2
+  exit 2
+fi
+
+if [[ -n "${SYMBOLS_FILE}" && ! -f "${SYMBOLS_FILE}" ]]; then
   echo "[BASELINE] symbols file not found: ${SYMBOLS_FILE}" >&2
+  exit 2
+fi
+
+if [[ -n "${SYMBOLS_FILE_SPOT}" && ! -f "${SYMBOLS_FILE_SPOT}" ]]; then
+  echo "[BASELINE] symbols file not found: ${SYMBOLS_FILE_SPOT}" >&2
+  exit 2
+fi
+
+if [[ -n "${SYMBOLS_FILE_SWAP}" && ! -f "${SYMBOLS_FILE_SWAP}" ]]; then
+  echo "[BASELINE] symbols file not found: ${SYMBOLS_FILE_SWAP}" >&2
   exit 2
 fi
 
@@ -135,10 +166,23 @@ if [[ -n "${MARKET_TYPES}" ]]; then
   SMOKE_MARKET_FLAG=(--market-types="${MARKET_TYPES}")
 fi
 
+SMOKE_SYMBOL_FLAGS=(--symbols-file="${SYMBOLS_FILE}" --symbols-limit="${SYMBOLS_LIMIT}")
+if [[ -n "${SYMBOLS_FILE_SPOT}" ]]; then
+  SMOKE_SYMBOL_FLAGS+=(--symbols-file-spot="${SYMBOLS_FILE_SPOT}")
+fi
+if [[ -n "${SYMBOLS_FILE_SWAP}" ]]; then
+  SMOKE_SYMBOL_FLAGS+=(--symbols-file-swap="${SYMBOLS_FILE_SWAP}")
+fi
+if [[ -n "${SYMBOLS_LIMIT_SPOT}" ]]; then
+  SMOKE_SYMBOL_FLAGS+=(--symbols-limit-spot="${SYMBOLS_LIMIT_SPOT}")
+fi
+if [[ -n "${SYMBOLS_LIMIT_SWAP}" ]]; then
+  SMOKE_SYMBOL_FLAGS+=(--symbols-limit-swap="${SYMBOLS_LIMIT_SWAP}")
+fi
+
 nohup go run ./clients/smoke_client.go \
   --exchanges="${EXCHANGES}" \
-  --symbols-file="${SYMBOLS_FILE}" \
-  --symbols-limit="${SYMBOLS_LIMIT}" \
+  "${SMOKE_SYMBOL_FLAGS[@]}" \
   --trades=true \
   --orderbooks=true \
   --ob-depth="${OB_DEPTH}" \

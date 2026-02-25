@@ -31,6 +31,10 @@ type smokeConfig struct {
 	exchangesCSV   string
 	symbolsFile    string
 	symbolsLimit   int
+	symbolsFileSpot string
+	symbolsFileSwap string
+	symbolsLimitSpot int
+	symbolsLimitSwap int
 	trades         bool
 	orderbooks     bool
 	obDepth        int
@@ -51,17 +55,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	symbols, err := loadSymbols(cfg.symbolsFile)
+	marketTypes := resolveMarketTypes(cfg)
+	symbolsByMarket, err := resolveSymbolsByMarket(cfg, marketTypes)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[SMOKE] symbols load failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[SMOKE] symbols resolve failed: %v\n", err)
 		os.Exit(1)
 	}
-	if len(symbols) == 0 {
-		fmt.Fprintf(os.Stderr, "[SMOKE] symbols file has no symbols: %s\n", cfg.symbolsFile)
-		os.Exit(1)
-	}
-
-	symbols = selectSymbols(symbols, cfg.symbolsLimit, cfg.randomize)
 	exchanges := parseExchanges(cfg.exchangesCSV)
 	if len(exchanges) == 0 {
 		fmt.Fprintf(os.Stderr, "[SMOKE] no exchanges provided\n")
@@ -76,15 +75,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	plan := buildPlan(exchanges, symbols, cfg)
+	plan := buildPlan(exchanges, marketTypes, symbolsByMarket, cfg)
 	if len(plan) == 0 {
 		fmt.Fprintf(os.Stderr, "[SMOKE] subscribe plan is empty\n")
 		os.Exit(1)
 	}
 
-	marketTypes := resolveMarketTypes(cfg)
+	totalSymbols := 0
+	for _, mt := range marketTypes {
+		totalSymbols += len(symbolsByMarket[mt])
+	}
 	fmt.Printf("[SMOKE] broker=%s exchanges=%d symbols=%d market_types=%d requests=%d duration=%s encoding=%s\n",
-		cfg.brokerAddress, len(exchanges), len(symbols), len(marketTypes), len(plan), cfg.duration, cfg.encoding)
+		cfg.brokerAddress, len(exchanges), totalSymbols, len(marketTypes), len(plan), cfg.duration, cfg.encoding)
 
 	for i, req := range plan {
 		payload, err := json.Marshal(req)
@@ -100,7 +102,7 @@ func main() {
 			time.Sleep(cfg.subscribePause)
 		}
 	}
-	fmt.Printf("[SMOKE] SUBSCRIBE_DONE requests=%d exchanges=%d symbols=%d market_types=%d\n", len(plan), len(exchanges), len(symbols), len(marketTypes))
+	fmt.Printf("[SMOKE] SUBSCRIBE_DONE requests=%d exchanges=%d symbols=%d market_types=%d\n", len(plan), len(exchanges), totalSymbols, len(marketTypes))
 
 	consumeLoop(socket, cfg)
 }
@@ -234,6 +236,10 @@ func parseFlags() smokeConfig {
 	flag.StringVar(&cfg.exchangesCSV, "exchanges", "binance_native,bybit_native", "comma-separated exchanges")
 	flag.StringVar(&cfg.symbolsFile, "symbols-file", "", "path to symbol file (one symbol per line)")
 	flag.IntVar(&cfg.symbolsLimit, "symbols-limit", 200, "max symbols to use (0 = all)")
+	flag.StringVar(&cfg.symbolsFileSpot, "symbols-file-spot", "", "path to spot symbol file (one symbol per line)")
+	flag.StringVar(&cfg.symbolsFileSwap, "symbols-file-swap", "", "path to swap/perp symbol file (one symbol per line)")
+	flag.IntVar(&cfg.symbolsLimitSpot, "symbols-limit-spot", 0, "max spot symbols to use (0 = fallback to --symbols-limit)")
+	flag.IntVar(&cfg.symbolsLimitSwap, "symbols-limit-swap", 0, "max swap symbols to use (0 = fallback to --symbols-limit)")
 	flag.BoolVar(&cfg.trades, "trades", true, "subscribe trades")
 	flag.BoolVar(&cfg.orderbooks, "orderbooks", true, "subscribe orderbooks")
 	flag.IntVar(&cfg.obDepth, "ob-depth", 5, "orderbook depth")
@@ -251,9 +257,6 @@ func parseFlags() smokeConfig {
 }
 
 func validateConfig(cfg smokeConfig) error {
-	if cfg.symbolsFile == "" {
-		return fmt.Errorf("--symbols-file is required")
-	}
 	if cfg.encoding != "msgpack" && cfg.encoding != "json" {
 		return fmt.Errorf("--encoding must be msgpack or json")
 	}
@@ -276,6 +279,16 @@ func validateConfig(cfg smokeConfig) error {
 	for _, mt := range marketTypes {
 		if mt != "spot" && mt != "swap" {
 			return fmt.Errorf("invalid market type %q (allowed: spot,swap)", mt)
+		}
+		switch mt {
+		case "spot":
+			if cfg.symbolsFileSpot == "" && cfg.symbolsFile == "" {
+				return fmt.Errorf("spot selected but no symbols source provided (--symbols-file-spot or --symbols-file)")
+			}
+		case "swap":
+			if cfg.symbolsFileSwap == "" && cfg.symbolsFile == "" {
+				return fmt.Errorf("swap selected but no symbols source provided (--symbols-file-swap or --symbols-file)")
+			}
 		}
 	}
 	return nil
@@ -332,12 +345,15 @@ func selectSymbols(input []string, limit int, randomize bool) []string {
 	return selected
 }
 
-func buildPlan(exchanges []string, symbols []string, cfg smokeConfig) []subscribeRequest {
-	marketTypes := resolveMarketTypes(cfg)
-	plan := make([]subscribeRequest, 0, len(exchanges)*len(symbols)*len(marketTypes)*2)
+func buildPlan(exchanges []string, marketTypes []string, symbolsByMarket map[string][]string, cfg smokeConfig) []subscribeRequest {
+	totalSymbols := 0
+	for _, mt := range marketTypes {
+		totalSymbols += len(symbolsByMarket[mt])
+	}
+	plan := make([]subscribeRequest, 0, len(exchanges)*totalSymbols*2)
 	for _, ex := range exchanges {
 		for _, marketType := range marketTypes {
-			for _, symbol := range symbols {
+			for _, symbol := range symbolsByMarket[marketType] {
 				if cfg.trades {
 					plan = append(plan, subscribeRequest{
 						Action:     "subscribe",
@@ -371,6 +387,36 @@ func resolveMarketTypes(cfg smokeConfig) []string {
 		raw = cfg.marketTypesCSV
 	}
 	return parseExchanges(raw)
+}
+
+func resolveSymbolsByMarket(cfg smokeConfig, marketTypes []string) (map[string][]string, error) {
+	result := make(map[string][]string, len(marketTypes))
+	for _, mt := range marketTypes {
+		path := cfg.symbolsFile
+		limit := cfg.symbolsLimit
+		if mt == "spot" && strings.TrimSpace(cfg.symbolsFileSpot) != "" {
+			path = cfg.symbolsFileSpot
+		}
+		if mt == "swap" && strings.TrimSpace(cfg.symbolsFileSwap) != "" {
+			path = cfg.symbolsFileSwap
+		}
+		if mt == "spot" && cfg.symbolsLimitSpot > 0 {
+			limit = cfg.symbolsLimitSpot
+		}
+		if mt == "swap" && cfg.symbolsLimitSwap > 0 {
+			limit = cfg.symbolsLimitSwap
+		}
+
+		symbols, err := loadSymbols(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s symbols load failed (%s): %w", mt, path, err)
+		}
+		if len(symbols) == 0 {
+			return nil, fmt.Errorf("%s symbols file has no symbols: %s", mt, path)
+		}
+		result[mt] = selectSymbols(symbols, limit, cfg.randomize)
+	}
+	return result, nil
 }
 
 func defaultBrokerAddress() string {
