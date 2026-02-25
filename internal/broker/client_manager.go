@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"os"
@@ -23,6 +24,18 @@ const (
 	HeaderTradeBin = "T"
 	HeaderOBBin    = "O"
 	p2LatestMax    = 200000
+)
+
+var (
+	headerTradeBinFrame = []byte(HeaderTradeBin)
+	headerOBBinFrame    = []byte(HeaderOBBin)
+	msgpackBufPool      = sync.Pool{
+		New: func() any {
+			buf := &bytes.Buffer{}
+			buf.Grow(8 * 1024)
+			return buf
+		},
+	}
 )
 
 type Client struct {
@@ -332,13 +345,16 @@ func (cm *ClientManager) encodePayloadForClient(
 ) (zmq4.Msg, bool) {
 	if encoding == "msgpack" || encoding == "binary" {
 		if *msgpackCache == nil {
-			binPayload, err := msgpack.Marshal(payload)
+			binPayload, err := marshalMsgpack(payload)
 			if err != nil {
 				metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
 				log.Printf("[MSGPACK ERROR] %v", err)
 				return zmq4.Msg{}, false
 			}
 			*msgpackCache = binPayload
+		}
+		if msgTypeHeader == HeaderTradeBin {
+			return zmq4.NewMsgFrom(clientID, headerTradeBinFrame, *msgpackCache), true
 		}
 		return zmq4.NewMsgFrom(clientID, []byte(msgTypeHeader), *msgpackCache), true
 	}
@@ -367,8 +383,7 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 	if encoding == "msgpack" || encoding == "binary" {
 		payload, ok = cache.msgpackByOB[ob]
 		if !ok {
-			single := [1]*shared_types.OrderBookUpdate{ob}
-			binPayload, err := msgpack.Marshal(single[:])
+			binPayload, err := marshalSingleOBAsMsgpackArray(ob)
 			if err != nil {
 				metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
 				log.Printf("[MSGPACK ERROR] %v", err)
@@ -377,7 +392,7 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 			cache.msgpackByOB[ob] = binPayload
 			payload = binPayload
 		}
-		return zmq4.NewMsgFrom(clientID, []byte(HeaderOBBin), payload), true
+		return zmq4.NewMsgFrom(clientID, headerOBBinFrame, payload), true
 	}
 
 	payload, ok = cache.jsonByOB[ob]
@@ -399,6 +414,36 @@ func orderBookEnvelopeType(ob *shared_types.OrderBookUpdate) string {
 		return metrics.TypeOBSnapshot
 	}
 	return metrics.TypeOBUpdate
+}
+
+func marshalMsgpack(v any) ([]byte, error) {
+	buf := msgpackBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	enc := msgpack.NewEncoder(buf)
+	if err := enc.Encode(v); err != nil {
+		msgpackBufPool.Put(buf)
+		return nil, err
+	}
+	out := append([]byte(nil), buf.Bytes()...)
+	msgpackBufPool.Put(buf)
+	return out, nil
+}
+
+func marshalSingleOBAsMsgpackArray(ob *shared_types.OrderBookUpdate) ([]byte, error) {
+	buf := msgpackBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	enc := msgpack.NewEncoder(buf)
+	if err := enc.EncodeArrayLen(1); err != nil {
+		msgpackBufPool.Put(buf)
+		return nil, err
+	}
+	if err := enc.Encode(ob); err != nil {
+		msgpackBufPool.Put(buf)
+		return nil, err
+	}
+	out := append([]byte(nil), buf.Bytes()...)
+	msgpackBufPool.Put(buf)
+	return out, nil
 }
 
 func classifyOrderBookPriority(ob *shared_types.OrderBookUpdate) sendPriority {
