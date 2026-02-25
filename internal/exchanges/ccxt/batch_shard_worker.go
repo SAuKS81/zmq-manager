@@ -29,7 +29,7 @@ type BatchShardWorker struct {
 }
 
 func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *BatchShardWorker {
-	options := map[string]interface{}{"options": map[string]interface{}{"defaultType": marketType}}
+	options := makeExchangeOptions(exchangeName, marketType)
 	exchange := ccxtpro.CreateExchange(exchangeName, options)
 	if exchange == nil {
 		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange-Instanz für %s nicht erstellen", exchangeName)
@@ -161,4 +161,3 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		}
 	}
 }
-

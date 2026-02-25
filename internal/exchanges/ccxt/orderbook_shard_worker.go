@@ -42,7 +42,7 @@ func NewOrderBookShardWorker(exchangeName, marketType string, config ExchangeCon
 func (sw *OrderBookShardWorker) Run() {
 	defer sw.wg.Done()
 	log.Printf("[CCXT-OB-SHARD] Starte Worker für %s", sw.exchangeName)
-	options := map[string]interface{}{"options": map[string]interface{}{"defaultType": sw.marketType}}
+	options := makeExchangeOptions(sw.exchangeName, sw.marketType)
 	sw.exchange = ccxtpro.CreateExchange(sw.exchangeName, options)
 	if sw.exchange == nil {
 		log.Printf("[CCXT-OB-SHARD] Instanz für %s konnte nicht erstellt werden.", sw.exchangeName)
@@ -130,4 +130,3 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 		}
 	}
 }
-

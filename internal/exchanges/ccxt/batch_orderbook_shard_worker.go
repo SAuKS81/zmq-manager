@@ -29,7 +29,7 @@ type BatchOrderBookShardWorker struct {
 }
 
 func NewBatchOrderBookShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *BatchOrderBookShardWorker {
-	options := map[string]interface{}{"options": map[string]interface{}{"defaultType": marketType}}
+	options := makeExchangeOptions(exchangeName, marketType)
 	exchange := ccxtpro.CreateExchange(exchangeName, options)
 	if exchange == nil {
 		log.Printf("[CCXT-BATCH-OB-FATAL] Konnte Exchange-Instanz für %s nicht erstellen", exchangeName)
@@ -183,4 +183,3 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 		}
 	}
 }
-
