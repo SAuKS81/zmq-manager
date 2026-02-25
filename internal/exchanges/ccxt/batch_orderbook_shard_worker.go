@@ -5,7 +5,9 @@ package ccxt
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -115,6 +117,7 @@ drain:
 	}
 	sw.mu.Unlock()
 
+	symbolsToWatch = sw.filterSupportedSymbols(symbolsToWatch)
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
 		ctx, sw.cancelWorkers = context.WithCancel(context.Background())
@@ -146,7 +149,7 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 			return
 		default:
 			// Die Funktion verarbeitet jetzt den übergebenen Batch, nicht mehr die ganze Liste.
-			orderbook, err := sw.exchange.WatchOrderBookForSymbols(symbolsBatch)
+			orderbook, err := sw.safeWatchOrderBookForSymbols(symbolsBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -182,4 +185,48 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 			}
 		}
 	}
+}
+
+func (sw *BatchOrderBookShardWorker) safeWatchOrderBookForSymbols(symbolsBatch []string) (orderbook ccxtpro.OrderBook, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in WatchOrderBookForSymbols: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	return sw.exchange.WatchOrderBookForSymbols(symbolsBatch)
+}
+
+func (sw *BatchOrderBookShardWorker) filterSupportedSymbols(symbols []string) []string {
+	markets, err := sw.exchange.LoadMarkets()
+	if err != nil {
+		log.Printf("[CCXT-BATCH-OB-WARN] LoadMarkets failed for %s/%s: %v", sw.exchangeName, sw.marketType, err)
+		return symbols
+	}
+	if len(markets) == 0 {
+		return symbols
+	}
+
+	supported := make(map[string]struct{}, len(markets))
+	for symbol := range markets {
+		supported[symbol] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(symbols))
+	removed := 0
+	for _, symbol := range symbols {
+		if _, ok := supported[symbol]; ok {
+			filtered = append(filtered, symbol)
+			continue
+		}
+		removed++
+		sw.mu.Lock()
+		delete(sw.activeSymbols, symbol)
+		sw.mu.Unlock()
+	}
+
+	if removed > 0 {
+		log.Printf("[CCXT-BATCH-OB-WARN] dropped %d unsupported symbols for %s/%s", removed, sw.exchangeName, sw.marketType)
+	}
+
+	return filtered
 }

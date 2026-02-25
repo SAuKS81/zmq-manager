@@ -5,7 +5,9 @@ package ccxt
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -116,6 +118,7 @@ drain:
 	}
 	sw.mu.Unlock()
 
+	symbolsToWatch = sw.filterSupportedSymbols(symbolsToWatch)
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
 		ctx, sw.cancelWorkers = context.WithCancel(context.Background())
@@ -137,7 +140,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		case <-ctx.Done():
 			return
 		default:
-			trades, err := sw.exchange.WatchTradesForSymbols(symbolsBatch)
+			trades, err := sw.safeWatchTradesForSymbols(symbolsBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -160,4 +163,42 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 			}
 		}
 	}
+}
+
+func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string) (trades []ccxtpro.Trade, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in WatchTradesForSymbols: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	return sw.exchange.WatchTradesForSymbols(symbolsBatch)
+}
+
+func (sw *BatchShardWorker) filterSupportedSymbols(symbols []string) []string {
+	markets, err := sw.exchange.LoadMarkets()
+	if err != nil {
+		log.Printf("[CCXT-BATCH-SHARD-WARN] LoadMarkets failed for %s/%s: %v", sw.exchangeName, sw.marketType, err)
+		return symbols
+	}
+	if len(markets) == 0 {
+		return symbols
+	}
+
+	supported := make(map[string]struct{}, len(markets))
+	for symbol := range markets {
+		supported[symbol] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		if _, ok := supported[symbol]; ok {
+			filtered = append(filtered, symbol)
+			continue
+		}
+		sw.mu.Lock()
+		delete(sw.activeSymbols, symbol)
+		sw.mu.Unlock()
+	}
+
+	return filtered
 }
