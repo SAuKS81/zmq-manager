@@ -25,10 +25,6 @@ const (
 	p2LatestMax    = 200000
 )
 
-var (
-	headerOBBinFrame = []byte(HeaderOBBin)
-)
-
 type Client struct {
 	ID       []byte
 	LastPong time.Time
@@ -249,14 +245,10 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 
 	// Reuse serialized single-update envelopes across clients in this batch.
 	// This removes repeated msgpack/json marshal for identical OB pointers.
-	// For single-client batches, skip cache maps entirely: they only add overhead.
-	var encodedCache *perEncodingOrderBookCache
-	if len(clientIDs) > 1 {
-		cacheSize := len(p1Updates) + len(p2Order)
-		encodedCache = &perEncodingOrderBookCache{
-			jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
-			msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
-		}
+	cacheSize := len(p1Updates) + len(p2Order)
+	encodedCache := perEncodingOrderBookCache{
+		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
 	}
 
 	for _, clientID := range clientIDs {
@@ -268,7 +260,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 
 		for _, ob := range p1Updates {
 			metricType := orderBookEnvelopeType(ob)
-			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP1, encodedCache)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP1, &encodedCache)
 		}
 
 		for _, key := range p2Order {
@@ -277,7 +269,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 				continue
 			}
 			metricType := orderBookEnvelopeType(ob)
-			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, encodedCache)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, &encodedCache)
 		}
 	}
 }
@@ -373,20 +365,8 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 	var ok bool
 
 	if encoding == "msgpack" || encoding == "binary" {
-		if cache != nil {
-			payload, ok = cache.msgpackByOB[ob]
-			if !ok {
-				single := [1]*shared_types.OrderBookUpdate{ob}
-				binPayload, err := msgpack.Marshal(single[:])
-				if err != nil {
-					metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
-					log.Printf("[MSGPACK ERROR] %v", err)
-					return zmq4.Msg{}, false
-				}
-				cache.msgpackByOB[ob] = binPayload
-				payload = binPayload
-			}
-		} else {
+		payload, ok = cache.msgpackByOB[ob]
+		if !ok {
 			single := [1]*shared_types.OrderBookUpdate{ob}
 			binPayload, err := msgpack.Marshal(single[:])
 			if err != nil {
@@ -394,14 +374,13 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 				log.Printf("[MSGPACK ERROR] %v", err)
 				return zmq4.Msg{}, false
 			}
+			cache.msgpackByOB[ob] = binPayload
 			payload = binPayload
 		}
-		return zmq4.NewMsgFrom(clientID, headerOBBinFrame, payload), true
+		return zmq4.NewMsgFrom(clientID, []byte(HeaderOBBin), payload), true
 	}
 
-	if cache != nil {
-		payload, ok = cache.jsonByOB[ob]
-	}
+	payload, ok = cache.jsonByOB[ob]
 	if !ok {
 		single := [1]*shared_types.OrderBookUpdate{ob}
 		raw, err := json.Marshal(single[:])
@@ -409,9 +388,7 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 			metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
 			return zmq4.Msg{}, false
 		}
-		if cache != nil {
-			cache.jsonByOB[ob] = raw
-		}
+		cache.jsonByOB[ob] = raw
 		payload = raw
 	}
 	return zmq4.NewMsgFrom(clientID, payload), true
