@@ -35,6 +35,7 @@ type Client struct {
 type outboundEnvelope struct {
 	msg         zmq4.Msg
 	metricType  string
+	ingestNano  int64
 	ingestNanos []int64
 	priority    sendPriority
 	coalesceKey string
@@ -50,6 +51,17 @@ const (
 type pendingOrderBookEnvelope struct {
 	ob         *shared_types.OrderBookUpdate
 	metricType string
+}
+
+type orderBookSeriesKey struct {
+	exchange   string
+	marketType string
+	symbol     string
+}
+
+type perEncodingOrderBookCache struct {
+	jsonByOB    map[*shared_types.OrderBookUpdate][]byte
+	msgpackByOB map[*shared_types.OrderBookUpdate][]byte
 }
 
 type ClientManager struct {
@@ -200,6 +212,13 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		return
 	}
 
+	// Reuse serialized single-update envelopes across clients in this batch.
+	// This removes repeated msgpack/json marshal for identical OB pointers.
+	encodedCache := perEncodingOrderBookCache{
+		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
+		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
+	}
+
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
 		encoding, exists := cm.clientEncoding(clientIDStr)
@@ -208,7 +227,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		}
 
 		// Pre-coalesce P2 before any encoding to avoid serializing overwritten depth updates.
-		p2ByKey := make(map[string]pendingOrderBookEnvelope, 16)
+		p2ByKey := make(map[orderBookSeriesKey]pendingOrderBookEnvelope, 16)
 
 		for _, ob := range updates {
 			if ob == nil {
@@ -217,58 +236,77 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			metricType := orderBookEnvelopeType(ob)
 			priority := classifyOrderBookPriority(ob)
 			if priority == priorityP2 {
-				key := buildOrderBookCoalesceKey(clientIDStr, ob)
+				key := orderBookSeriesKey{
+					exchange:   ob.Exchange,
+					marketType: ob.MarketType,
+					symbol:     ob.Symbol,
+				}
 				p2ByKey[key] = pendingOrderBookEnvelope{ob: ob, metricType: metricType}
 				continue
 			}
-			cm.enqueueOrderBookEnvelope(clientID, encoding, ob, metricType, priority, "")
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, "", &encodedCache)
 		}
 
 		if len(p2ByKey) == 0 {
 			continue
 		}
 
-		keys := make([]string, 0, len(p2ByKey))
+		keys := make([]orderBookSeriesKey, 0, len(p2ByKey))
 		for key := range p2ByKey {
 			keys = append(keys, key)
 		}
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].exchange != keys[j].exchange {
+				return keys[i].exchange < keys[j].exchange
+			}
+			if keys[i].marketType != keys[j].marketType {
+				return keys[i].marketType < keys[j].marketType
+			}
+			return keys[i].symbol < keys[j].symbol
+		})
 
 		for _, key := range keys {
 			pending := p2ByKey[key]
-			cm.enqueueOrderBookEnvelope(clientID, encoding, pending.ob, pending.metricType, priorityP2, key)
+			cm.enqueueOrderBookEnvelope(
+				clientID,
+				clientIDStr,
+				encoding,
+				pending.ob,
+				pending.metricType,
+				priorityP2,
+				buildOrderBookCoalesceKey(clientIDStr, pending.ob),
+				&encodedCache,
+			)
 		}
 	}
 }
 
 func (cm *ClientManager) enqueueOrderBookEnvelope(
 	clientID []byte,
+	clientIDStr string,
 	encoding string,
 	ob *shared_types.OrderBookUpdate,
 	metricType string,
 	priority sendPriority,
 	coalesceKey string,
+	encodedCache *perEncodingOrderBookCache,
 ) {
 	if ob == nil {
 		return
 	}
-	payload := []*shared_types.OrderBookUpdate{ob}
-	var jsonCache []byte
-	var msgpackCache []byte
-	msg, ok := cm.encodePayloadForClient(clientID, encoding, HeaderOBBin, payload, &jsonCache, &msgpackCache, metricType)
+	msg, ok := cm.encodeSingleOrderBookForClient(clientID, encoding, ob, metricType, encodedCache)
 	if !ok {
 		return
 	}
 
-	ingestNanos := make([]int64, 0, 1)
-	if ob.IngestUnixNano > 0 {
-		ingestNanos = append(ingestNanos, ob.IngestUnixNano)
+	if priority == priorityP2 && coalesceKey == "" {
+		coalesceKey = buildOrderBookCoalesceKey(clientIDStr, ob)
 	}
 
 	cm.enqueueSocketSend(outboundEnvelope{
 		msg:         msg,
 		metricType:  metricType,
-		ingestNanos: ingestNanos,
+		ingestNano:  ob.IngestUnixNano,
 		priority:    priority,
 		coalesceKey: coalesceKey,
 	})
@@ -318,6 +356,46 @@ func (cm *ClientManager) encodePayloadForClient(
 	return zmq4.NewMsgFrom(clientID, *jsonCache), true
 }
 
+func (cm *ClientManager) encodeSingleOrderBookForClient(
+	clientID []byte,
+	encoding string,
+	ob *shared_types.OrderBookUpdate,
+	metricType string,
+	cache *perEncodingOrderBookCache,
+) (zmq4.Msg, bool) {
+	var payload []byte
+	var ok bool
+
+	if encoding == "msgpack" || encoding == "binary" {
+		payload, ok = cache.msgpackByOB[ob]
+		if !ok {
+			single := [1]*shared_types.OrderBookUpdate{ob}
+			binPayload, err := msgpack.Marshal(single[:])
+			if err != nil {
+				metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
+				log.Printf("[MSGPACK ERROR] %v", err)
+				return zmq4.Msg{}, false
+			}
+			cache.msgpackByOB[ob] = binPayload
+			payload = binPayload
+		}
+		return zmq4.NewMsgFrom(clientID, []byte(HeaderOBBin), payload), true
+	}
+
+	payload, ok = cache.jsonByOB[ob]
+	if !ok {
+		single := [1]*shared_types.OrderBookUpdate{ob}
+		raw, err := json.Marshal(single[:])
+		if err != nil {
+			metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
+			return zmq4.Msg{}, false
+		}
+		cache.jsonByOB[ob] = raw
+		payload = raw
+	}
+	return zmq4.NewMsgFrom(clientID, payload), true
+}
+
 func orderBookEnvelopeType(ob *shared_types.OrderBookUpdate) string {
 	if ob != nil && ob.UpdateType == metrics.TypeOBSnapshot {
 		return metrics.TypeOBSnapshot
@@ -342,7 +420,16 @@ func buildOrderBookCoalesceKey(clientID string, ob *shared_types.OrderBookUpdate
 	if ob == nil {
 		return clientID
 	}
-	return clientID + "|" + ob.Exchange + "|" + ob.MarketType + "|" + ob.Symbol
+	var b strings.Builder
+	b.Grow(len(clientID) + len(ob.Exchange) + len(ob.MarketType) + len(ob.Symbol) + 3)
+	b.WriteString(clientID)
+	b.WriteByte('|')
+	b.WriteString(ob.Exchange)
+	b.WriteByte('|')
+	b.WriteString(ob.MarketType)
+	b.WriteByte('|')
+	b.WriteString(ob.Symbol)
+	return b.String()
 }
 
 func (cm *ClientManager) writeLoop() {
@@ -598,6 +685,9 @@ func (cm *ClientManager) sendOutbound(outbound outboundEnvelope) {
 		return
 	}
 	metrics.RecordPublish(outbound.metricType)
+	if outbound.ingestNano > 0 {
+		metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, outbound.ingestNano)).Seconds())
+	}
 	for _, ingest := range outbound.ingestNanos {
 		if ingest > 0 {
 			metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, ingest)).Seconds())
