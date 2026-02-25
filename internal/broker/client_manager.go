@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -47,17 +46,6 @@ const (
 	priorityP1 sendPriority = iota + 1
 	priorityP2
 )
-
-type pendingOrderBookEnvelope struct {
-	ob         *shared_types.OrderBookUpdate
-	metricType string
-}
-
-type orderBookSeriesKey struct {
-	exchange   string
-	marketType string
-	symbol     string
-}
 
 type perEncodingOrderBookCache struct {
 	jsonByOB    map[*shared_types.OrderBookUpdate][]byte
@@ -233,56 +221,13 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			continue
 		}
 
-		// Pre-coalesce P2 before any encoding to avoid serializing overwritten depth updates.
-		p2ByKey := make(map[orderBookSeriesKey]pendingOrderBookEnvelope, 16)
-
 		for _, ob := range updates {
 			if ob == nil {
 				continue
 			}
 			metricType := orderBookEnvelopeType(ob)
 			priority := classifyOrderBookPriority(ob)
-			if priority == priorityP2 {
-				key := orderBookSeriesKey{
-					exchange:   ob.Exchange,
-					marketType: ob.MarketType,
-					symbol:     ob.Symbol,
-				}
-				p2ByKey[key] = pendingOrderBookEnvelope{ob: ob, metricType: metricType}
-				continue
-			}
 			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, &encodedCache)
-		}
-
-		if len(p2ByKey) == 0 {
-			continue
-		}
-
-		keys := make([]orderBookSeriesKey, 0, len(p2ByKey))
-		for key := range p2ByKey {
-			keys = append(keys, key)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if keys[i].exchange != keys[j].exchange {
-				return keys[i].exchange < keys[j].exchange
-			}
-			if keys[i].marketType != keys[j].marketType {
-				return keys[i].marketType < keys[j].marketType
-			}
-			return keys[i].symbol < keys[j].symbol
-		})
-
-		for _, key := range keys {
-			pending := p2ByKey[key]
-			cm.enqueueOrderBookEnvelope(
-				clientID,
-				clientIDStr,
-				encoding,
-				pending.ob,
-				pending.metricType,
-				priorityP2,
-				&encodedCache,
-			)
 		}
 	}
 }
