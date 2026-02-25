@@ -1,6 +1,7 @@
 package bybit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,7 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// localOrderbook hält den Zustand und die UpdateID
+// localOrderbook haelt den Zustand und die UpdateID
 type localOrderbook struct {
 	Bids         map[string]shared_types.OrderBookLevel
 	Asks         map[string]shared_types.OrderBookLevel
@@ -35,7 +36,13 @@ type OrderBookShardWorker struct {
 	conn                *websocket.Conn
 	orderbooks          map[string]*localOrderbook
 	activeSubscriptions map[string]int // topic -> depth
+	topicSymbols        map[string]string
 }
+
+var (
+	bybitOrderBookTopicNeedle = []byte(`"topic":"orderbook.`)
+	bybitPongNeedle           = []byte(`"op":"pong"`)
+)
 
 func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *OrderBookShardWorker {
 	return &OrderBookShardWorker{
@@ -47,6 +54,7 @@ func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, d
 		wg:                  wg,
 		orderbooks:          make(map[string]*localOrderbook),
 		activeSubscriptions: make(map[string]int),
+		topicSymbols:        make(map[string]string),
 	}
 }
 
@@ -65,7 +73,7 @@ func getBybitDepth(requestedDepth int) int {
 
 func (sw *OrderBookShardWorker) Run() {
 	defer sw.wg.Done()
-	log.Printf("[BYBIT-OB-SHARD] Starte OrderBook Worker für %s", sw.marketType)
+	log.Printf("[BYBIT-OB-SHARD] Starte OrderBook Worker fuer %s", sw.marketType)
 	var err error
 	for {
 		sw.conn, _, err = websocket.DefaultDialer.Dial(sw.wsURL, nil)
@@ -102,11 +110,11 @@ func (sw *OrderBookShardWorker) writeLoop(ctx context.Context) {
 			sw.mu.Lock()
 			if cmd.Action == "subscribe" {
 				sw.activeSubscriptions[topic] = cmd.Depth
+				sw.topicSymbols[topic] = TranslateSymbolFromExchange(cmd.Symbol, sw.marketType)
 			} else {
 				delete(sw.activeSubscriptions, topic)
-				// WICHTIG: Hier muss der Key der Topic sein, nicht das Symbol!
-				// Dies war ein subtiler Bug in der vorherigen Version.
 				delete(sw.orderbooks, topic)
+				delete(sw.topicSymbols, topic)
 			}
 			sw.mu.Unlock()
 			sw.sendSubscription(cmd.Action, []string{topic})
@@ -136,13 +144,10 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 			}
 			ingestUnixNano := time.Now().UnixNano()
 
-			// +++ LOGGING 1 +++
-			// Wir protokollieren die rohe Nachricht, aber nur, wenn es ein Orderbuch ist.
-			if strings.Contains(string(msg), `"topic":"orderbook.`) {
-				// log.Printf("[BYBIT-OB-SHARD-RECV] Rohe WS-Nachricht: %s", string(msg))
+			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
+				continue
 			}
-
-			if strings.Contains(string(msg), `"op":"pong"`) {
+			if bytes.Contains(msg, bybitPongNeedle) {
 				continue
 			}
 
@@ -167,19 +172,12 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 			sw.mu.Unlock()
 
 			if updateToSend != nil {
-				// +++ LOGGING 2 +++
-				// Wir protokollieren das normalisierte Objekt, das wir versenden.
-				// Um die Ausgabe lesbar zu halten, protokollieren wir nur die Anzahl der Bids/Asks.
-				// log.Printf("[BYBIT-OB-SHARD-SEND] Sende Update für %s: Bids=%d, Asks=%d",
-				// 	updateToSend.Symbol, len(updateToSend.Bids), len(updateToSend.Asks))
-
 				sw.dataCh <- updateToSend
 			}
 		}
 	}
 }
 
-// Ich habe die intelligente Snapshot-Funktion umbenannt, um sie klar zu kennzeichnen.
 func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
@@ -192,7 +190,7 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 	book.LastUpdateID = data.UpdateID
 
 	if len(data.Bids) > 0 {
-		book.Bids = make(map[string]shared_types.OrderBookLevel)
+		clear(book.Bids)
 		for _, level := range data.Bids {
 			if len(level) < 2 {
 				continue
@@ -209,7 +207,7 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 		}
 	}
 	if len(data.Asks) > 0 {
-		book.Asks = make(map[string]shared_types.OrderBookLevel)
+		clear(book.Asks)
 		for _, level := range data.Asks {
 			if len(level) < 2 {
 				continue
@@ -225,11 +223,9 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
-	// ts weitergeben
 	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBSnapshot)
 }
 
-// FIX: Parameter 'ts int64' hinzugefügt
 func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
@@ -248,13 +244,18 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 		if level[1] == "0" {
 			delete(book.Bids, level[0])
 		} else {
-			price, err := strconv.ParseFloat(level[0], 64)
-			if err != nil {
-				continue
-			}
 			amount, err := strconv.ParseFloat(level[1], 64)
 			if err != nil {
 				continue
+			}
+			price := 0.0
+			if existing, ok := book.Bids[level[0]]; ok {
+				price = existing.Price
+			} else {
+				price, err = strconv.ParseFloat(level[0], 64)
+				if err != nil {
+					continue
+				}
 			}
 			book.Bids[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
@@ -266,18 +267,22 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 		if level[1] == "0" {
 			delete(book.Asks, level[0])
 		} else {
-			price, err := strconv.ParseFloat(level[0], 64)
-			if err != nil {
-				continue
-			}
 			amount, err := strconv.ParseFloat(level[1], 64)
 			if err != nil {
 				continue
 			}
+			price := 0.0
+			if existing, ok := book.Asks[level[0]]; ok {
+				price = existing.Price
+			} else {
+				price, err = strconv.ParseFloat(level[0], 64)
+				if err != nil {
+					continue
+				}
+			}
 			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
-	// ts weitergeben
 	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBUpdate)
 }
 
@@ -286,19 +291,22 @@ func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, ingestUnixN
 	if !ok {
 		return nil
 	}
-	parts := strings.Split(topic, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-	symbol := parts[2]
 
 	update := pools.GetOrderBookUpdate()
 
 	update.Exchange = "bybit"
-	update.Symbol = TranslateSymbolFromExchange(symbol, sw.marketType)
+	if translated, ok := sw.topicSymbols[topic]; ok {
+		update.Symbol = translated
+	} else {
+		lastDot := strings.LastIndexByte(topic, '.')
+		if lastDot < 0 || lastDot+1 >= len(topic) {
+			pools.PutOrderBookUpdate(update)
+			return nil
+		}
+		update.Symbol = TranslateSymbolFromExchange(topic[lastDot+1:], sw.marketType)
+	}
 	update.MarketType = sw.marketType
 
-	// KORREKTUR: Wir nutzen den echten Timestamp von Bybit, nicht die ID!
 	update.Timestamp = ts
 	update.GoTimestamp = time.Now().UnixMilli()
 	update.IngestUnixNano = ingestUnixNano
