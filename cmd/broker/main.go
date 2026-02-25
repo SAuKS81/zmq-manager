@@ -1,8 +1,11 @@
 package main
 
 import (
+	"flag"
 	"log"
+	"net/http"
 	"os"
+	"runtime"
 	"os/signal"
 	"syscall"
 
@@ -10,11 +13,21 @@ import (
 	"bybit-watcher/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"net/http"
 	_ "net/http/pprof" // Der _ import registriert die pprof-Handler
 )
 
 func main() {
+	pprofBlockRate := flag.Int("pprof-block-rate", 0, "Go block profile rate (0=off)")
+	pprofMutexFrac := flag.Int("pprof-mutex-fraction", 0, "Go mutex profile fraction (0=off)")
+	flag.Parse()
+
+	if *pprofBlockRate > 0 {
+		runtime.SetBlockProfileRate(*pprofBlockRate)
+	}
+	if *pprofMutexFrac > 0 {
+		runtime.SetMutexProfileFraction(*pprofMutexFrac)
+	}
+
 	metrics.Init()
 	http.Handle("/metrics", promhttp.Handler())
 
