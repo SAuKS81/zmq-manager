@@ -59,6 +59,12 @@ type p2LatestKey struct {
 	symbol     string
 }
 
+type obBatchLatestKey struct {
+	exchange   string
+	marketType string
+	symbol     string
+}
+
 type ClientManager struct {
 	socket         zmq4.Socket
 	clients        map[string]*Client
@@ -207,11 +213,42 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		return
 	}
 
+	// P2 messages are latest-only by design. Collapse to latest per symbol in-batch
+	// before doing any client-specific encoding work.
+	p1Updates := make([]*shared_types.OrderBookUpdate, 0, len(updates))
+	p2LatestBySymbol := make(map[obBatchLatestKey]*shared_types.OrderBookUpdate, len(updates))
+	p2Order := make([]obBatchLatestKey, 0, len(updates))
+
+	for _, ob := range updates {
+		if ob == nil {
+			continue
+		}
+		if classifyOrderBookPriority(ob) == priorityP1 {
+			p1Updates = append(p1Updates, ob)
+			continue
+		}
+
+		key := obBatchLatestKey{
+			exchange:   ob.Exchange,
+			marketType: ob.MarketType,
+			symbol:     ob.Symbol,
+		}
+		if _, exists := p2LatestBySymbol[key]; !exists {
+			p2Order = append(p2Order, key)
+		}
+		p2LatestBySymbol[key] = ob
+	}
+
+	if len(p1Updates) == 0 && len(p2Order) == 0 {
+		return
+	}
+
 	// Reuse serialized single-update envelopes across clients in this batch.
 	// This removes repeated msgpack/json marshal for identical OB pointers.
+	cacheSize := len(p1Updates) + len(p2Order)
 	encodedCache := perEncodingOrderBookCache{
-		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
-		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
+		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
 	}
 
 	for _, clientID := range clientIDs {
@@ -221,13 +258,18 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			continue
 		}
 
-		for _, ob := range updates {
+		for _, ob := range p1Updates {
+			metricType := orderBookEnvelopeType(ob)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP1, &encodedCache)
+		}
+
+		for _, key := range p2Order {
+			ob := p2LatestBySymbol[key]
 			if ob == nil {
 				continue
 			}
 			metricType := orderBookEnvelopeType(ob)
-			priority := classifyOrderBookPriority(ob)
-			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, &encodedCache)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, &encodedCache)
 		}
 	}
 }
