@@ -360,35 +360,68 @@ func mapToTopLevels(priceMap map[string]shared_types.OrderBookLevel, slice []sha
 		return slice
 	}
 
+	// Keep only top-K candidates in O(n) with very small K (<=20).
+	// This avoids repeated shifts/copies for each incoming level.
+	worstIdx := -1
 	for _, level := range priceMap {
-		price := level.Price
-
-		insertAt := 0
-		for insertAt < len(slice) {
-			if sortDesc {
-				if price > slice[insertAt].Price {
-					break
-				}
-			} else {
-				if price < slice[insertAt].Price {
-					break
-				}
-			}
-			insertAt++
-		}
-
 		if len(slice) < limit {
-			slice = append(slice, shared_types.OrderBookLevel{})
-		} else if insertAt >= limit {
+			slice = append(slice, level)
+			if worstIdx == -1 || worseLevel(slice[len(slice)-1], slice[worstIdx], sortDesc) {
+				worstIdx = len(slice) - 1
+			}
 			continue
 		}
 
-		copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
-		slice[insertAt] = level
-		if len(slice) > limit {
-			slice = slice[:limit]
+		if !betterLevel(level, slice[worstIdx], sortDesc) {
+			continue
 		}
+
+		slice[worstIdx] = level
+		worstIdx = findWorstIndex(slice, sortDesc)
+	}
+
+	// Final in-place insertion sort for deterministic output ordering.
+	for i := 1; i < len(slice); i++ {
+		cur := slice[i]
+		j := i - 1
+		for ; j >= 0; j-- {
+			if sortDesc {
+				if slice[j].Price >= cur.Price {
+					break
+				}
+			} else {
+				if slice[j].Price <= cur.Price {
+					break
+				}
+			}
+			slice[j+1] = slice[j]
+		}
+		slice[j+1] = cur
 	}
 
 	return slice
+}
+
+func betterLevel(candidate, baseline shared_types.OrderBookLevel, sortDesc bool) bool {
+	if sortDesc {
+		return candidate.Price > baseline.Price
+	}
+	return candidate.Price < baseline.Price
+}
+
+func worseLevel(candidate, baseline shared_types.OrderBookLevel, sortDesc bool) bool {
+	if sortDesc {
+		return candidate.Price < baseline.Price
+	}
+	return candidate.Price > baseline.Price
+}
+
+func findWorstIndex(levels []shared_types.OrderBookLevel, sortDesc bool) int {
+	worst := 0
+	for i := 1; i < len(levels); i++ {
+		if worseLevel(levels[i], levels[worst], sortDesc) {
+			worst = i
+		}
+	}
+	return worst
 }
