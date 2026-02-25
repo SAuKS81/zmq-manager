@@ -3,7 +3,6 @@ package bybit
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
+	json "github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 )
 
