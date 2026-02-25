@@ -44,21 +44,6 @@ var (
 	bybitPongNeedle           = []byte(`"op":"pong"`)
 )
 
-// wsOrderBookEnvelopeLite decodes only top-level fields and keeps data raw.
-type wsOrderBookEnvelopeLite struct {
-	Topic     string          `json:"topic"`
-	Type      string          `json:"type"`
-	Timestamp int64           `json:"ts"`
-	Data      json.RawMessage `json:"data"`
-}
-
-// wsOrderBookDataLite decodes only fields needed for local OB state updates.
-type wsOrderBookDataLite struct {
-	Bids     [][2]string `json:"b"`
-	Asks     [][2]string `json:"a"`
-	UpdateID int64       `json:"u"`
-}
-
 func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *OrderBookShardWorker {
 	return &OrderBookShardWorker{
 		wsURL:               wsURL,
@@ -166,32 +151,23 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 				continue
 			}
 
-			var envelope wsOrderBookEnvelopeLite
-			if err := json.Unmarshal(msg, &envelope); err != nil {
+			var obMsg wsOrderBookMsg
+			if err := json.Unmarshal(msg, &obMsg); err != nil {
 				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
 				continue
 			}
 
-			if envelope.Topic == "" {
-				continue
-			}
-			if envelope.Type != "snapshot" && envelope.Type != "delta" {
-				continue
-			}
-
-			var data wsOrderBookDataLite
-			if err := json.Unmarshal(envelope.Data, &data); err != nil {
-				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
+			if obMsg.Topic == "" {
 				continue
 			}
 
 			var updateToSend *shared_types.OrderBookUpdate
 
 			sw.mu.Lock()
-			if envelope.Type == "snapshot" {
-				updateToSend = sw.handleSmartSnapshot(envelope.Topic, data, envelope.Timestamp, ingestUnixNano)
-			} else if envelope.Type == "delta" {
-				updateToSend = sw.handleDelta(envelope.Topic, data, envelope.Timestamp, ingestUnixNano)
+			if obMsg.Type == "snapshot" {
+				updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
+			} else if obMsg.Type == "delta" {
+				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
 			}
 			sw.mu.Unlock()
 
@@ -202,7 +178,7 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 	}
 }
 
-func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookDataLite, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		book = &localOrderbook{
@@ -250,7 +226,7 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBSnapshot)
 }
 
-func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookDataLite, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
