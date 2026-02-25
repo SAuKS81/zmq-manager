@@ -52,12 +52,6 @@ type perEncodingOrderBookCache struct {
 	msgpackByOB map[*shared_types.OrderBookUpdate][]byte
 }
 
-type orderBookSeriesKey struct {
-	exchange   string
-	marketType string
-	symbol     string
-}
-
 type p2LatestKey struct {
 	clientID   string
 	exchange   string
@@ -227,37 +221,12 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			continue
 		}
 
-		// First pass: remember latest P2 update index per series in this batch.
-		latestP2Idx := make(map[orderBookSeriesKey]int, 32)
-		for idx, ob := range updates {
-			if ob == nil || classifyOrderBookPriority(ob) != priorityP2 {
-				continue
-			}
-			key := orderBookSeriesKey{
-				exchange:   ob.Exchange,
-				marketType: ob.MarketType,
-				symbol:     ob.Symbol,
-			}
-			latestP2Idx[key] = idx
-		}
-
-		// Second pass: enqueue P1 immediately, enqueue only latest P2 per series.
-		for idx, ob := range updates {
+		for _, ob := range updates {
 			if ob == nil {
 				continue
 			}
 			metricType := orderBookEnvelopeType(ob)
 			priority := classifyOrderBookPriority(ob)
-			if priority == priorityP2 {
-				key := orderBookSeriesKey{
-					exchange:   ob.Exchange,
-					marketType: ob.MarketType,
-					symbol:     ob.Symbol,
-				}
-				if latestP2Idx[key] != idx {
-					continue
-				}
-			}
 			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, &encodedCache)
 		}
 	}
