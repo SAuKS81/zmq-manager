@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,8 +260,16 @@ func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, ingestUnixN
 	update.IngestUnixNano = ingestUnixNano
 	update.UpdateType = updateType
 
-	update.Bids = mapToSlice(book.Bids, update.Bids, true)
-	update.Asks = mapToSlice(book.Asks, update.Asks, false)
+	requestedDepth := sw.activeSubscriptions[topic]
+	if requestedDepth <= 0 {
+		requestedDepth = 20
+	}
+	if requestedDepth > 20 {
+		requestedDepth = 20
+	}
+
+	update.Bids = mapToTopLevels(book.Bids, update.Bids, true, requestedDepth)
+	update.Asks = mapToTopLevels(book.Asks, update.Asks, false, requestedDepth)
 
 	return update
 }
@@ -290,20 +297,48 @@ func (sw *OrderBookShardWorker) resubscribeAll() {
 	}
 }
 
-func mapToSlice(priceMap map[string]string, slice []shared_types.OrderBookLevel, sortDesc bool) []shared_types.OrderBookLevel {
+func mapToTopLevels(priceMap map[string]string, slice []shared_types.OrderBookLevel, sortDesc bool, limit int) []shared_types.OrderBookLevel {
+	if limit <= 0 {
+		limit = 20
+	}
 	if slice != nil {
 		slice = slice[:0]
 	}
+	if len(priceMap) == 0 {
+		return slice
+	}
+
 	for p, s := range priceMap {
 		price, _ := strconv.ParseFloat(p, 64)
 		size, _ := strconv.ParseFloat(s, 64)
-		slice = append(slice, shared_types.OrderBookLevel{Price: price, Amount: size})
-	}
-	sort.Slice(slice, func(i, j int) bool {
-		if sortDesc {
-			return slice[i].Price > slice[j].Price
+		level := shared_types.OrderBookLevel{Price: price, Amount: size}
+
+		insertAt := 0
+		for insertAt < len(slice) {
+			if sortDesc {
+				if price > slice[insertAt].Price {
+					break
+				}
+			} else {
+				if price < slice[insertAt].Price {
+					break
+				}
+			}
+			insertAt++
 		}
-		return slice[i].Price < slice[j].Price
-	})
+
+		if len(slice) < limit {
+			slice = append(slice, shared_types.OrderBookLevel{})
+		} else if insertAt >= limit {
+			continue
+		}
+
+		copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
+		slice[insertAt] = level
+		if len(slice) > limit {
+			slice = slice[:limit]
+		}
+	}
+
 	return slice
 }
