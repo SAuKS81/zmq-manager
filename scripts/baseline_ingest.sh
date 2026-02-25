@@ -10,6 +10,7 @@ PPROF_ENDPOINT="http://127.0.0.1:6060"
 BROKER_ENDPOINT="ipc:///tmp/feed_broker.ipc"
 ENCODING="msgpack"
 OB_DEPTH="5"
+SUBSCRIBE_PAUSE="1ms"
 
 RUN_DIR=""
 SMOKE_PID=""
@@ -27,7 +28,8 @@ Usage:
     [--pprof-endpoint http://127.0.0.1:6060] \
     [--broker-endpoint ipc:///tmp/feed_broker.ipc] \
     [--encoding msgpack] \
-    [--ob-depth 5]
+    [--ob-depth 5] \
+    [--subscribe-pause 1ms]
 EOF
 }
 
@@ -69,6 +71,8 @@ while [[ $# -gt 0 ]]; do
       ENCODING="${2:-}"; shift 2 ;;
     --ob-depth)
       OB_DEPTH="${2:-}"; shift 2 ;;
+    --subscribe-pause)
+      SUBSCRIBE_PAUSE="${2:-}"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -114,26 +118,40 @@ nohup go run ./clients/smoke_client.go \
   --duration="${DURATION}" \
   --encoding="${ENCODING}" \
   --broker="${BROKER_ENDPOINT}" \
+  --subscribe-pause="${SUBSCRIBE_PAUSE}" \
   --rate-log=10s \
   >"${RUN_DIR}/smoke.log" 2>&1 &
 SMOKE_PID=$!
 
-# 5) Fixed warmup
+# 5) Wait until subscribe phase is complete
+for _ in $(seq 1 600); do
+  if grep -q "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
+    break
+  fi
+  sleep 1
+done
+
+if ! grep -q "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
+  echo "[BASELINE] smoke client did not reach SUBSCRIBE_DONE within timeout" >&2
+  exit 1
+fi
+
+# 6) Fixed warmup after steady-state subscription setup
 sleep 10
 
-# 6) CPU profile 30s
+# 7) CPU profile 30s
 curl -fsS "${PPROF_ENDPOINT}/debug/pprof/profile?seconds=30" -o "${RUN_DIR}/cpu.pprof"
 
-# 7) Heap profile
+# 8) Heap profile
 curl -fsS "${PPROF_ENDPOINT}/debug/pprof/heap" -o "${RUN_DIR}/heap.pprof"
 
-# 8) Allocs profile
+# 9) Allocs profile
 curl -fsS "${PPROF_ENDPOINT}/debug/pprof/allocs" -o "${RUN_DIR}/allocs.pprof"
 
-# 9) Snapshot POST metrics
+# 10) Snapshot POST metrics
 curl -fsS "${PPROF_ENDPOINT}/metrics" -o "${RUN_DIR}/metrics_post.txt"
 
-# 10) Stop smoke client cleanly
+# 11) Stop smoke client cleanly
 if kill -0 "${SMOKE_PID}" 2>/dev/null; then
   kill "${SMOKE_PID}" 2>/dev/null || true
 fi
@@ -215,7 +233,7 @@ cat >"${RUN_DIR}/meta.json" <<EOF
 }
 EOF
 
-# 11) Bundle artifacts
+# 12) Bundle artifacts
 (
   cd "${RUN_DIR}"
   tar -czf bundle.tar.gz --exclude=bundle.tar.gz .

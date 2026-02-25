@@ -98,6 +98,7 @@ func main() {
 			time.Sleep(cfg.subscribePause)
 		}
 	}
+	fmt.Printf("[SMOKE] SUBSCRIBE_DONE requests=%d exchanges=%d symbols=%d\n", len(plan), len(exchanges), len(symbols))
 
 	consumeLoop(socket, cfg)
 }
