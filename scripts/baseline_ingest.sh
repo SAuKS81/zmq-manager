@@ -184,6 +184,8 @@ if [[ -n "${SYMBOLS_LIMIT_SWAP}" ]]; then
   SMOKE_SYMBOL_FLAGS+=(--symbols-limit-swap="${SYMBOLS_LIMIT_SWAP}")
 fi
 
+touch "${RUN_DIR}/smoke.log"
+
 nohup go run ./clients/smoke_client.go \
   --exchanges="${EXCHANGES}" \
   "${SMOKE_SYMBOL_FLAGS[@]}" \
@@ -202,13 +204,13 @@ SMOKE_PID=$!
 
 # 5) Wait until subscribe phase is complete
 for _ in $(seq 1 600); do
-  if grep -q "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
+  if grep -qs "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
     break
   fi
   sleep 1
 done
 
-if ! grep -q "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
+if ! grep -qs "SUBSCRIBE_DONE" "${RUN_DIR}/smoke.log"; then
   echo "[BASELINE] smoke client did not reach SUBSCRIBE_DONE within timeout" >&2
   exit 1
 fi
