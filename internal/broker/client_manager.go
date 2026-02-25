@@ -29,14 +29,22 @@ const (
 var (
 	headerTradeBinFrame = []byte(HeaderTradeBin)
 	headerOBBinFrame    = []byte(HeaderOBBin)
-	msgpackBufPool      = sync.Pool{
+	msgpackCtxPool      = sync.Pool{
 		New: func() any {
 			buf := &bytes.Buffer{}
 			buf.Grow(8 * 1024)
-			return buf
+			return &msgpackEncoderCtx{
+				buf: buf,
+				enc: msgpack.NewEncoder(buf),
+			}
 		},
 	}
 )
+
+type msgpackEncoderCtx struct {
+	buf *bytes.Buffer
+	enc *msgpack.Encoder
+}
 
 type Client struct {
 	ID       []byte
@@ -417,32 +425,32 @@ func orderBookEnvelopeType(ob *shared_types.OrderBookUpdate) string {
 }
 
 func marshalMsgpack(v any) ([]byte, error) {
-	buf := msgpackBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	enc := msgpack.NewEncoder(buf)
-	if err := enc.Encode(v); err != nil {
-		msgpackBufPool.Put(buf)
+	ctx := msgpackCtxPool.Get().(*msgpackEncoderCtx)
+	ctx.buf.Reset()
+	ctx.enc.ResetWriter(ctx.buf)
+	if err := ctx.enc.Encode(v); err != nil {
+		msgpackCtxPool.Put(ctx)
 		return nil, err
 	}
-	out := append([]byte(nil), buf.Bytes()...)
-	msgpackBufPool.Put(buf)
+	out := append([]byte(nil), ctx.buf.Bytes()...)
+	msgpackCtxPool.Put(ctx)
 	return out, nil
 }
 
 func marshalSingleOBAsMsgpackArray(ob *shared_types.OrderBookUpdate) ([]byte, error) {
-	buf := msgpackBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	enc := msgpack.NewEncoder(buf)
-	if err := enc.EncodeArrayLen(1); err != nil {
-		msgpackBufPool.Put(buf)
+	ctx := msgpackCtxPool.Get().(*msgpackEncoderCtx)
+	ctx.buf.Reset()
+	ctx.enc.ResetWriter(ctx.buf)
+	if err := ctx.enc.EncodeArrayLen(1); err != nil {
+		msgpackCtxPool.Put(ctx)
 		return nil, err
 	}
-	if err := enc.Encode(ob); err != nil {
-		msgpackBufPool.Put(buf)
+	if err := ctx.enc.Encode(ob); err != nil {
+		msgpackCtxPool.Put(ctx)
 		return nil, err
 	}
-	out := append([]byte(nil), buf.Bytes()...)
-	msgpackBufPool.Put(buf)
+	out := append([]byte(nil), ctx.buf.Bytes()...)
+	msgpackCtxPool.Put(ctx)
 	return out, nil
 }
 
