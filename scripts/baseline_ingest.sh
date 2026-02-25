@@ -147,6 +147,27 @@ if [[ "${DROPS_TOTAL}" -gt 0 ]]; then
   GATE_STATUS="FAIL_DROPS_DETECTED"
 fi
 
+QUEUE_HWM_JSON="$(awk '
+  BEGIN { first = 1; printf "{\n" }
+  /^zmq_queue_high_watermark\{queue="/ {
+    key = $1
+    sub(/^zmq_queue_high_watermark\{queue="/, "", key)
+    sub(/"\}$/, "", key)
+    val = $NF + 0
+    if (!first) {
+      printf ",\n"
+    }
+    first = 0
+    printf "    \"%s\": %.0f", key, val
+  }
+  END {
+    if (first) {
+      printf "    "
+    }
+    printf "\n  }"
+  }
+' "${RUN_DIR}/metrics_post.txt")"
+
 if GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null)"; then
   :
 else
@@ -166,7 +187,8 @@ cat >"${RUN_DIR}/meta.json" <<EOF
   "git_commit": "${GIT_COMMIT}",
   "hostname": "${HOSTNAME_VALUE}",
   "go_version": "${GO_VERSION_VALUE}",
-  "gate_status": "${GATE_STATUS}"
+  "gate_status": "${GATE_STATUS}",
+  "queue_hwm": ${QUEUE_HWM_JSON}
 }
 EOF
 

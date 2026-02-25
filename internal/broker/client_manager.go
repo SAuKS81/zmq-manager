@@ -381,5 +381,12 @@ func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) {
 	case cm.sendCh <- envelope:
 	default:
 		metrics.RecordDropped(metrics.ReasonBufferFull, envelope.metricType)
+		if caller, stack, ok := logDropCallsite(envelope.metricType, metrics.ReasonBufferFull); ok {
+			log.Printf("DROP_CALLSITE type=%s reason=%s caller=%s stack=%s", envelope.metricType, metrics.ReasonBufferFull, caller, stack)
+		}
 	}
+}
+
+func (cm *ClientManager) SendQueueStats() (length int, capacity int) {
+	return len(cm.sendCh), cap(cm.sendCh)
 }
