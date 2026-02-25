@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ const (
 	priorityP1 sendPriority = iota + 1
 	priorityP2
 )
+
+type pendingOrderBookEnvelope struct {
+	ob         *shared_types.OrderBookUpdate
+	metricType string
+}
 
 type ClientManager struct {
 	socket         zmq4.Socket
@@ -201,39 +207,71 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			continue
 		}
 
+		// Pre-coalesce P2 before any encoding to avoid serializing overwritten depth updates.
+		p2ByKey := make(map[string]pendingOrderBookEnvelope, 16)
+
 		for _, ob := range updates {
 			if ob == nil {
 				continue
 			}
-			payload := []*shared_types.OrderBookUpdate{ob}
 			metricType := orderBookEnvelopeType(ob)
 			priority := classifyOrderBookPriority(ob)
-			coalesceKey := ""
 			if priority == priorityP2 {
-				coalesceKey = buildOrderBookCoalesceKey(clientIDStr, ob)
-			}
-
-			var jsonCache []byte
-			var msgpackCache []byte
-			msg, ok := cm.encodePayloadForClient(clientID, encoding, HeaderOBBin, payload, &jsonCache, &msgpackCache, metricType)
-			if !ok {
+				key := buildOrderBookCoalesceKey(clientIDStr, ob)
+				p2ByKey[key] = pendingOrderBookEnvelope{ob: ob, metricType: metricType}
 				continue
 			}
+			cm.enqueueOrderBookEnvelope(clientID, encoding, ob, metricType, priority, "")
+		}
 
-			ingestNanos := make([]int64, 0, 1)
-			if ob.IngestUnixNano > 0 {
-				ingestNanos = append(ingestNanos, ob.IngestUnixNano)
-			}
+		if len(p2ByKey) == 0 {
+			continue
+		}
 
-			cm.enqueueSocketSend(outboundEnvelope{
-				msg:         msg,
-				metricType:  metricType,
-				ingestNanos: ingestNanos,
-				priority:    priority,
-				coalesceKey: coalesceKey,
-			})
+		keys := make([]string, 0, len(p2ByKey))
+		for key := range p2ByKey {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			pending := p2ByKey[key]
+			cm.enqueueOrderBookEnvelope(clientID, encoding, pending.ob, pending.metricType, priorityP2, key)
 		}
 	}
+}
+
+func (cm *ClientManager) enqueueOrderBookEnvelope(
+	clientID []byte,
+	encoding string,
+	ob *shared_types.OrderBookUpdate,
+	metricType string,
+	priority sendPriority,
+	coalesceKey string,
+) {
+	if ob == nil {
+		return
+	}
+	payload := []*shared_types.OrderBookUpdate{ob}
+	var jsonCache []byte
+	var msgpackCache []byte
+	msg, ok := cm.encodePayloadForClient(clientID, encoding, HeaderOBBin, payload, &jsonCache, &msgpackCache, metricType)
+	if !ok {
+		return
+	}
+
+	ingestNanos := make([]int64, 0, 1)
+	if ob.IngestUnixNano > 0 {
+		ingestNanos = append(ingestNanos, ob.IngestUnixNano)
+	}
+
+	cm.enqueueSocketSend(outboundEnvelope{
+		msg:         msg,
+		metricType:  metricType,
+		ingestNanos: ingestNanos,
+		priority:    priority,
+		coalesceKey: coalesceKey,
+	})
 }
 
 func (cm *ClientManager) clientEncoding(clientID string) (string, bool) {
