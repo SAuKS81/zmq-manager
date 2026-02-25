@@ -25,6 +25,11 @@ const (
 	p2LatestMax    = 200000
 )
 
+var (
+	headerTradeBinBytes = []byte(HeaderTradeBin)
+	headerOBBinBytes    = []byte(HeaderOBBin)
+)
+
 type Client struct {
 	ID       []byte
 	LastPong time.Time
@@ -50,6 +55,15 @@ const (
 type perEncodingOrderBookCache struct {
 	jsonByOB    map[*shared_types.OrderBookUpdate][]byte
 	msgpackByOB map[*shared_types.OrderBookUpdate][]byte
+}
+
+var orderBookEncodeCachePool = sync.Pool{
+	New: func() any {
+		return &perEncodingOrderBookCache{
+			jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, 256),
+			msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, 256),
+		}
+	},
 }
 
 type p2LatestKey struct {
@@ -208,11 +222,9 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 	}
 
 	// Reuse serialized single-update envelopes across clients in this batch.
-	// This removes repeated msgpack/json marshal for identical OB pointers.
-	encodedCache := perEncodingOrderBookCache{
-		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
-		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
-	}
+	// Cache maps are pooled to avoid per-batch map allocations.
+	encodedCache := acquireOrderBookEncodeCache()
+	defer releaseOrderBookEncodeCache(encodedCache)
 
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
@@ -227,7 +239,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			}
 			metricType := orderBookEnvelopeType(ob)
 			priority := classifyOrderBookPriority(ob)
-			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, &encodedCache)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priority, encodedCache)
 		}
 	}
 }
@@ -298,6 +310,12 @@ func (cm *ClientManager) encodePayloadForClient(
 			}
 			*msgpackCache = binPayload
 		}
+		if msgTypeHeader == HeaderTradeBin {
+			return zmq4.NewMsgFrom(clientID, headerTradeBinBytes, *msgpackCache), true
+		}
+		if msgTypeHeader == HeaderOBBin {
+			return zmq4.NewMsgFrom(clientID, headerOBBinBytes, *msgpackCache), true
+		}
 		return zmq4.NewMsgFrom(clientID, []byte(msgTypeHeader), *msgpackCache), true
 	}
 
@@ -335,7 +353,7 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 			cache.msgpackByOB[ob] = binPayload
 			payload = binPayload
 		}
-		return zmq4.NewMsgFrom(clientID, []byte(HeaderOBBin), payload), true
+		return zmq4.NewMsgFrom(clientID, headerOBBinBytes, payload), true
 	}
 
 	payload, ok = cache.jsonByOB[ob]
@@ -350,6 +368,23 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 		payload = raw
 	}
 	return zmq4.NewMsgFrom(clientID, payload), true
+}
+
+func acquireOrderBookEncodeCache() *perEncodingOrderBookCache {
+	cache := orderBookEncodeCachePool.Get().(*perEncodingOrderBookCache)
+	clear(cache.jsonByOB)
+	clear(cache.msgpackByOB)
+	return cache
+}
+
+func releaseOrderBookEncodeCache(cache *perEncodingOrderBookCache) {
+	if cache == nil {
+		return
+	}
+	// Keep map capacity for reuse, just clear references.
+	clear(cache.jsonByOB)
+	clear(cache.msgpackByOB)
+	orderBookEncodeCachePool.Put(cache)
 }
 
 func orderBookEnvelopeType(ob *shared_types.OrderBookUpdate) string {
