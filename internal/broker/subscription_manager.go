@@ -12,6 +12,7 @@ import (
 	"bybit-watcher/internal/exchanges/bitget"
 	"bybit-watcher/internal/exchanges/bybit"
 	"bybit-watcher/internal/metrics"
+	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
 )
 
@@ -149,10 +150,34 @@ func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpda
 		}
 	}
 
+	toRelease := append([]*shared_types.TradeUpdate(nil), batch...)
+	if len(clientBatches) == 0 {
+		for _, trade := range toRelease {
+			if trade != nil {
+				pools.PutTradeUpdate(trade)
+			}
+		}
+		return
+	}
+
+	var remaining atomic.Int32
+	remaining.Store(int32(len(clientBatches)))
+	onComplete := func() {
+		if remaining.Add(-1) != 0 {
+			return
+		}
+		for _, trade := range toRelease {
+			if trade != nil {
+				pools.PutTradeUpdate(trade)
+			}
+		}
+	}
+
 	for clientIDStr, trades := range clientBatches {
 		sm.DistributionCh <- &DistributionMessage{
 			ClientIDs:  [][]byte{[]byte(clientIDStr)},
 			RawPayload: trades,
+			OnComplete: onComplete,
 		}
 	}
 }
@@ -173,6 +198,29 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 		}
 	}
 
+	toRelease := append([]*shared_types.OrderBookUpdate(nil), batch...)
+	if len(clientBatches) == 0 {
+		for _, ob := range toRelease {
+			if ob != nil {
+				pools.PutOrderBookUpdate(ob)
+			}
+		}
+		return
+	}
+
+	var remaining atomic.Int32
+	remaining.Store(int32(len(clientBatches)))
+	onComplete := func() {
+		if remaining.Add(-1) != 0 {
+			return
+		}
+		for _, ob := range toRelease {
+			if ob != nil {
+				pools.PutOrderBookUpdate(ob)
+			}
+		}
+	}
+
 	for clientIDStr, updates := range clientBatches {
 		debugSym := ""
 		if len(updates) > 0 {
@@ -183,6 +231,7 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 			ClientIDs:   [][]byte{[]byte(clientIDStr)},
 			RawPayload:  updates,
 			DebugSymbol: debugSym,
+			OnComplete:  onComplete,
 		}
 	}
 }
