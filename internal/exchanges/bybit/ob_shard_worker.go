@@ -353,11 +353,18 @@ func mapToTopLevels(priceMap map[string]shared_types.OrderBookLevel, slice []sha
 	if limit <= 0 {
 		limit = 20
 	}
-	if slice != nil {
-		slice = slice[:0]
-	}
 	if len(priceMap) == 0 {
+		if slice != nil {
+			return slice[:0]
+		}
 		return slice
+	}
+
+	// Keep one bounded backing array for top levels to avoid repeated growth.
+	if cap(slice) < limit {
+		slice = make([]shared_types.OrderBookLevel, 0, limit)
+	} else {
+		slice = slice[:0]
 	}
 
 	for _, level := range priceMap {
@@ -378,15 +385,16 @@ func mapToTopLevels(priceMap map[string]shared_types.OrderBookLevel, slice []sha
 		}
 
 		if len(slice) < limit {
-			slice = append(slice, shared_types.OrderBookLevel{})
+			slice = append(slice, level)
+			if insertAt < len(slice)-1 {
+				copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
+				slice[insertAt] = level
+			}
 		} else if insertAt >= limit {
 			continue
-		}
-
-		copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
-		slice[insertAt] = level
-		if len(slice) > limit {
-			slice = slice[:limit]
+		} else {
+			copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
+			slice[insertAt] = level
 		}
 	}
 
