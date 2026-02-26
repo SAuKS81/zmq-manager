@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
@@ -212,7 +211,8 @@ func (cm *ClientManager) distributeTradeBatch(clientIDs [][]byte, trades []*shar
 	var jsonCache []byte
 	var msgpackCache []byte
 	for _, clientID := range clientIDs {
-		encoding, exists := cm.clientEncodingByID(clientID)
+		clientIDStr := string(clientID)
+		encoding, exists := cm.clientEncoding(clientIDStr)
 		if !exists {
 			continue
 		}
@@ -283,7 +283,8 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 	var p1MsgpackCache []byte
 
 	for _, clientID := range clientIDs {
-		encoding, exists := cm.clientEncodingByID(clientID)
+		clientIDStr := string(clientID)
+		encoding, exists := cm.clientEncoding(clientIDStr)
 		if !exists {
 			continue
 		}
@@ -308,16 +309,13 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			}
 		}
 
-		if len(p2Order) > 0 {
-			clientIDStr := string(clientID)
-			for _, key := range p2Order {
-				ob := p2LatestBySymbol[key]
-				if ob == nil {
-					continue
-				}
-				metricType := orderBookEnvelopeType(ob)
-				cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, &encodedCache)
+		for _, key := range p2Order {
+			ob := p2LatestBySymbol[key]
+			if ob == nil {
+				continue
 			}
+			metricType := orderBookEnvelopeType(ob)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, &encodedCache)
 		}
 	}
 }
@@ -367,17 +365,6 @@ func (cm *ClientManager) clientEncoding(clientID string) (string, bool) {
 	}
 	cm.clientsMu.RUnlock()
 	return encoding, exists
-}
-
-func (cm *ClientManager) clientEncodingByID(clientID []byte) (string, bool) {
-	return cm.clientEncoding(bytesToStringNoAlloc(clientID))
-}
-
-func bytesToStringNoAlloc(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (cm *ClientManager) encodePayloadForClient(
