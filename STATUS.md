@@ -67,10 +67,23 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 - Binance Read-Buffer Pregrow (Commit `71009b5`):
   - Smoke-Run `binance_replay_post_readbuf32k_smoke_1` (`PASS`, Drops `0`)
   - Entscheidung: `KEEP` (Owner-Entscheid)
+- Performance-Pfad `broker encode/context hotpath` (Runde 2026-02-26) abgeschlossen:
+  - Ergebnis: nur `71009b5` als zusaetzlicher `KEEP`
+  - alle weiteren Kandidaten dieser Runde wurden nach Smoke-Vergleich reverted
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
   - `eeb7e89` revert direct parse from pooled OB buffer (`d727e9f`)
+  - `0b99be2` revert von `efa37bf` (OB batch scratch pool)
+  - `f62bcd6` revert von `b4d7c3b` (single OB JSON envelope)
+  - `dda2c9d` revert von `f967e8f` (send latency unix nanos)
+  - `171aa1f` revert von `0815c1e` (msgpack pre-grow 32KB)
+  - `c338171` revert von `aab9bf5` (clientID alloc cut)
+  - `6f23206` revert von `e98d991` (manual single OB msgpack)
+  - `17f5540` revert von `585c84b` (binance OB read no-copy)
+  - `06c3d71` revert von `9b69206` (stream parse index)
+  - `7d8bc69` revert von `c21600d` (lazy per-encoding maps)
+  - `7487789` revert von `a166311` (lazy P2 init)
 
 ## Offen
 
@@ -78,7 +91,8 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - Live-Runs bleiben volatil; Bewertung weiter als A/B-Paarvergleich
 - Replay-Profil als zweite Referenzspur:
   - ist jetzt nutzbar als deterministische Neben-Referenz fuer Bybit/Binance/Bitget
-- Broker encode/context hotpath weiter reduzieren (naechster Fokus)
+- Broker encode/context hotpath:
+  - aktueller Testzyklus abgeschlossen; kein weiterer low-risk Kandidat offen
 - Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen, OB spaeter wenn OB-Pfad vorhanden)
 - CCXT Haertung finalisieren (BadSymbol/Checksum robust, kein panic)
 - `baseline_ingest.sh` tar-Warnung beseitigen (`file changed as we read it`)
