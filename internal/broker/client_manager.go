@@ -274,7 +274,11 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 
 	// Reuse serialized single-update envelopes across clients in this batch.
 	// This removes repeated msgpack/json marshal for identical OB pointers.
-	encodedCache := perEncodingOrderBookCache{}
+	cacheSize := len(p1Updates) + len(p2Order)
+	encodedCache := perEncodingOrderBookCache{
+		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+	}
 	var p1JSONCache []byte
 	var p1MsgpackCache []byte
 
@@ -413,9 +417,6 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 	var ok bool
 
 	if encoding == "msgpack" || encoding == "binary" {
-		if cache.msgpackByOB == nil {
-			cache.msgpackByOB = make(map[*shared_types.OrderBookUpdate][]byte)
-		}
 		payload, ok = cache.msgpackByOB[ob]
 		if !ok {
 			binPayload, err := marshalSingleOBAsMsgpackArray(ob)
@@ -430,9 +431,6 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 		return zmq4.NewMsgFrom(clientID, headerOBBinFrame, payload), true
 	}
 
-	if cache.jsonByOB == nil {
-		cache.jsonByOB = make(map[*shared_types.OrderBookUpdate][]byte)
-	}
 	payload, ok = cache.jsonByOB[ob]
 	if !ok {
 		single := [1]*shared_types.OrderBookUpdate{ob}
