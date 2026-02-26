@@ -237,9 +237,9 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 
 	// P2 messages are latest-only by design. Collapse to latest per symbol in-batch
 	// before doing any client-specific encoding work.
-	p1Updates := make([]*shared_types.OrderBookUpdate, 0, len(updates))
-	p2LatestBySymbol := make(map[obBatchLatestKey]*shared_types.OrderBookUpdate, len(updates))
-	p2Order := make([]obBatchLatestKey, 0, len(updates))
+	var p1Updates []*shared_types.OrderBookUpdate
+	var p2LatestBySymbol map[obBatchLatestKey]*shared_types.OrderBookUpdate
+	var p2Order []obBatchLatestKey
 
 	for _, ob := range updates {
 		if ob == nil {
@@ -248,6 +248,15 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		if classifyOrderBookPriority(ob) == priorityP1 {
 			p1Updates = append(p1Updates, ob)
 			continue
+		}
+
+		if p2LatestBySymbol == nil {
+			capHint := len(updates) / 4
+			if capHint < 16 {
+				capHint = 16
+			}
+			p2LatestBySymbol = make(map[obBatchLatestKey]*shared_types.OrderBookUpdate, capHint)
+			p2Order = make([]obBatchLatestKey, 0, capHint)
 		}
 
 		key := obBatchLatestKey{
