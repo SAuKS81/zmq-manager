@@ -46,6 +46,13 @@ var (
 			return buf
 		},
 	}
+	bybitTradeMsgPool = sync.Pool{
+		New: func() any {
+			return &wsMsg{
+				Data: make([]wsTrade, 0, 64),
+			}
+		},
+	}
 )
 
 // NewShardWorker erstellt einen neuen Worker.
@@ -179,6 +186,9 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 				errCh <- err
 				return
 			}
+			if message == nil {
+				continue
+			}
 			msgCh <- message
 		}
 	}()
@@ -193,18 +203,24 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 				continue
 			}
 			if bytes.Contains(msg, bybitTradeTopicNeedle) {
-				var wsMsg wsMsg
-				if err := gjson.Unmarshal(msg, &wsMsg); err != nil {
+				tradeMsg := bybitTradeMsgPool.Get().(*wsMsg)
+				tradeMsg.Topic = ""
+				tradeMsg.Type = ""
+				tradeMsg.Data = tradeMsg.Data[:0]
+				if err := gjson.Unmarshal(msg, tradeMsg); err != nil {
+					bybitTradeMsgPool.Put(tradeMsg)
 					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 					continue
 				}
-				for _, trade := range wsMsg.Data {
+				for _, trade := range tradeMsg.Data {
 					normalizedTrade, err := NormalizeTrade(trade, sw.marketType, goTimestamp, ingestNow.UnixNano())
 					if err != nil {
 						continue
 					}
 					sw.dataCh <- normalizedTrade
 				}
+				tradeMsg.Data = tradeMsg.Data[:0]
+				bybitTradeMsgPool.Put(tradeMsg)
 			}
 
 		case cmd := <-sw.commandCh:
