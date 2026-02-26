@@ -30,18 +30,6 @@ var (
 	headerTradeBinFrame = []byte(HeaderTradeBin)
 	headerOBBinFrame    = []byte(HeaderOBBin)
 	emptyFrame          = []byte{}
-	obBatchScratchPool  = sync.Pool{
-		New: func() any {
-			return &obBatchScratch{
-				p1Updates:       make([]*shared_types.OrderBookUpdate, 0, 256),
-				p2Order:         make([]obBatchLatestKey, 0, 256),
-				p1IngestNanos:   make([]int64, 0, 256),
-				p2LatestBySymbol: make(map[obBatchLatestKey]*shared_types.OrderBookUpdate, 256),
-				jsonByOB:        make(map[*shared_types.OrderBookUpdate][]byte, 256),
-				msgpackByOB:     make(map[*shared_types.OrderBookUpdate][]byte, 256),
-			}
-		},
-	}
 	msgpackCtxPool      = sync.Pool{
 		New: func() any {
 			buf := &bytes.Buffer{}
@@ -97,15 +85,6 @@ type obBatchLatestKey struct {
 	exchange   string
 	marketType string
 	symbol     string
-}
-
-type obBatchScratch struct {
-	p1Updates       []*shared_types.OrderBookUpdate
-	p2Order         []obBatchLatestKey
-	p1IngestNanos   []int64
-	p2LatestBySymbol map[obBatchLatestKey]*shared_types.OrderBookUpdate
-	jsonByOB        map[*shared_types.OrderBookUpdate][]byte
-	msgpackByOB     map[*shared_types.OrderBookUpdate][]byte
 }
 
 type ClientManager struct {
@@ -256,14 +235,11 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		return
 	}
 
-	scratch := obBatchScratchPool.Get().(*obBatchScratch)
-	defer putOBBatchScratch(scratch)
-
 	// P2 messages are latest-only by design. Collapse to latest per symbol in-batch
 	// before doing any client-specific encoding work.
-	p1Updates := scratch.p1Updates[:0]
-	p2LatestBySymbol := scratch.p2LatestBySymbol
-	p2Order := scratch.p2Order[:0]
+	p1Updates := make([]*shared_types.OrderBookUpdate, 0, len(updates))
+	p2LatestBySymbol := make(map[obBatchLatestKey]*shared_types.OrderBookUpdate, len(updates))
+	p2Order := make([]obBatchLatestKey, 0, len(updates))
 
 	for _, ob := range updates {
 		if ob == nil {
@@ -289,7 +265,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		return
 	}
 
-	p1IngestNanos := scratch.p1IngestNanos[:0]
+	p1IngestNanos := make([]int64, 0, len(p1Updates))
 	for _, ob := range p1Updates {
 		if ob != nil && ob.IngestUnixNano > 0 {
 			p1IngestNanos = append(p1IngestNanos, ob.IngestUnixNano)
@@ -298,9 +274,10 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 
 	// Reuse serialized single-update envelopes across clients in this batch.
 	// This removes repeated msgpack/json marshal for identical OB pointers.
+	cacheSize := len(p1Updates) + len(p2Order)
 	encodedCache := perEncodingOrderBookCache{
-		jsonByOB:    scratch.jsonByOB,
-		msgpackByOB: scratch.msgpackByOB,
+		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
 	}
 	var p1JSONCache []byte
 	var p1MsgpackCache []byte
@@ -341,22 +318,6 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, &encodedCache)
 		}
 	}
-}
-
-func putOBBatchScratch(s *obBatchScratch) {
-	for k := range s.p2LatestBySymbol {
-		delete(s.p2LatestBySymbol, k)
-	}
-	for k := range s.jsonByOB {
-		delete(s.jsonByOB, k)
-	}
-	for k := range s.msgpackByOB {
-		delete(s.msgpackByOB, k)
-	}
-	s.p1Updates = s.p1Updates[:0]
-	s.p2Order = s.p2Order[:0]
-	s.p1IngestNanos = s.p1IngestNanos[:0]
-	obBatchScratchPool.Put(s)
 }
 
 func (cm *ClientManager) enqueueOrderBookEnvelope(
