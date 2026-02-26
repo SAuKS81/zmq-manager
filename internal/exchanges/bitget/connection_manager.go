@@ -25,12 +25,12 @@ type ConnectionManager struct {
 	shardLoad           map[*ShardWorker]int
 	wg                  sync.WaitGroup
 
-	// ======================================================================
-	// NEUE FELDER FÜR DAS INTELLIGENTE BATCHING
-	// ======================================================================
+	// Batching state
 	mu                   sync.Mutex
-	pendingSubscriptions map[*ShardWorker][]string // Sammelt Symbole für den nächsten Batch
-	subscriptionTimers   map[*ShardWorker]*time.Timer  // Timer für jeden Shard
+	pendingSubscriptions map[*ShardWorker][]string
+	subscriptionTimers   map[*ShardWorker]*time.Timer
+	pendingUnsubs        map[*ShardWorker][]string
+	unsubTimers          map[*ShardWorker]*time.Timer
 }
 
 func NewConnectionManager(marketType string, dataCh chan<- *shared_types.TradeUpdate) *ConnectionManager {
@@ -44,11 +44,13 @@ func NewConnectionManager(marketType string, dataCh chan<- *shared_types.TradeUp
 		shardLoad:            make(map[*ShardWorker]int),
 		pendingSubscriptions: make(map[*ShardWorker][]string),
 		subscriptionTimers:   make(map[*ShardWorker]*time.Timer),
+		pendingUnsubs:        make(map[*ShardWorker][]string),
+		unsubTimers:          make(map[*ShardWorker]*time.Timer),
 	}
 }
 
 func (cm *ConnectionManager) Run() {
-	log.Printf("[BITGET-CONN-MANAGER] Starte Manager für %s", cm.marketType)
+	log.Printf("[BITGET-CONN-MANAGER] Starte Manager fuer %s", cm.marketType)
 	for {
 		select {
 		case cmd := <-cm.commandCh:
@@ -59,7 +61,7 @@ func (cm *ConnectionManager) Run() {
 				cm.removeSubscription(cmd.Symbol)
 			}
 		case <-cm.stopCh:
-			log.Printf("[BITGET-CONN-MANAGER] Stoppe Manager für %s", cm.marketType)
+			log.Printf("[BITGET-CONN-MANAGER] Stoppe Manager fuer %s", cm.marketType)
 			return
 		}
 	}
@@ -74,13 +76,13 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 	defer cm.mu.Unlock()
 
 	if cm.activeSubscriptions[symbol] {
-		return // Bereits abonniert
+		return
 	}
-	
-	log.Printf("[BITGET-CONN-MANAGER] Füge Abonnement hinzu: %s", symbol)
+
+	log.Printf("[BITGET-CONN-MANAGER] Fuege Abonnement hinzu: %s", symbol)
 	cm.activeSubscriptions[symbol] = true
 
-	// 1. Finde einen passenden Shard oder erstelle einen neuen.
+	// Find an existing shard with capacity.
 	var targetShard *ShardWorker
 	for _, shard := range cm.shards {
 		if cm.shardLoad[shard] < symbolsPerShard {
@@ -89,31 +91,26 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 		}
 	}
 
+	// No shard with capacity, create a new one.
 	if targetShard == nil {
-		log.Printf("[BITGET-CONN-MANAGER] Erstelle neuen Shard für %s. Pausiere für 1100ms...", symbol)
+		log.Printf("[BITGET-CONN-MANAGER] Erstelle neuen Shard fuer %s. Pausiere fuer 1100ms...", symbol)
 		time.Sleep(1100 * time.Millisecond)
 
 		stopCh := make(chan struct{})
-		// Wichtig: Der neue Shard wird OHNE initiale Symbole gestartet.
-		// Die Abos werden über den Batch-Mechanismus unten gesendet.
 		targetShard = NewShardWorker(wsURL, cm.marketType, []string{}, stopCh, cm.dataCh, &cm.wg)
 		cm.shards = append(cm.shards, targetShard)
-		cm.shardLoad[targetShard] = 0 // Startet mit 0
+		cm.shardLoad[targetShard] = 0
 		cm.wg.Add(1)
 		go targetShard.Run()
 	}
 
-	// 2. Füge das Symbol der Warteschlange für den Ziel-Shard hinzu.
 	cm.pendingSubscriptions[targetShard] = append(cm.pendingSubscriptions[targetShard], symbol)
 	cm.symbolToShard[symbol] = targetShard
 	cm.shardLoad[targetShard]++
 
-	// 3. Setze oder resette den Timer für diesen Shard.
 	if timer, ok := cm.subscriptionTimers[targetShard]; ok {
-		// Timer läuft bereits, setze ihn zurück, um mehr Symbole zu sammeln.
 		timer.Reset(200 * time.Millisecond)
 	} else {
-		// Erster neues Abo für diesen Shard, starte einen neuen Timer.
 		cm.subscriptionTimers[targetShard] = time.AfterFunc(200*time.Millisecond, func() {
 			cm.flushSubscriptions(targetShard)
 		})
@@ -130,14 +127,8 @@ func (cm *ConnectionManager) flushSubscriptions(shard *ShardWorker) {
 	}
 
 	log.Printf("[BITGET-CONN-MANAGER] Timer abgelaufen. Sende Batch mit %d Symbolen an Shard.", len(symbolsToSub))
-	
-	// Sende den gebündelten Befehl an den Worker
-	shard.commandCh <- ShardCommand{
-		Action:  "subscribe",
-		Symbols: symbolsToSub,
-	}
+	shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: symbolsToSub}
 
-	// Bereinige die Warteschlange und den Timer
 	delete(cm.pendingSubscriptions, shard)
 	delete(cm.subscriptionTimers, shard)
 }
@@ -153,23 +144,25 @@ func (cm *ConnectionManager) removeSubscription(symbol string) {
 	log.Printf("[BITGET-CONN-MANAGER] Entferne Abonnement: %s", symbol)
 	delete(cm.activeSubscriptions, symbol)
 
-	if shard, ok := cm.symbolToShard[symbol]; ok {
-		delete(cm.symbolToShard, symbol)
-		cm.shardLoad[shard]--
-		if cm.shardLoad[shard] < 0 {
-			cm.shardLoad[shard] = 0
-		}
+	shard, ok := cm.symbolToShard[symbol]
+	if !ok {
+		return
+	}
 
-		// If the symbol is still waiting in the pending subscribe batch, drop it there
-		// and skip sending an unsubscribe that the exchange never saw.
-		wasPending := cm.removePendingSubscriptionLocked(shard, symbol)
-		if !wasPending {
-			shard.commandCh <- ShardCommand{Action: "unsubscribe", Symbols: []string{symbol}}
-		}
+	delete(cm.symbolToShard, symbol)
+	cm.shardLoad[shard]--
+	if cm.shardLoad[shard] < 0 {
+		cm.shardLoad[shard] = 0
+	}
 
-		if cm.shardLoad[shard] <= 0 {
-			log.Printf("[BITGET-CONN-MANAGER-TODO] Shard ist jetzt leer (Load: %d). Beendigungslogik fehlt noch.", cm.shardLoad[shard])
-		}
+	// If symbol is still pending subscribe, remove it there and skip unsubscribe.
+	wasPending := cm.removePendingSubscriptionLocked(shard, symbol)
+	if !wasPending {
+		cm.enqueueUnsubscribeLocked(shard, symbol)
+	}
+
+	if cm.shardLoad[shard] <= 0 {
+		log.Printf("[BITGET-CONN-MANAGER-TODO] Shard ist jetzt leer (Load: %d). Beendigungslogik fehlt noch.", cm.shardLoad[shard])
 	}
 }
 
@@ -204,4 +197,39 @@ func (cm *ConnectionManager) removePendingSubscriptionLocked(shard *ShardWorker,
 
 	cm.pendingSubscriptions[shard] = filtered
 	return true
+}
+
+func (cm *ConnectionManager) enqueueUnsubscribeLocked(shard *ShardWorker, symbol string) {
+	for _, s := range cm.pendingUnsubs[shard] {
+		if s == symbol {
+			return
+		}
+	}
+	cm.pendingUnsubs[shard] = append(cm.pendingUnsubs[shard], symbol)
+
+	if timer, ok := cm.unsubTimers[shard]; ok {
+		timer.Reset(150 * time.Millisecond)
+		return
+	}
+
+	cm.unsubTimers[shard] = time.AfterFunc(150*time.Millisecond, func() {
+		cm.flushUnsubs(shard)
+	})
+}
+
+func (cm *ConnectionManager) flushUnsubs(shard *ShardWorker) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	symbolsToUnsub := cm.pendingUnsubs[shard]
+	if len(symbolsToUnsub) == 0 {
+		delete(cm.unsubTimers, shard)
+		return
+	}
+
+	log.Printf("[BITGET-CONN-MANAGER] Sende Unsubscribe-Batch mit %d Symbolen an Shard.", len(symbolsToUnsub))
+	shard.commandCh <- ShardCommand{Action: "unsubscribe", Symbols: symbolsToUnsub}
+
+	delete(cm.pendingUnsubs, shard)
+	delete(cm.unsubTimers, shard)
 }
