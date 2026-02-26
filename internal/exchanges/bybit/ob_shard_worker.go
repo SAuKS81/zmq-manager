@@ -150,6 +150,7 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 				return
 			}
 			ingestUnixNano := time.Now().UnixNano()
+			goTimestamp := ingestUnixNano / int64(time.Millisecond)
 
 			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
 				continue
@@ -172,9 +173,9 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 
 			sw.mu.Lock()
 			if obMsg.Type == "snapshot" {
-				updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
+				updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp, goTimestamp, ingestUnixNano)
 			} else if obMsg.Type == "delta" {
-				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
+				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, goTimestamp, ingestUnixNano)
 			}
 			sw.mu.Unlock()
 
@@ -204,7 +205,7 @@ func readWSMessagePooled(conn *websocket.Conn) (int, []byte, error) {
 	return msgType, msg, nil
 }
 
-func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, goTimestamp int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		book = &localOrderbook{
@@ -249,10 +250,10 @@ func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBo
 			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
-	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBSnapshot)
+	return sw.createUpdate(topic, ts, goTimestamp, ingestUnixNano, metrics.TypeOBSnapshot)
 }
 
-func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, goTimestamp int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
@@ -309,10 +310,10 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
-	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBUpdate)
+	return sw.createUpdate(topic, ts, goTimestamp, ingestUnixNano, metrics.TypeOBUpdate)
 }
 
-func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, ingestUnixNano int64, updateType string) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, goTimestamp int64, ingestUnixNano int64, updateType string) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
@@ -334,7 +335,7 @@ func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, ingestUnixN
 	update.MarketType = sw.marketType
 
 	update.Timestamp = ts
-	update.GoTimestamp = time.Now().UnixMilli()
+	update.GoTimestamp = goTimestamp
 	update.IngestUnixNano = ingestUnixNano
 	update.UpdateType = updateType
 
