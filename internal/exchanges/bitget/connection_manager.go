@@ -143,6 +143,9 @@ func (cm *ConnectionManager) flushSubscriptions(shard *ShardWorker) {
 }
 
 func (cm *ConnectionManager) removeSubscription(symbol string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
 	if !cm.activeSubscriptions[symbol] {
 		return
 	}
@@ -151,12 +154,54 @@ func (cm *ConnectionManager) removeSubscription(symbol string) {
 	delete(cm.activeSubscriptions, symbol)
 
 	if shard, ok := cm.symbolToShard[symbol]; ok {
-		shard.commandCh <- ShardCommand{Action: "unsubscribe", Symbols: []string{symbol}}
 		delete(cm.symbolToShard, symbol)
-		cm.shardLoad[shard]-- 
-		
+		cm.shardLoad[shard]--
+		if cm.shardLoad[shard] < 0 {
+			cm.shardLoad[shard] = 0
+		}
+
+		// If the symbol is still waiting in the pending subscribe batch, drop it there
+		// and skip sending an unsubscribe that the exchange never saw.
+		wasPending := cm.removePendingSubscriptionLocked(shard, symbol)
+		if !wasPending {
+			shard.commandCh <- ShardCommand{Action: "unsubscribe", Symbols: []string{symbol}}
+		}
+
 		if cm.shardLoad[shard] <= 0 {
 			log.Printf("[BITGET-CONN-MANAGER-TODO] Shard ist jetzt leer (Load: %d). Beendigungslogik fehlt noch.", cm.shardLoad[shard])
 		}
 	}
+}
+
+func (cm *ConnectionManager) removePendingSubscriptionLocked(shard *ShardWorker, symbol string) bool {
+	pending := cm.pendingSubscriptions[shard]
+	if len(pending) == 0 {
+		return false
+	}
+
+	removed := false
+	filtered := pending[:0]
+	for _, s := range pending {
+		if s == symbol {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+
+	if !removed {
+		return false
+	}
+
+	if len(filtered) == 0 {
+		delete(cm.pendingSubscriptions, shard)
+		if timer, ok := cm.subscriptionTimers[shard]; ok {
+			timer.Stop()
+			delete(cm.subscriptionTimers, shard)
+		}
+		return true
+	}
+
+	cm.pendingSubscriptions[shard] = filtered
+	return true
 }
