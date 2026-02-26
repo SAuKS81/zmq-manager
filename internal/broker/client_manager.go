@@ -264,6 +264,13 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		return
 	}
 
+	p1IngestNanos := make([]int64, 0, len(p1Updates))
+	for _, ob := range p1Updates {
+		if ob != nil && ob.IngestUnixNano > 0 {
+			p1IngestNanos = append(p1IngestNanos, ob.IngestUnixNano)
+		}
+	}
+
 	// Reuse serialized single-update envelopes across clients in this batch.
 	// This removes repeated msgpack/json marshal for identical OB pointers.
 	cacheSize := len(p1Updates) + len(p2Order)
@@ -271,6 +278,8 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
 		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
 	}
+	var p1JSONCache []byte
+	var p1MsgpackCache []byte
 
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
@@ -279,9 +288,24 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 			continue
 		}
 
-		for _, ob := range p1Updates {
-			metricType := orderBookEnvelopeType(ob)
-			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP1, &encodedCache)
+		if len(p1Updates) > 0 {
+			msg, ok := cm.encodePayloadForClient(
+				clientID,
+				encoding,
+				HeaderOBBin,
+				p1Updates,
+				&p1JSONCache,
+				&p1MsgpackCache,
+				metrics.TypeOBUpdate,
+			)
+			if ok {
+				cm.enqueueSocketSend(outboundEnvelope{
+					msg:         msg,
+					metricType:  metrics.TypeOBUpdate,
+					ingestNanos: p1IngestNanos,
+					priority:    priorityP1,
+				})
+			}
 		}
 
 		for _, key := range p2Order {
