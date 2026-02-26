@@ -48,7 +48,11 @@ func (e *BinanceExchange) HandleRequest(req *shared_types.ClientRequest) {
 			Symbol: exchangeSymbol,
 			Depth:  req.OrderBookDepth,
 		}
-		if cmd.Depth == 0 { cmd.Depth = 20 } // Default
+		// Keep depth=0 for unsubscribe/disconnect paths so the OB manager can
+		// remove all depth variants for a symbol. Apply default only on subscribe.
+		if cmd.Action == "add" && cmd.Depth == 0 {
+			cmd.Depth = 20 // Default depth for new subscriptions.
+		}
 
 		switch req.MarketType {
 		case "spot":
