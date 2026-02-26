@@ -22,7 +22,6 @@ var (
 type incomingOBMessage struct {
 	payload        []byte
 	ingestUnixNano int64
-	borrowed       borrowedWSMessage
 }
 
 type OrderBookShardWorker struct {
@@ -146,15 +145,14 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 		defer close(msgCh)
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(190 * time.Second))
-			borrowed, err := readWSMessageBorrowed(conn)
+			_, message, err := readWSMessagePooled(conn)
 			if err != nil {
 				errCh <- err
 				return
 			}
 			msgCh <- incomingOBMessage{
-				payload:        borrowed.payload,
+				payload:        message,
 				ingestUnixNano: time.Now().UnixNano(),
-				borrowed:       borrowed,
 			}
 		}
 	}()
@@ -198,7 +196,6 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 				return <-errCh
 			}
 			sw.handleMessage(incoming.payload, incoming.ingestUnixNano)
-			releaseWSMessage(incoming.borrowed)
 
 		case cmd := <-sw.commandCh:
 			stream := getOBStreamName(cmd.Symbol, cmd.Depth)
@@ -235,14 +232,14 @@ func (sw *OrderBookShardWorker) handleMessage(msg []byte, ingestUnixNano int64) 
 
 		var wrapper wsOrderBookCombined
 		if err := json.Unmarshal(msg, &wrapper); err == nil && wrapper.Stream != "" {
-			symbolFromStream, _, _ := strings.Cut(wrapper.Stream, "@")
+			symbolFromStream := strings.Split(wrapper.Stream, "@")[0]
 			ob := wrapper.Data
 
 			hasData := (len(ob.BidsSpot) > 0 || len(ob.AsksSpot) > 0 ||
 				len(ob.BidsFut) > 0 || len(ob.AsksFut) > 0)
 
 			if hasData {
-				norm, _ := NormalizeOrderBook(ob, symbolFromStream, sw.marketType, ingestUnixNano/1e6, ingestUnixNano)
+				norm, _ := NormalizeOrderBook(ob, symbolFromStream, sw.marketType, time.Unix(0, ingestUnixNano).UnixMilli(), ingestUnixNano)
 				if norm != nil {
 					sw.dataCh <- norm
 				}

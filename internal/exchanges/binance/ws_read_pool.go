@@ -15,38 +15,6 @@ var binanceReadBufPool = sync.Pool{
 	},
 }
 
-type borrowedWSMessage struct {
-	msgType int
-	payload []byte
-	buf     *bytes.Buffer
-}
-
-func readWSMessageBorrowed(conn *websocket.Conn) (borrowedWSMessage, error) {
-	msgType, r, err := conn.NextReader()
-	if err != nil {
-		return borrowedWSMessage{}, err
-	}
-
-	buf := binanceReadBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	if _, err := buf.ReadFrom(r); err != nil {
-		binanceReadBufPool.Put(buf)
-		return borrowedWSMessage{}, err
-	}
-
-	return borrowedWSMessage{
-		msgType: msgType,
-		payload: buf.Bytes(),
-		buf:     buf,
-	}, nil
-}
-
-func releaseWSMessage(msg borrowedWSMessage) {
-	if msg.buf != nil {
-		binanceReadBufPool.Put(msg.buf)
-	}
-}
-
 func readWSMessagePooled(conn *websocket.Conn) (int, []byte, error) {
 	msgType, r, err := conn.NextReader()
 	if err != nil {
