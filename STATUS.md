@@ -24,6 +24,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `967b100` bybit trade read-loop: string alloc cut + goccy decode
   - `32ae4d2` bybit OB read via `NextReader` + pooled buffer
   - `afbeeec` batch C: binance+bitget WS read path auf `NextReader` + pooled buffer
+  - `e1da05b` bybit OB hot path: `GoTimestamp` aus ingest ableiten statt `time.Now()` pro Update
 - Deterministisches Test-Harness vorbereitet (Replay statt Live-WS):
   - neuer lokaler Replay-Server: `cmd/wsreplay`
   - WS-URL-Overrides per Env fuer alle nativen Exchanges:
@@ -47,6 +48,9 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 - Batch-C Validierung (Commit `afbeeec`) abgeschlossen:
   - Binance clean runs: `binance_replay_post_batchc_clean_1..3` (alle `PASS`, Drops `0`)
   - Bitget clean runs: `bitget_replay_post_batchc_clean_1..3` (alle `PASS`, Drops `0`, `ob/s=0.00` by design)
+- Bybit Clock-Hotpath Validierung (Commit `e1da05b`):
+  - Smoke-Run `bybit_replay_post_clockopt_smoke_1` (`PASS`, Drops `0`)
+  - Entscheidung: `KEEP` (Owner-Entscheid)
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
