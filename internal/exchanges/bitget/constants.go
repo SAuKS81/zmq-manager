@@ -1,13 +1,24 @@
 package bitget
 
-const (
-	wsURL = "wss://ws.bitget.com/v2/ws/public"
+import "os"
 
-	readIdleSec  = 90 
+var (
+	wsURL = getenvDefault("BITGET_WS_URL", "wss://ws.bitget.com/v2/ws/public")
+)
+
+const (
+	readIdleSec  = 90
 	pingEverySec = 25
 
 	// Sharding & Rate Limits
 	symbolsPerShard = 50
-	symbolsPerBatch = 20 // NEU: Anzahl der Symbole pro Abo-Befehl
-	delayPerBatchMs = 500  // NEU: Pause nach jedem Abo-Batch in Millisekunden
+	symbolsPerBatch = 20 // number of symbols per subscribe command
+	delayPerBatchMs = 500
 )
+
+func getenvDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}

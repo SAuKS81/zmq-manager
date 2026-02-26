@@ -23,6 +23,12 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `dfb4c03` msgpack encoder context pooling
   - `967b100` bybit trade read-loop: string alloc cut + goccy decode
   - `32ae4d2` bybit OB read via `NextReader` + pooled buffer
+- Deterministisches Test-Harness vorbereitet (Replay statt Live-WS):
+  - neuer lokaler Replay-Server: `cmd/wsreplay`
+  - WS-URL-Overrides per Env fuer alle nativen Exchanges:
+    - Bybit: `BYBIT_SPOT_WS_URL`, `BYBIT_LINEAR_WS_URL`
+    - Binance: `BINANCE_SPOT_WS_URL`, `BINANCE_FUTURES_WS_URL`
+    - Bitget: `BITGET_WS_URL`
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
@@ -33,6 +39,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 - Baseline v2 (quiet regime) final einfrieren:
   - bisher starke Run-Streuung, daher noch kein stabiler Referenzwert
   - bis dahin nur A/B-Paarvergleich fuer keep/revert
+- Replay-Profil als zweite Referenzspur etablieren (konstant), Live-Run bleibt Realitaets-Check
 - `io.ReadAll` / TLS/WS read-path weiter reduzieren (isolierte Patches)
 - Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen)
 - CCXT Haertung finalisieren (BadSymbol/Checksum robust, kein panic)
