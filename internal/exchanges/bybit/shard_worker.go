@@ -39,6 +39,13 @@ type ShardWorker struct {
 var (
 	bybitTradeTopicNeedle = []byte(`"topic":"publicTrade.`)
 	bybitTradePongNeedle  = []byte(`"op":"pong"`)
+	bybitTradeReadBufPool = sync.Pool{
+		New: func() any {
+			buf := &bytes.Buffer{}
+			buf.Grow(16 * 1024)
+			return buf
+		},
+	}
 )
 
 // NewShardWorker erstellt einen neuen Worker.
@@ -167,7 +174,7 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 	go func() {
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(readIdleSec * time.Second))
-			_, message, err := conn.ReadMessage()
+			message, err := readWSTradeMessagePooled(conn)
 			if err != nil {
 				errCh <- err
 				return
@@ -227,4 +234,26 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 			return nil
 		}
 	}
+}
+
+func readWSTradeMessagePooled(conn *websocket.Conn) ([]byte, error) {
+	msgType, r, err := conn.NextReader()
+	if err != nil {
+		return nil, err
+	}
+	if msgType != websocket.TextMessage {
+		return nil, nil
+	}
+
+	buf := bybitTradeReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(r)
+	if err != nil {
+		bybitTradeReadBufPool.Put(buf)
+		return nil, err
+	}
+
+	msg := append([]byte(nil), buf.Bytes()...)
+	bybitTradeReadBufPool.Put(buf)
+	return msg, nil
 }
