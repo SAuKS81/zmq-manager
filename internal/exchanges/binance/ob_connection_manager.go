@@ -3,6 +3,8 @@ package binance
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 
 	"bybit-watcher/internal/shared_types"
@@ -89,6 +91,36 @@ func (cm *OrderBookConnectionManager) addSubscription(symbol string, depth int) 
 }
 
 func (cm *OrderBookConnectionManager) removeSubscription(symbol string, depth int) {
+	if depth <= 0 {
+		prefix := symbol + ":"
+		keys := make([]string, 0, 4)
+		for key := range cm.activeSubscriptions {
+			if strings.HasPrefix(key, prefix) {
+				keys = append(keys, key)
+			}
+		}
+		for _, key := range keys {
+			if !cm.activeSubscriptions[key] {
+				continue
+			}
+			delete(cm.activeSubscriptions, key)
+			_, depthPart, ok := strings.Cut(key, ":")
+			if !ok {
+				continue
+			}
+			parsedDepth, err := strconv.Atoi(depthPart)
+			if err != nil {
+				continue
+			}
+			if shard, ok := cm.symbolToShard[key]; ok {
+				shard.commandCh <- OBManagerCommand{Action: "unsubscribe", Symbol: symbol, Depth: parsedDepth}
+				delete(cm.symbolToShard, key)
+				cm.shardLoad[shard]--
+			}
+		}
+		return
+	}
+
 	key := fmt.Sprintf("%s:%d", symbol, depth)
 	if !cm.activeSubscriptions[key] { return }
 	delete(cm.activeSubscriptions, key)
