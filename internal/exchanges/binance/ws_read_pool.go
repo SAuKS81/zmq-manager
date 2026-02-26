@@ -10,7 +10,8 @@ import (
 var binanceReadBufPool = sync.Pool{
 	New: func() any {
 		buf := &bytes.Buffer{}
-		buf.Grow(16 * 1024)
+		// Binance combined stream payloads are often above 16KB; pre-grow to cut growSlice churn.
+		buf.Grow(32 * 1024)
 		return buf
 	},
 }
