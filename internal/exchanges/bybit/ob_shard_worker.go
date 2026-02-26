@@ -144,27 +144,41 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			_, msg, err := readWSMessagePooled(sw.conn)
+			buf := bybitReadBufPool.Get().(*bytes.Buffer)
+			buf.Reset()
+
+			msgType, err := readWSMessageIntoBuffer(sw.conn, buf)
 			if err != nil {
+				bybitReadBufPool.Put(buf)
 				log.Printf("[BYBIT-OB-SHARD-ERROR] Fehler beim Lesen: %v", err)
 				return
 			}
+			if msgType != websocket.TextMessage {
+				bybitReadBufPool.Put(buf)
+				continue
+			}
+
+			msg := buf.Bytes()
 			ingestUnixNano := time.Now().UnixNano()
 
 			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
+				bybitReadBufPool.Put(buf)
 				continue
 			}
 			if bytes.Contains(msg, bybitPongNeedle) {
+				bybitReadBufPool.Put(buf)
 				continue
 			}
 
 			var obMsg wsOrderBookMsg
 			if err := json.Unmarshal(msg, &obMsg); err != nil {
+				bybitReadBufPool.Put(buf)
 				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
 				continue
 			}
 
 			if obMsg.Topic == "" {
+				bybitReadBufPool.Put(buf)
 				continue
 			}
 
@@ -178,6 +192,8 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 			}
 			sw.mu.Unlock()
 
+			bybitReadBufPool.Put(buf)
+
 			if updateToSend != nil {
 				sw.dataCh <- updateToSend
 			}
@@ -185,23 +201,18 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 	}
 }
 
-func readWSMessagePooled(conn *websocket.Conn) (int, []byte, error) {
+func readWSMessageIntoBuffer(conn *websocket.Conn, buf *bytes.Buffer) (int, error) {
 	msgType, r, err := conn.NextReader()
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 
-	buf := bybitReadBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
 	_, err = buf.ReadFrom(r)
 	if err != nil {
-		bybitReadBufPool.Put(buf)
-		return 0, nil, err
+		return 0, err
 	}
 
-	msg := append([]byte(nil), buf.Bytes()...)
-	bybitReadBufPool.Put(buf)
-	return msgType, msg, nil
+	return msgType, nil
 }
 
 func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
