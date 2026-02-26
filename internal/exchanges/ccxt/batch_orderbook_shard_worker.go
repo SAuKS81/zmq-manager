@@ -192,7 +192,11 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 				}
 			}
 
-			normalized, _ := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
+			normalized, normErr := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
+			if normErr != nil {
+				log.Printf("[CCXT-BATCH-OB-WARN] normalize orderbook failed (%s/%s): %v", sw.exchangeName, sw.marketType, normErr)
+				continue
+			}
 			if normalized != nil {
 				sw.dataCh <- normalized
 			}

@@ -169,7 +169,11 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
 			for _, trade := range trades {
-				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
+				normalized, normErr := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
+				if normErr != nil {
+					log.Printf("[CCXT-BATCH-SHARD-WARN] normalize trade failed (%s/%s): %v", sw.exchangeName, sw.marketType, normErr)
+					continue
+				}
 				if normalized != nil {
 					sw.dataCh <- normalized
 				}
