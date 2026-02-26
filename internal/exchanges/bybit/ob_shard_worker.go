@@ -49,6 +49,16 @@ var (
 			return buf
 		},
 	}
+	bybitOBMsgPool = sync.Pool{
+		New: func() any {
+			return &wsOrderBookMsg{
+				Data: wsOrderBookData{
+					Bids: make([][2]string, 0, 128),
+					Asks: make([][2]string, 0, 128),
+				},
+			}
+		},
+	}
 )
 
 func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *OrderBookShardWorker {
@@ -158,13 +168,22 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 				continue
 			}
 
-			var obMsg wsOrderBookMsg
-			if err := json.Unmarshal(msg, &obMsg); err != nil {
+			obMsg := bybitOBMsgPool.Get().(*wsOrderBookMsg)
+			obMsg.Topic = ""
+			obMsg.Type = ""
+			obMsg.Timestamp = 0
+			obMsg.Data.UpdateID = 0
+			obMsg.Data.Bids = obMsg.Data.Bids[:0]
+			obMsg.Data.Asks = obMsg.Data.Asks[:0]
+
+			if err := json.Unmarshal(msg, obMsg); err != nil {
+				bybitOBMsgPool.Put(obMsg)
 				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
 				continue
 			}
 
 			if obMsg.Topic == "" {
+				bybitOBMsgPool.Put(obMsg)
 				continue
 			}
 
@@ -177,6 +196,9 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
 			}
 			sw.mu.Unlock()
+			obMsg.Data.Bids = obMsg.Data.Bids[:0]
+			obMsg.Data.Asks = obMsg.Data.Asks[:0]
+			bybitOBMsgPool.Put(obMsg)
 
 			if updateToSend != nil {
 				sw.dataCh <- updateToSend
