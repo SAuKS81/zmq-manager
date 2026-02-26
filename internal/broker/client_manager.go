@@ -33,7 +33,8 @@ var (
 	msgpackCtxPool      = sync.Pool{
 		New: func() any {
 			buf := &bytes.Buffer{}
-			buf.Grow(8 * 1024)
+			// Hot-path payloads often exceed 8KB in replay runs; pre-grow to reduce realloc/copy churn.
+			buf.Grow(32 * 1024)
 			return &msgpackEncoderCtx{
 				buf: buf,
 				enc: msgpack.NewEncoder(buf),
