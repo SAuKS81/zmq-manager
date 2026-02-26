@@ -29,6 +29,7 @@ const (
 var (
 	headerTradeBinFrame = []byte(HeaderTradeBin)
 	headerOBBinFrame    = []byte(HeaderOBBin)
+	emptyFrame          = []byte{}
 	msgpackCtxPool      = sync.Pool{
 		New: func() any {
 			buf := &bytes.Buffer{}
@@ -385,8 +386,11 @@ func (cm *ClientManager) encodePayloadForClient(
 			}
 			*msgpackCache = binPayload
 		}
-		if msgTypeHeader == HeaderTradeBin {
+		switch msgTypeHeader {
+		case HeaderTradeBin:
 			return zmq4.NewMsgFrom(clientID, headerTradeBinFrame, *msgpackCache), true
+		case HeaderOBBin:
+			return zmq4.NewMsgFrom(clientID, headerOBBinFrame, *msgpackCache), true
 		}
 		return zmq4.NewMsgFrom(clientID, []byte(msgTypeHeader), *msgpackCache), true
 	}
@@ -541,7 +545,7 @@ func (cm *ClientManager) healthCheckLoop() {
 				clientsToRemove = append(clientsToRemove, client.id)
 				continue
 			}
-			cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(client.clientID, []byte{}, pingPayload), metricType: metrics.TypeTrade})
+			cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(client.clientID, emptyFrame, pingPayload), metricType: metrics.TypeTrade})
 		}
 
 		for _, id := range clientsToRemove {
