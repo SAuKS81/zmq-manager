@@ -473,94 +473,13 @@ func marshalSingleOBAsMsgpackArray(ob *shared_types.OrderBookUpdate) ([]byte, er
 		msgpackCtxPool.Put(ctx)
 		return nil, err
 	}
-	if err := encodeOrderBookUpdateMsgpack(ctx.enc, ob); err != nil {
+	if err := ctx.enc.Encode(ob); err != nil {
 		msgpackCtxPool.Put(ctx)
 		return nil, err
 	}
 	out := append([]byte(nil), ctx.buf.Bytes()...)
 	msgpackCtxPool.Put(ctx)
 	return out, nil
-}
-
-func encodeOrderBookUpdateMsgpack(enc *msgpack.Encoder, ob *shared_types.OrderBookUpdate) error {
-	// Keep wire shape equivalent to struct tags: short-key map payload.
-	if err := enc.EncodeMapLen(8); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("e"); err != nil {
-		return err
-	}
-	if err := enc.EncodeString(ob.Exchange); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("s"); err != nil {
-		return err
-	}
-	if err := enc.EncodeString(ob.Symbol); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("m"); err != nil {
-		return err
-	}
-	if err := enc.EncodeString(ob.MarketType); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("t"); err != nil {
-		return err
-	}
-	if err := enc.EncodeInt64(ob.Timestamp); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("gt"); err != nil {
-		return err
-	}
-	if err := enc.EncodeInt64(ob.GoTimestamp); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("b"); err != nil {
-		return err
-	}
-	if err := encodeOrderBookLevelsMsgpack(enc, ob.Bids); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("a"); err != nil {
-		return err
-	}
-	if err := encodeOrderBookLevelsMsgpack(enc, ob.Asks); err != nil {
-		return err
-	}
-	if err := enc.EncodeString("dt"); err != nil {
-		return err
-	}
-	if err := enc.EncodeString(ob.DataType); err != nil {
-		return err
-	}
-	return nil
-}
-
-func encodeOrderBookLevelsMsgpack(enc *msgpack.Encoder, levels []shared_types.OrderBookLevel) error {
-	if err := enc.EncodeArrayLen(len(levels)); err != nil {
-		return err
-	}
-	for i := range levels {
-		lvl := levels[i]
-		if err := enc.EncodeMapLen(2); err != nil {
-			return err
-		}
-		if err := enc.EncodeString("p"); err != nil {
-			return err
-		}
-		if err := enc.EncodeFloat64(lvl.Price); err != nil {
-			return err
-		}
-		if err := enc.EncodeString("a"); err != nil {
-			return err
-		}
-		if err := enc.EncodeFloat64(lvl.Amount); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func classifyOrderBookPriority(ob *shared_types.OrderBookUpdate) sendPriority {
