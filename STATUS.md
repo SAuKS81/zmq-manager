@@ -28,6 +28,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `5d5eb8c` bybit WS read path: pooled buffer ohne extra `[]byte`-Kopie (trade + ob)
   - `afdbbbf` broker send path: P1 OB innerhalb Client-Batch senden (weniger Send/Context-Overhead)
   - `c700692` broker encode path: Header-Frame-Reuse statt per-send `[]byte(...)` Alloc
+  - `71009b5` binance WS read pool: Buffer pre-grow 32KB (weniger `bytes.growSlice`)
 - Deterministisches Test-Harness vorbereitet (Replay statt Live-WS):
   - neuer lokaler Replay-Server: `cmd/wsreplay`
   - WS-URL-Overrides per Env fuer alle nativen Exchanges:
@@ -62,6 +63,9 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - Entscheidung: `KEEP` (Owner-Entscheid)
 - Broker Header-Alloc Cut (Commit `c700692`):
   - Smoke-Run `binance_replay_post_headeralloc_smoke_1` (`PASS`, Drops `0`)
+  - Entscheidung: `KEEP` (Owner-Entscheid)
+- Binance Read-Buffer Pregrow (Commit `71009b5`):
+  - Smoke-Run `binance_replay_post_readbuf32k_smoke_1` (`PASS`, Drops `0`)
   - Entscheidung: `KEEP` (Owner-Entscheid)
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
