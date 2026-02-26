@@ -29,6 +29,12 @@ Aktiver Branch: `phase1.5-baseline-tooling`
     - Bybit: `BYBIT_SPOT_WS_URL`, `BYBIT_LINEAR_WS_URL`
     - Binance: `BINANCE_SPOT_WS_URL`, `BINANCE_FUTURES_WS_URL`
     - Bitget: `BITGET_WS_URL`
+- Replay-Referenz (Bybit native, 500/500, 60s) festgezogen auf Commit `660574a`:
+  - gueltige Runs: `ccxt_repro_replay_fix_1`, `_2`, `_4` (alle `PASS`, Drops `0`)
+  - ausgeklammert: `ccxt_repro_replay_fix_3` (Smoke `ob/s=0.00`)
+  - Median `alloc_space total`: ~`744 MB`
+  - Median `cpu total samples (30s)`: ~`9.39s`
+  - typische Smoke-Rate: trades ~`9.7k/s`, ob ~`39-40/s`
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
@@ -37,9 +43,9 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 ## Offen
 
 - Baseline v2 (quiet regime) final einfrieren:
-  - bisher starke Run-Streuung, daher noch kein stabiler Referenzwert
-  - bis dahin nur A/B-Paarvergleich fuer keep/revert
-- Replay-Profil als zweite Referenzspur etablieren (konstant), Live-Run bleibt Realitaets-Check
+  - Live-Runs bleiben volatil; Bewertung weiter als A/B-Paarvergleich
+- Replay-Profil als zweite Referenzspur:
+  - ist jetzt nutzbar als deterministische Neben-Referenz
 - `io.ReadAll` / TLS/WS read-path weiter reduzieren (isolierte Patches)
 - Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen)
 - CCXT Haertung finalisieren (BadSymbol/Checksum robust, kein panic)
