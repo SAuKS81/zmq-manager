@@ -17,7 +17,6 @@ import (
 var (
 	binanceOBStreamNeedle = []byte(`"stream"`)
 	binanceOBDepthNeedle  = []byte(`@depth`)
-	streamAtNeedle        = "@"
 )
 
 type incomingOBMessage struct {
@@ -233,10 +232,7 @@ func (sw *OrderBookShardWorker) handleMessage(msg []byte, ingestUnixNano int64) 
 
 		var wrapper wsOrderBookCombined
 		if err := json.Unmarshal(msg, &wrapper); err == nil && wrapper.Stream != "" {
-			symbolFromStream := wrapper.Stream
-			if at := strings.Index(wrapper.Stream, streamAtNeedle); at > 0 {
-				symbolFromStream = wrapper.Stream[:at]
-			}
+			symbolFromStream := strings.Split(wrapper.Stream, "@")[0]
 			ob := wrapper.Data
 
 			hasData := (len(ob.BidsSpot) > 0 || len(ob.AsksSpot) > 0 ||
