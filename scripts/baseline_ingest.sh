@@ -23,6 +23,16 @@ RUN_DIR=""
 SMOKE_PID=""
 BUNDLE_DONE=0
 
+create_bundle() {
+  if [[ -z "${RUN_DIR}" || ! -d "${RUN_DIR}" ]]; then
+    return
+  fi
+  local tmp_bundle
+  tmp_bundle="${RUN_DIR}.bundle.tmp.tar.gz"
+  tar -C "${RUN_DIR}" -czf "${tmp_bundle}" . >/dev/null 2>&1 || return
+  mv -f "${tmp_bundle}" "${RUN_DIR}/bundle.tar.gz"
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -56,10 +66,7 @@ cleanup() {
   fi
 
   if [[ -n "${RUN_DIR}" && -d "${RUN_DIR}" && "${BUNDLE_DONE}" -eq 0 ]]; then
-    (
-      cd "${RUN_DIR}"
-      tar -czf bundle.tar.gz --exclude=bundle.tar.gz . >/dev/null 2>&1 || true
-    )
+    create_bundle || true
     BUNDLE_DONE=1
   fi
 }
@@ -328,10 +335,7 @@ cat >"${RUN_DIR}/meta.json" <<EOF
 EOF
 
 # 12) Bundle artifacts
-(
-  cd "${RUN_DIR}"
-  tar -czf bundle.tar.gz --exclude=bundle.tar.gz .
-)
+create_bundle
 BUNDLE_DONE=1
 
 echo "[BASELINE] run complete: ${RUN_DIR}"
