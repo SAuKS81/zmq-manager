@@ -634,6 +634,10 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			return
 		}
 	case "disconnect":
+		cm.clientsMu.Lock()
+		delete(cm.clients, clientIDStr)
+		cm.clientsMu.Unlock()
+		cm.dropP2ForClient(clientIDStr)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect"})
 		return
 	default:
@@ -730,6 +734,16 @@ func (cm *ClientManager) popP2LatestDeterministic() (outboundEnvelope, bool) {
 	outbound := cm.p2Latest[minKey]
 	delete(cm.p2Latest, minKey)
 	return outbound, true
+}
+
+func (cm *ClientManager) dropP2ForClient(clientID string) {
+	cm.p2Mu.Lock()
+	defer cm.p2Mu.Unlock()
+	for key := range cm.p2Latest {
+		if key.clientID == clientID {
+			delete(cm.p2Latest, key)
+		}
+	}
 }
 
 func lessP2Key(a, b p2LatestKey) bool {

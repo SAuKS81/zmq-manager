@@ -324,9 +324,26 @@ func orderBookMetricType(ob *shared_types.OrderBookUpdate) string {
 }
 
 func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
+	type unsubReq struct {
+		exchange   string
+		marketType string
+		symbol     string
+		dataType   string
+	}
+	toUnsub := make([]unsubReq, 0, 256)
+
 	for subID, clients := range sm.tradeSubscriptions {
 		delete(clients, clientID)
 		if len(clients) == 0 {
+			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
+			if ok {
+				toUnsub = append(toUnsub, unsubReq{
+					exchange:   exchange,
+					marketType: marketType,
+					symbol:     symbol,
+					dataType:   "trades",
+				})
+			}
 			delete(sm.tradeSubscriptions, subID)
 		}
 	}
@@ -334,6 +351,15 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 	for subID, clients := range sm.orderBookSubscriptions {
 		delete(clients, clientID)
 		if len(clients) == 0 {
+			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
+			if ok {
+				toUnsub = append(toUnsub, unsubReq{
+					exchange:   exchange,
+					marketType: marketType,
+					symbol:     symbol,
+					dataType:   "orderbooks",
+				})
+			}
 			delete(sm.orderBookSubscriptions, subID)
 		}
 	}
@@ -344,4 +370,33 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 			delete(sm.wildcardSubscribers, wildcardID)
 		}
 	}
+
+	for _, req := range toUnsub {
+		if req.symbol == "" {
+			continue
+		}
+		handlerName := req.exchange + "_native"
+		handler, ok := sm.exchangeRegistry[handlerName]
+		if !ok {
+			handler = sm.exchangeRegistry["ccxt_generic"]
+		}
+		if handler == nil {
+			continue
+		}
+		handler.HandleRequest(&shared_types.ClientRequest{
+			Action:     "unsubscribe",
+			Exchange:   handlerName,
+			Symbol:     req.symbol,
+			MarketType: req.marketType,
+			DataType:   req.dataType,
+		})
+	}
+}
+
+func parseSubscriptionID(subID string) (exchange, marketType, symbol string, ok bool) {
+	parts := strings.SplitN(subID, "-", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
 }

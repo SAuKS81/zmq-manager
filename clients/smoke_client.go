@@ -125,7 +125,6 @@ func main() {
 	defer stopSignals()
 
 	consumeLoop(sigCtx, socket, cfg)
-	sendDisconnect(socket)
 }
 
 func consumeLoop(sigCtx context.Context, socket zmq4.Socket, cfg smokeConfig) {
