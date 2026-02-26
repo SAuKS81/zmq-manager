@@ -70,6 +70,11 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 - Performance-Pfad `broker encode/context hotpath` (Runde 2026-02-26) abgeschlossen:
   - Ergebnis: nur `71009b5` als zusaetzlicher `KEEP`
   - alle weiteren Kandidaten dieser Runde wurden nach Smoke-Vergleich reverted
+- Disconnect-/Cleanup-Kette verifiziert und gehaertet:
+  - `b8637d1`: smoke shutdown graceful + `DISCONNECT_SENT`
+  - `cf37c1e`: disconnect propagiert echte unsubs + sofortiger Client-Cleanup
+  - `3c83bb7`: OB-unsubscribe robust bei fehlender `depth` (disconnect-Pfad)
+  - Verifikation: `v2_disconnect_verify_fix2_1` (`PASS`, Drops `0`, `DISCONNECT_SENT`, kein Timeout-Abbau mehr noetig)
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
