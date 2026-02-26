@@ -47,6 +47,23 @@ type msgpackEncoderCtx struct {
 	enc *msgpack.Encoder
 }
 
+type singleOBJSONEnvelope struct {
+	ob *shared_types.OrderBookUpdate
+}
+
+func (e singleOBJSONEnvelope) MarshalJSON() ([]byte, error) {
+	// Encode exactly one OB update as JSON array without creating a temporary slice.
+	inner, err := json.Marshal(e.ob)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(inner)+2)
+	out = append(out, '[')
+	out = append(out, inner...)
+	out = append(out, ']')
+	return out, nil
+}
+
 type Client struct {
 	ID       []byte
 	LastPong time.Time
@@ -433,8 +450,7 @@ func (cm *ClientManager) encodeSingleOrderBookForClient(
 
 	payload, ok = cache.jsonByOB[ob]
 	if !ok {
-		single := [1]*shared_types.OrderBookUpdate{ob}
-		raw, err := json.Marshal(single[:])
+		raw, err := json.Marshal(singleOBJSONEnvelope{ob: ob})
 		if err != nil {
 			metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
 			return zmq4.Msg{}, false
