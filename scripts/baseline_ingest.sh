@@ -28,8 +28,26 @@ create_bundle() {
     return
   fi
   local tmp_bundle
+  local file_list
   tmp_bundle="${RUN_DIR}.bundle.tmp.tar.gz"
-  tar -C "${RUN_DIR}" -czf "${tmp_bundle}" . >/dev/null 2>&1 || return
+  file_list="${RUN_DIR}.bundle.files.tmp"
+
+  # Snapshot the file set first so tar does not race with changing directory
+  # metadata while walking ".".
+  (
+    cd "${RUN_DIR}" || exit 1
+    find . -maxdepth 1 -type f ! -name "bundle.tar.gz" -print0 | sort -z > "${file_list}"
+  ) || return
+
+  tar --warning=no-file-changed \
+    -C "${RUN_DIR}" \
+    --null -T "${file_list}" \
+    -czf "${tmp_bundle}" || {
+      rm -f "${file_list}" "${tmp_bundle}"
+      return
+    }
+
+  rm -f "${file_list}"
   mv -f "${tmp_bundle}" "${RUN_DIR}/bundle.tar.gz"
 }
 
