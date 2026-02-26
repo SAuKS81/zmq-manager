@@ -35,6 +35,14 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - Median `alloc_space total`: ~`744 MB`
   - Median `cpu total samples (30s)`: ~`9.39s`
   - typische Smoke-Rate: trades ~`9.7k/s`, ob ~`39-40/s`
+- Replay-Referenz (Binance native, replay slow `--tick 1s`) festgezogen auf Commit `660574a`:
+  - Runs: `binance_replay_ref_slow_1..3` (alle `PASS`, Drops `0`)
+  - typische Smoke-Rate: trades ~`972/s`, ob ~`965-972/s`
+  - Hinweis: bei `--tick 100ms` bewusst Overload (FAIL_DROPS_DETECTED) und nicht als Referenz genutzt
+- Replay-Referenz (Bitget native, replay slow `--tick 1s`) festgezogen auf Commit `660574a`:
+  - Runs: `bitget_replay_ref_slow_1..3` (alle `PASS`, Drops `0`)
+  - typische Smoke-Rate: trades ~`972/s`
+  - `ob/s=0.00` by design (bitget_native aktuell trade-only Pfad)
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
@@ -45,9 +53,9 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 - Baseline v2 (quiet regime) final einfrieren:
   - Live-Runs bleiben volatil; Bewertung weiter als A/B-Paarvergleich
 - Replay-Profil als zweite Referenzspur:
-  - ist jetzt nutzbar als deterministische Neben-Referenz
+  - ist jetzt nutzbar als deterministische Neben-Referenz fuer Bybit/Binance/Bitget
 - `io.ReadAll` / TLS/WS read-path weiter reduzieren (isolierte Patches)
-- Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen)
+- Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen, OB spaeter wenn OB-Pfad vorhanden)
 - CCXT Haertung finalisieren (BadSymbol/Checksum robust, kein panic)
 - `baseline_ingest.sh` tar-Warnung beseitigen (`file changed as we read it`)
 - Mutex/Block-Profil als regulaeren Kontrolllauf nachziehen
