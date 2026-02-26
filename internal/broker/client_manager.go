@@ -759,18 +759,18 @@ func (cm *ClientManager) drainP1() bool {
 }
 
 func (cm *ClientManager) sendOutbound(outbound outboundEnvelope) {
-	now := time.Now()
+	nowUnixNano := time.Now().UnixNano()
 	if err := cm.socket.Send(outbound.msg); err != nil {
 		metrics.RecordDropped(metrics.ReasonInternalErr, outbound.metricType)
 		return
 	}
 	metrics.RecordPublish(outbound.metricType)
 	if outbound.ingestNano > 0 {
-		metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, outbound.ingestNano)).Seconds())
+		metrics.ObserveProcessing(outbound.metricType, float64(nowUnixNano-outbound.ingestNano)/1e9)
 	}
 	for _, ingest := range outbound.ingestNanos {
 		if ingest > 0 {
-			metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, ingest)).Seconds())
+			metrics.ObserveProcessing(outbound.metricType, float64(nowUnixNano-ingest)/1e9)
 		}
 	}
 }
