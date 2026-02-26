@@ -26,6 +26,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `afbeeec` batch C: binance+bitget WS read path auf `NextReader` + pooled buffer
   - `e1da05b` bybit OB hot path: `GoTimestamp` aus ingest ableiten statt `time.Now()` pro Update
   - `5d5eb8c` bybit WS read path: pooled buffer ohne extra `[]byte`-Kopie (trade + ob)
+  - `afdbbbf` broker send path: P1 OB innerhalb Client-Batch senden (weniger Send/Context-Overhead)
 - Deterministisches Test-Harness vorbereitet (Replay statt Live-WS):
   - neuer lokaler Replay-Server: `cmd/wsreplay`
   - WS-URL-Overrides per Env fuer alle nativen Exchanges:
@@ -55,6 +56,9 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 - Bybit No-Copy Read-Path Validierung (Commit `5d5eb8c`):
   - Smoke-Run `bybit_replay_post_nocopy_smoke_1` (`PASS`, Drops `0`)
   - Entscheidung: `KEEP` (Owner-Entscheid)
+- Binance P1-Batch Send-Optimierung (Commit `afdbbbf`):
+  - Smoke-Run `binance_replay_post_p1batch_smoke_1` (`PASS`, Drops `0`)
+  - Entscheidung: `KEEP` (Owner-Entscheid)
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
@@ -66,7 +70,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - Live-Runs bleiben volatil; Bewertung weiter als A/B-Paarvergleich
 - Replay-Profil als zweite Referenzspur:
   - ist jetzt nutzbar als deterministische Neben-Referenz fuer Bybit/Binance/Bitget
-- `io.ReadAll` / TLS/WS read-path weiter reduzieren (naechster Fokus: broker encode/context hotpath)
+- Broker encode/context hotpath weiter reduzieren (naechster Fokus)
 - Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen, OB spaeter wenn OB-Pfad vorhanden)
 - CCXT Haertung finalisieren (BadSymbol/Checksum robust, kein panic)
 - `baseline_ingest.sh` tar-Warnung beseitigen (`file changed as we read it`)
