@@ -42,6 +42,13 @@ type OrderBookShardWorker struct {
 var (
 	bybitOrderBookTopicNeedle = []byte(`"topic":"orderbook.`)
 	bybitPongNeedle           = []byte(`"op":"pong"`)
+	bybitReadBufPool          = sync.Pool{
+		New: func() any {
+			buf := &bytes.Buffer{}
+			buf.Grow(16 * 1024)
+			return buf
+		},
+	}
 )
 
 func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *OrderBookShardWorker {
@@ -137,7 +144,7 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			_, msg, err := sw.conn.ReadMessage()
+			_, msg, err := readWSMessagePooled(sw.conn)
 			if err != nil {
 				log.Printf("[BYBIT-OB-SHARD-ERROR] Fehler beim Lesen: %v", err)
 				return
@@ -176,6 +183,25 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func readWSMessagePooled(conn *websocket.Conn) (int, []byte, error) {
+	msgType, r, err := conn.NextReader()
+	if err != nil {
+		return 0, nil, err
+	}
+
+	buf := bybitReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(r)
+	if err != nil {
+		bybitReadBufPool.Put(buf)
+		return 0, nil, err
+	}
+
+	msg := append([]byte(nil), buf.Bytes()...)
+	bybitReadBufPool.Put(buf)
+	return msgType, msg, nil
 }
 
 func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
