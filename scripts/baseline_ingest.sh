@@ -249,7 +249,21 @@ curl -fsS "${PPROF_ENDPOINT}/metrics" -o "${RUN_DIR}/metrics_post.txt"
 
 # 11) Stop smoke client cleanly
 if kill -0 "${SMOKE_PID}" 2>/dev/null; then
-  kill "${SMOKE_PID}" 2>/dev/null || true
+  # Ask smoke client to shut down gracefully (sends disconnect to broker).
+  kill -INT "${SMOKE_PID}" 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    if ! kill -0 "${SMOKE_PID}" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  if kill -0 "${SMOKE_PID}" 2>/dev/null; then
+    kill "${SMOKE_PID}" 2>/dev/null || true
+    sleep 1
+  fi
+  if kill -0 "${SMOKE_PID}" 2>/dev/null; then
+    kill -9 "${SMOKE_PID}" 2>/dev/null || true
+  fi
 fi
 wait "${SMOKE_PID}" 2>/dev/null || true
 SMOKE_PID=""

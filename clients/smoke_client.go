@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"bybit-watcher/internal/shared_types"
@@ -57,6 +59,10 @@ type smokeConfig struct {
 	marketType     string
 	subscribePause time.Duration
 	brokerAddress  string
+}
+
+type disconnectRequest struct {
+	Action string `json:"action"`
 }
 
 func main() {
@@ -115,10 +121,14 @@ func main() {
 	}
 	fmt.Printf("[SMOKE] SUBSCRIBE_DONE requests=%d exchanges=%d symbols=%d market_types=%d\n", len(plan), len(exchanges), totalSymbols, len(marketTypes))
 
-	consumeLoop(socket, cfg)
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	consumeLoop(sigCtx, socket, cfg)
+	sendDisconnect(socket)
 }
 
-func consumeLoop(socket zmq4.Socket, cfg smokeConfig) {
+func consumeLoop(sigCtx context.Context, socket zmq4.Socket, cfg smokeConfig) {
 	msgCh := make(chan zmq4.Msg, 1024)
 	errCh := make(chan error, 1)
 
@@ -150,7 +160,12 @@ func consumeLoop(socket zmq4.Socket, cfg smokeConfig) {
 	for {
 		select {
 		case <-deadline.C:
+			sendDisconnect(socket)
 			fmt.Printf("[SMOKE] done total_trades=%d total_ob=%d decode_errors=%d reconnects=%d\n", totalTrades, totalOB, totalDecodeErrors, reconnects)
+			return
+		case <-sigCtx.Done():
+			sendDisconnect(socket)
+			fmt.Printf("[SMOKE] interrupted total_trades=%d total_ob=%d decode_errors=%d reconnects=%d\n", totalTrades, totalOB, totalDecodeErrors, reconnects)
 			return
 		case <-rateTicker.C:
 			secs := cfg.rateLog.Seconds()
@@ -176,6 +191,15 @@ func consumeLoop(socket zmq4.Socket, cfg smokeConfig) {
 			windowDecodeErrors += decodeErr
 		}
 	}
+}
+
+func sendDisconnect(socket zmq4.Socket) {
+	payload, err := json.Marshal(disconnectRequest{Action: "disconnect"})
+	if err != nil {
+		return
+	}
+	_ = socket.Send(zmq4.NewMsg(payload))
+	fmt.Printf("[SMOKE] DISCONNECT_SENT\n")
 }
 
 func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int) {
