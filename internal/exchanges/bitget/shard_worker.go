@@ -1,16 +1,16 @@
 package bitget
 
 import (
-	"encoding/json"
+	"bytes"
 	"log"
 	"math"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
+	json "github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,6 +33,19 @@ type ShardWorker struct {
 	mu            sync.Mutex
 	activeSymbols map[string]bool
 }
+
+var (
+	bitgetPongNeedle         = []byte("pong")
+	bitgetActionUpdateNeedle = []byte(`"action":"update"`)
+	bitgetTradeNeedle        = []byte(`"channel":"trade"`)
+	bitgetReadBufPool        = sync.Pool{
+		New: func() any {
+			buf := &bytes.Buffer{}
+			buf.Grow(16 * 1024)
+			return buf
+		},
+	}
+)
 
 // NewShardWorker erstellt einen neuen Worker.
 func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *ShardWorker {
@@ -150,7 +163,7 @@ func (sw *ShardWorker) readPump(conn *websocket.Conn, msgCh chan<- []byte, errCh
 	defer conn.Close()
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(readIdleSec * time.Second))
-		_, message, err := conn.ReadMessage()
+		_, message, err := readBitgetMessagePooled(conn)
 		if err != nil {
 			errCh <- err
 			return
@@ -177,13 +190,11 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 			//log.Printf("[BITGET-SHARD-RECV-VERBOSE] %s", string(msg))
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
-			msgStr := string(msg)
-
-			if msgStr == "pong" {
+			if bytes.Equal(msg, bitgetPongNeedle) {
 				continue
 			}
 
-			if strings.Contains(msgStr, `"action":"update"`) && strings.Contains(msgStr, `"channel":"trade"`) {
+			if bytes.Contains(msg, bitgetActionUpdateNeedle) && bytes.Contains(msg, bitgetTradeNeedle) {
 				var wsMsg wsMsg
 				if err := json.Unmarshal(msg, &wsMsg); err != nil {
 					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
@@ -226,6 +237,25 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 			return nil     // Normales Beenden, kein Reconnect
 		}
 	}
+}
+
+func readBitgetMessagePooled(conn *websocket.Conn) (int, []byte, error) {
+	msgType, r, err := conn.NextReader()
+	if err != nil {
+		return 0, nil, err
+	}
+
+	buf := bitgetReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(r)
+	if err != nil {
+		bitgetReadBufPool.Put(buf)
+		return 0, nil, err
+	}
+
+	msg := append([]byte(nil), buf.Bytes()...)
+	bitgetReadBufPool.Put(buf)
+	return msgType, msg, nil
 }
 
 // sendSubscription sendet jetzt Nachrichten an einen Kanal, nicht mehr direkt an die Verbindung.

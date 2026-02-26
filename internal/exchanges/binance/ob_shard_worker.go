@@ -1,6 +1,7 @@
 package binance
 
 import (
+	"bytes"
 	json "github.com/goccy/go-json" // Turbo
 	"log"
 	"strings"
@@ -11,6 +12,11 @@ import (
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
+)
+
+var (
+	binanceOBStreamNeedle = []byte(`"stream"`)
+	binanceOBDepthNeedle  = []byte(`@depth`)
 )
 
 type incomingOBMessage struct {
@@ -139,7 +145,7 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 		defer close(msgCh)
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(190 * time.Second))
-			_, message, err := conn.ReadMessage()
+			_, message, err := readWSMessagePooled(conn)
 			if err != nil {
 				errCh <- err
 				return
@@ -219,8 +225,8 @@ func (sw *OrderBookShardWorker) readLoop(conn *websocket.Conn) error {
 
 func (sw *OrderBookShardWorker) handleMessage(msg []byte, ingestUnixNano int64) {
 	// OPTIMIERUNG: Combined Unmarshal
-	if strings.Contains(string(msg), `"stream"`) {
-		if !strings.Contains(string(msg), "@depth") {
+	if bytes.Contains(msg, binanceOBStreamNeedle) {
+		if !bytes.Contains(msg, binanceOBDepthNeedle) {
 			return
 		}
 

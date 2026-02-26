@@ -1,9 +1,9 @@
 package binance
 
 import (
+	"bytes"
 	json "github.com/goccy/go-json"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +12,8 @@ import (
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
 )
+
+var binanceStreamNeedle = []byte(`"stream"`)
 
 type ShardCommand struct {
 	Action string
@@ -163,7 +165,7 @@ func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
 	})
 
 	for {
-		_, msg, err := conn.ReadMessage()
+		_, msg, err := readWSMessagePooled(conn)
 		if err != nil {
 			log.Printf("[BINANCE-TRADE-SHARD] Read Error: %v", err)
 			return
@@ -174,10 +176,9 @@ func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
 		conn.SetReadDeadline(time.Now().Add(readWait))
 		// ---------------------------------------------------
 
-		msgStr := string(msg)
 		ingestNow := time.Now()
 
-		if strings.Contains(msgStr, `"stream"`) {
+		if bytes.Contains(msg, binanceStreamNeedle) {
 			// ... Rest der Parsing Logik bleibt gleich ...
 			var wrapper struct {
 				Stream string  `json:"stream"`
