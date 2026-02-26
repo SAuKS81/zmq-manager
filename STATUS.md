@@ -27,6 +27,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `e1da05b` bybit OB hot path: `GoTimestamp` aus ingest ableiten statt `time.Now()` pro Update
   - `5d5eb8c` bybit WS read path: pooled buffer ohne extra `[]byte`-Kopie (trade + ob)
   - `afdbbbf` broker send path: P1 OB innerhalb Client-Batch senden (weniger Send/Context-Overhead)
+  - `c700692` broker encode path: Header-Frame-Reuse statt per-send `[]byte(...)` Alloc
 - Deterministisches Test-Harness vorbereitet (Replay statt Live-WS):
   - neuer lokaler Replay-Server: `cmd/wsreplay`
   - WS-URL-Overrides per Env fuer alle nativen Exchanges:
@@ -58,6 +59,9 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - Entscheidung: `KEEP` (Owner-Entscheid)
 - Binance P1-Batch Send-Optimierung (Commit `afdbbbf`):
   - Smoke-Run `binance_replay_post_p1batch_smoke_1` (`PASS`, Drops `0`)
+  - Entscheidung: `KEEP` (Owner-Entscheid)
+- Broker Header-Alloc Cut (Commit `c700692`):
+  - Smoke-Run `binance_replay_post_headeralloc_smoke_1` (`PASS`, Drops `0`)
   - Entscheidung: `KEEP` (Owner-Entscheid)
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
