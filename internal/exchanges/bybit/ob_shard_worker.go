@@ -144,26 +144,31 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			_, msg, err := readWSMessagePooled(sw.conn)
+			_, buf, err := readWSMessagePooled(sw.conn)
 			if err != nil {
 				log.Printf("[BYBIT-OB-SHARD-ERROR] Fehler beim Lesen: %v", err)
 				return
 			}
+			msg := buf.Bytes()
 			ingestUnixNano := time.Now().UnixNano()
 			goTimestamp := ingestUnixNano / int64(time.Millisecond)
 
 			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
+				bybitReadBufPool.Put(buf)
 				continue
 			}
 			if bytes.Contains(msg, bybitPongNeedle) {
+				bybitReadBufPool.Put(buf)
 				continue
 			}
 
 			var obMsg wsOrderBookMsg
 			if err := json.Unmarshal(msg, &obMsg); err != nil {
+				bybitReadBufPool.Put(buf)
 				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
 				continue
 			}
+			bybitReadBufPool.Put(buf)
 
 			if obMsg.Topic == "" {
 				continue
@@ -186,7 +191,7 @@ func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
 	}
 }
 
-func readWSMessagePooled(conn *websocket.Conn) (int, []byte, error) {
+func readWSMessagePooled(conn *websocket.Conn) (int, *bytes.Buffer, error) {
 	msgType, r, err := conn.NextReader()
 	if err != nil {
 		return 0, nil, err
@@ -200,9 +205,7 @@ func readWSMessagePooled(conn *websocket.Conn) (int, []byte, error) {
 		return 0, nil, err
 	}
 
-	msg := append([]byte(nil), buf.Bytes()...)
-	bybitReadBufPool.Put(buf)
-	return msgType, msg, nil
+	return msgType, buf, nil
 }
 
 func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, goTimestamp int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {

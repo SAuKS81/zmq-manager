@@ -173,7 +173,7 @@ func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols
 
 // readLoop ist die Hauptschleife zum Lesen von WebSocket-Nachrichten und Befehlen.
 func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
-	msgCh := make(chan []byte, 256)
+	msgCh := make(chan *bytes.Buffer, 256)
 	errCh := make(chan error, 1)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
 	defer pingTicker.Stop()
@@ -181,25 +181,27 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 	go func() {
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(readIdleSec * time.Second))
-			message, err := readWSTradeMessagePooled(conn)
+			buf, err := readWSTradeMessagePooled(conn)
 			if err != nil {
 				errCh <- err
 				return
 			}
-			if message == nil {
+			if buf == nil {
 				continue
 			}
-			msgCh <- message
+			msgCh <- buf
 		}
 	}()
 
 	for {
 		select {
-		case msg := <-msgCh:
+		case buf := <-msgCh:
 			// ... (Nachrichtenverarbeitung bleibt gleich)
+			msg := buf.Bytes()
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
 			if bytes.Contains(msg, bybitTradePongNeedle) {
+				bybitTradeReadBufPool.Put(buf)
 				continue
 			}
 			if bytes.Contains(msg, bybitTradeTopicNeedle) {
@@ -209,6 +211,7 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 				tradeMsg.Data = tradeMsg.Data[:0]
 				if err := gjson.Unmarshal(msg, tradeMsg); err != nil {
 					bybitTradeMsgPool.Put(tradeMsg)
+					bybitTradeReadBufPool.Put(buf)
 					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 					continue
 				}
@@ -222,6 +225,7 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 				tradeMsg.Data = tradeMsg.Data[:0]
 				bybitTradeMsgPool.Put(tradeMsg)
 			}
+			bybitTradeReadBufPool.Put(buf)
 
 		case cmd := <-sw.commandCh:
 			log.Printf("[SHARD] Erhalte Befehl: %s für %v", cmd.Action, cmd.Symbols)
@@ -252,7 +256,7 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 	}
 }
 
-func readWSTradeMessagePooled(conn *websocket.Conn) ([]byte, error) {
+func readWSTradeMessagePooled(conn *websocket.Conn) (*bytes.Buffer, error) {
 	msgType, r, err := conn.NextReader()
 	if err != nil {
 		return nil, err
@@ -269,7 +273,5 @@ func readWSTradeMessagePooled(conn *websocket.Conn) ([]byte, error) {
 		return nil, err
 	}
 
-	msg := append([]byte(nil), buf.Bytes()...)
-	bybitTradeReadBufPool.Put(buf)
-	return msg, nil
+	return buf, nil
 }
