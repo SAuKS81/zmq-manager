@@ -87,16 +87,44 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 
 ## Offen
 
-- Baseline v2 (quiet regime) final einfrieren:
-  - Live-Runs bleiben volatil; Bewertung weiter als A/B-Paarvergleich
-- Replay-Profil als zweite Referenzspur:
-  - ist jetzt nutzbar als deterministische Neben-Referenz fuer Bybit/Binance/Bitget
-- Broker encode/context hotpath:
-  - aktueller Testzyklus abgeschlossen; kein weiterer low-risk Kandidat offen
-- Bitget Lastbild technisch klaeren (trade/s bei 1000 subs einordnen, OB spaeter wenn OB-Pfad vorhanden)
-- CCXT Haertung finalisieren (BadSymbol/Checksum robust, kein panic)
-- `baseline_ingest.sh` tar-Warnung beseitigen (`file changed as we read it`)
-- Mutex/Block-Profil als regulaeren Kontrolllauf nachziehen
+- 1) Baseline v2 final einfrieren (gestartet)
+  - Live-Baseline finalisieren (3 saubere Runs je Exchange/Markttyp, Median + Streuung festschreiben)
+    - Kosten: 6/10, Nutzen: 9/10
+  - Ausreisser-/Vergleichsregeln fixieren (A/B-Entscheidung verbindlich)
+    - Kosten: 3/10, Nutzen: 8/10
+  - Finale Referenzwerte dokumentieren (STATUS/Runbook)
+    - Kosten: 2/10, Nutzen: 8/10
+- 2) Replay-Referenzspur als Standard-Nebenpfad festziehen
+  - Replay-Profile versionieren/pinnen (Bybit/Binance/Bitget Inputs fix)
+    - Kosten: 3/10, Nutzen: 8/10
+  - Verbindliche Replay-Parameter einfrieren (`tick`, `duration`, `symbols`, `bulk-size`)
+    - Kosten: 2/10, Nutzen: 8/10
+  - Operator-Runbook Replay/Live angleichen
+    - Kosten: 2/10, Nutzen: 7/10
+- 3) Bitget Lastbild technisch klaeren
+  - Warum `ob/s=0` formal dokumentieren (trade-only by design aktuell)
+    - Kosten: 2/10, Nutzen: 7/10
+  - Trade/s bei 1000 Subs einordnen (Erwartungsband + Alarmgrenzen)
+    - Kosten: 4/10, Nutzen: 8/10
+  - OB-Pfad-Plan fuer Bitget definieren (wenn fachlich noetig)
+    - Kosten: 6/10, Nutzen: 6/10
+- 4) CCXT-Haertung finalisieren
+  - BadSymbol robust behandeln (kein Run-Abbruch, saubere Skip-Strategie)
+    - Kosten: 4/10, Nutzen: 9/10
+  - Checksum-/Parse-Fehler robust machen (keine Panics, kontrollierte Recovery)
+    - Kosten: 5/10, Nutzen: 9/10
+  - Fehlerpfade mit Tests absichern
+    - Kosten: 4/10, Nutzen: 8/10
+- 5) `baseline_ingest.sh` tar-Warnung beseitigen
+  - Ursache im Bundle-Step beheben (`file changed as we read it`)
+    - Kosten: 3/10, Nutzen: 6/10
+  - Artifact-Integritaet verifizieren (`meta.json`, `allocs.pprof`, `cpu.pprof`, `smoke.log`)
+    - Kosten: 2/10, Nutzen: 7/10
+- 6) Mutex/Block-Profil als regulaeren Kontrolllauf nachziehen
+  - Standard-Kontrolllauf definieren (wann/wie oft)
+    - Kosten: 2/10, Nutzen: 7/10
+  - Grenzwerte/Regression-Trigger festlegen
+    - Kosten: 3/10, Nutzen: 8/10
 
 ## Aktueller Arbeitsmodus
 
