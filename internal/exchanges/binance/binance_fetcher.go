@@ -14,17 +14,19 @@ type BinanceExchange struct {
 	swapTradeMgr *ConnectionManager
 	spotOBMgr    *OrderBookConnectionManager // Separate Struktur wie bei Bybit
 	swapOBMgr    *OrderBookConnectionManager
-	
-	requestCh    chan<- *shared_types.ClientRequest
-	tradeDataCh  chan<- *shared_types.TradeUpdate
-	obDataCh     chan<- *shared_types.OrderBookUpdate
+
+	requestCh   chan<- *shared_types.ClientRequest
+	tradeDataCh chan<- *shared_types.TradeUpdate
+	obDataCh    chan<- *shared_types.OrderBookUpdate
+	statusCh    chan<- *shared_types.StreamStatusEvent
 }
 
-func NewBinanceExchange(requestCh chan<- *shared_types.ClientRequest, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate) exchanges.Exchange {
+func NewBinanceExchange(requestCh chan<- *shared_types.ClientRequest, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
 	return &BinanceExchange{
 		requestCh:   requestCh,
 		tradeDataCh: tradeDataCh,
 		obDataCh:    obDataCh,
+		statusCh:    statusCh,
 	}
 }
 
@@ -35,9 +37,12 @@ func (e *BinanceExchange) HandleRequest(req *shared_types.ClientRequest) {
 	exchangeSymbol := TranslateSymbolToExchange(req.Symbol)
 	var managerAction string
 	switch req.Action {
-	case "subscribe": managerAction = "add"
-	case "unsubscribe": managerAction = "remove"
-	default: return
+	case "subscribe":
+		managerAction = "add"
+	case "unsubscribe":
+		managerAction = "remove"
+	default:
+		return
 	}
 
 	// Route basierend auf Datentyp
@@ -76,7 +81,7 @@ func (e *BinanceExchange) HandleRequest(req *shared_types.ClientRequest) {
 			Action: managerAction,
 			Symbol: exchangeSymbol,
 		}
-		
+
 		switch req.MarketType {
 		case "spot":
 			if e.spotTradeMgr == nil {
@@ -99,8 +104,16 @@ func (e *BinanceExchange) HandleRequest(req *shared_types.ClientRequest) {
 func (e *BinanceExchange) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.spotTradeMgr != nil { e.spotTradeMgr.Stop() }
-	if e.swapTradeMgr != nil { e.swapTradeMgr.Stop() }
-	if e.spotOBMgr != nil { e.spotOBMgr.Stop() }
-	if e.swapOBMgr != nil { e.swapOBMgr.Stop() }
+	if e.spotTradeMgr != nil {
+		e.spotTradeMgr.Stop()
+	}
+	if e.swapTradeMgr != nil {
+		e.swapTradeMgr.Stop()
+	}
+	if e.spotOBMgr != nil {
+		e.spotOBMgr.Stop()
+	}
+	if e.swapOBMgr != nil {
+		e.swapOBMgr.Stop()
+	}
 }

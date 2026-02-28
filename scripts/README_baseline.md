@@ -9,9 +9,8 @@ Dieses Paket liefert reproduzierbare Ingest-Baseline-Runs mit:
 - `scripts/gen_symbols_bitget_swap.sh`
 
 Hinweis:
-- der alte `clients/`-Ordner wurde bewusst entfernt
-- `baseline_ingest.sh` braucht vor dem naechsten produktiven Einsatz einen neuen Smoke-Client
-- bis dahin ist das Skript nur als Runbook/Artefakt-Workflow dokumentiert
+- der Baseline-Pfad nutzt einen schlanken neuen `clients/smoke_client.go`
+- alte Legacy-Testclients bleiben entfernt
 
 ## Prerequisite: Symbol List
 

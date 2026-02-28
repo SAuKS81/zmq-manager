@@ -92,6 +92,7 @@ type ClientManager struct {
 	clients        map[string]*Client
 	clientsMu      sync.RWMutex
 	requestCh      chan<- *shared_types.ClientRequest
+	StatusCh       chan *shared_types.StreamStatusEvent
 	DistributionCh chan *DistributionMessage
 	sendChP1       chan outboundEnvelope
 	p2Mu           sync.Mutex
@@ -136,6 +137,7 @@ func NewClientManager(requestCh chan<- *shared_types.ClientRequest) *ClientManag
 		socket:         socket,
 		clients:        make(map[string]*Client),
 		requestCh:      requestCh,
+		StatusCh:       make(chan *shared_types.StreamStatusEvent, 1024),
 		DistributionCh: make(chan *DistributionMessage, 10000),
 		sendChP1:       make(chan outboundEnvelope, 4096),
 		p2Latest:       make(map[p2LatestKey]outboundEnvelope, 4096),
@@ -186,6 +188,8 @@ func (cm *ClientManager) distributionLoop() {
 			cm.distributeTradeBatch(msg.ClientIDs, payload)
 		case []*shared_types.OrderBookUpdate:
 			cm.distributeOrderBookBatch(msg.ClientIDs, payload)
+		case *shared_types.StreamStatusEvent:
+			cm.distributeStatusEvent(msg.ClientIDs, payload)
 		default:
 			continue
 		}
@@ -734,6 +738,24 @@ func (cm *ClientManager) popP2LatestDeterministic() (outboundEnvelope, bool) {
 	outbound := cm.p2Latest[minKey]
 	delete(cm.p2Latest, minKey)
 	return outbound, true
+}
+
+func (cm *ClientManager) distributeStatusEvent(clientIDs [][]byte, event *shared_types.StreamStatusEvent) {
+	if event == nil || len(clientIDs) == 0 {
+		return
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		metrics.RecordDropped(metrics.ReasonInternalErr, metrics.TypeTrade)
+		return
+	}
+	for _, clientID := range clientIDs {
+		cm.enqueueSocketSend(outboundEnvelope{
+			msg:        zmq4.NewMsgFrom(clientID, []byte(HeaderJSON), payload),
+			metricType: metrics.TypeTrade,
+			priority:   priorityP1,
+		})
+	}
 }
 
 func (cm *ClientManager) dropP2ForClient(clientID string) {

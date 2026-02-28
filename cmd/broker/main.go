@@ -43,6 +43,7 @@ func main() {
 	subMgr := broker.NewSubscriptionManager(nil)
 	clientMgr = broker.NewClientManager(subMgr.RequestCh)
 	subMgr.DistributionCh = clientMgr.DistributionCh
+	clientMgr.StatusCh = subMgr.StatusCh
 
 	go subMgr.Run()
 	go clientMgr.Run()

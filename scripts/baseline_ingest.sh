@@ -175,11 +175,6 @@ if [[ -n "${SYMBOLS_FILE_SWAP}" && ! -f "${SYMBOLS_FILE_SWAP}" ]]; then
   exit 2
 fi
 
-if [[ ! -f "./clients/smoke_client.go" ]]; then
-  echo "[BASELINE] legacy smoke client removed; baseline_ingest.sh requires a replacement client before it can run again" >&2
-  exit 2
-fi
-
 PPROF_ENDPOINT="${PPROF_ENDPOINT%/}"
 
 # 1) Validate pprof endpoint reachable (fail fast)

@@ -18,6 +18,7 @@ import (
 
 type SubscriptionManager struct {
 	RequestCh              chan *shared_types.ClientRequest
+	StatusCh               chan *shared_types.StreamStatusEvent
 	DistributionCh         chan<- *DistributionMessage
 	TradeDataCh            chan *shared_types.TradeUpdate
 	OrderBookCh            chan *shared_types.OrderBookUpdate
@@ -33,6 +34,7 @@ type SubscriptionManager struct {
 func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *SubscriptionManager {
 	sm := &SubscriptionManager{
 		RequestCh:              make(chan *shared_types.ClientRequest, 100),
+		StatusCh:               make(chan *shared_types.StreamStatusEvent, 1024),
 		DistributionCh:         distributionCh,
 		TradeDataCh:            make(chan *shared_types.TradeUpdate, 10000),
 		OrderBookCh:            make(chan *shared_types.OrderBookUpdate, 5000),
@@ -41,9 +43,9 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 		exchangeRegistry:       make(map[string]exchanges.Exchange),
 		wildcardSubscribers:    make(map[string]map[string]bool),
 	}
-	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh)
-	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh)
-	sm.exchangeRegistry["bitget_native"] = bitget.NewBitgetExchange(sm.RequestCh, sm.TradeDataCh)
+	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["bitget_native"] = bitget.NewBitgetExchange(sm.RequestCh, sm.TradeDataCh, sm.StatusCh)
 	registerCCXT(sm)
 	return sm
 }
@@ -61,6 +63,8 @@ func (sm *SubscriptionManager) Run() {
 		select {
 		case req := <-sm.RequestCh:
 			sm.handleRequest(req)
+		case status := <-sm.StatusCh:
+			sm.processStatusEvent(status)
 
 		// --- TRADES ---
 		case firstTrade := <-sm.TradeDataCh:
@@ -119,6 +123,46 @@ func (sm *SubscriptionManager) Run() {
 			obBatch = obBatch[:0]
 		}
 	}
+}
+
+func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStatusEvent) {
+	if event == nil || sm.DistributionCh == nil {
+		return
+	}
+
+	targetClients := make(map[string]bool)
+	if event.Symbol != "" {
+		subID := getSubscriptionID(event.Exchange, event.Symbol, event.MarketType)
+		if event.DataType == "orderbooks" {
+			if clients, ok := sm.orderBookSubscriptions[subID]; ok {
+				for clientID := range clients {
+					targetClients[clientID] = true
+				}
+			}
+		} else {
+			if clients, ok := sm.tradeSubscriptions[subID]; ok {
+				for clientID := range clients {
+					targetClients[clientID] = true
+				}
+			}
+			wildcardID := event.Exchange + "-" + event.MarketType + "-all"
+			if wildClients, ok := sm.wildcardSubscribers[wildcardID]; ok {
+				for clientID := range wildClients {
+					targetClients[clientID] = true
+				}
+			}
+		}
+	}
+
+	if len(targetClients) == 0 {
+		return
+	}
+
+	clientIDs := make([][]byte, 0, len(targetClients))
+	for clientID := range targetClients {
+		clientIDs = append(clientIDs, []byte(clientID))
+	}
+	sm.DistributionCh <- &DistributionMessage{ClientIDs: clientIDs, RawPayload: event}
 }
 
 func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpdate) {

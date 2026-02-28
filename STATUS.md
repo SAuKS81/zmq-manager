@@ -102,10 +102,10 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
 - Baseline-Bundle/Tar-Warnung behoben (Commit `c73490b`):
   - deterministische Bundle-Erstellung per Datei-Snapshot
   - keine `tar: .: file changed as we read it` Warnung mehr im Verifikationslauf
-- Legacy-`clients/`-Ordner entfernt:
+- Legacy-`clients/`-Ordner bereinigt:
   - alte Go/Python-Testclients bewusst geloescht
+  - neuer schlanker `clients/smoke_client.go` fuer Baseline/Verifikation neu aufgebaut
   - Repo-Build/Test damit wieder sauber
-  - `baseline_ingest.sh` meldet jetzt explizit, dass vor erneutem Einsatz ein neuer Smoke-Client benoetigt wird
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
@@ -141,10 +141,15 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - Ziel: `unsubscribe` nicht nur senden, sondern pro Stream/Batch verfolgen (`pending`, `acked`, `retry`, `failed`, `removed`)
     - inkl. Retry-Policy, Timeout und forced shard close als letzte Eskalation
     - in Arbeit:
-      - erster Schnitt fuer `binance_native` umgesetzt
-      - Trade- und OB-Shards verfolgen jetzt Binance-Command-Responses ueber Request-ID
-      - Unsubscribe-Ack-Timeout/Nack fuehrt zu begrenztem Retry und danach zu gezieltem Shard-Recycle
-      - Verifikation auf Vultr noch offen
+      - erster Schnitt fuer `binance_native` umgesetzt und auf Vultr verifiziert (`unsubscribe` fuehrt sauber auf `trades=0`/`ob=0`)
+      - erster Schnitt fuer `bybit_native` umgesetzt:
+        - Trade- und OB-Shards verfolgen Command-Responses ueber `req_id`
+        - Unsubscribe-Ack-Timeout/Nack fuehrt zu begrenztem Retry und danach zu gezieltem Shard-Recycle
+        - Replay-Server (`cmd/wsreplay`) liefert passende Bybit-Acks fuer diesen Pfad
+      - neue minimale Broker-Plumbing fuer `StreamStatusEvent` liegt:
+        - Broker kann `stream_reconnecting` / `stream_restored` / `stream_unsubscribe_failed` / `stream_force_closed` verteilen
+        - neuer schlanker `clients/smoke_client.go` loggt diese JSON-Status-Events
+      - Vultr-Verifikation fuer `bybit_native` und echte Client-Statussicht noch offen
   - P7-2 Selektiver Shard-Recycle
     - wenn ein Shard wegen fehlgeschlagenem unsubscribe hart geschlossen wird:
       - nur noch gewuenschte Streams reconnecten

@@ -138,6 +138,7 @@ func handleBybit(upgrader websocket.Upgrader, state *marketState, tick time.Dura
 			if op != "subscribe" && op != "unsubscribe" {
 				continue
 			}
+			reqID, _ := req["req_id"].(string)
 			rawArgs, _ := req["args"].([]any)
 			mu.Lock()
 			for _, a := range rawArgs {
@@ -167,6 +168,13 @@ func handleBybit(upgrader websocket.Upgrader, state *marketState, tick time.Dura
 				}
 			}
 			mu.Unlock()
+			writeCh <- outbound{json: map[string]any{
+				"success": true,
+				"ret_msg": op,
+				"op":      op,
+				"req_id":  reqID,
+				"conn_id": "wsreplay-bybit",
+			}}
 		}
 	}()
 
