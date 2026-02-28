@@ -133,6 +133,8 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	go sw.writePump(conn, writeCh, errCh)
 
 	sw.mu.Lock()
+	sw.activeSymbols = make(map[string]bool, len(sw.desiredSymbols))
+	sw.pending = make(map[string]bitgetPendingCommand, len(sw.desiredSymbols))
 	initial := make([]string, 0, len(sw.desiredSymbols))
 	for s := range sw.desiredSymbols {
 		initial = append(initial, s)
@@ -199,11 +201,18 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 				toUnsub := make([]string, 0, len(cmd.Symbols))
 				for _, symbol := range cmd.Symbols {
 					delete(sw.desiredSymbols, symbol)
-					if pending, ok := sw.pending[symbol]; ok && pending.op == "unsubscribe" {
-						continue
+					if pending, ok := sw.pending[symbol]; ok {
+						if pending.op == "unsubscribe" {
+							continue
+						}
+						if pending.op == "subscribe" && !sw.activeSymbols[symbol] {
+							delete(sw.pending, symbol)
+							continue
+						}
 					}
-					if sw.activeSymbols[symbol] || (sw.pending[symbol].op == "subscribe") {
+					if sw.activeSymbols[symbol] {
 						toUnsub = append(toUnsub, symbol)
+						continue
 					}
 				}
 				sw.mu.Unlock()
