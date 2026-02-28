@@ -2,8 +2,6 @@ package bybit
 
 import "time"
 
-const bybitMaxArgsPerCommand = 10
-
 type bybitInflightCommand struct {
 	op      string
 	topics  []string
@@ -34,6 +32,18 @@ func nextBybitRetryDelay(attempt int) time.Duration {
 		return 2 * time.Second
 	default:
 		return 5 * time.Second
+	}
+}
+
+func bybitCommandChunkSize(marketType string) int {
+	switch marketType {
+	case "spot":
+		// Bybit v5 public WS: spot supports max 10 args per subscribe request.
+		return 10
+	default:
+		// Futures/linear currently have no small args-count limit in the docs.
+		// Keep commands bounded to the shard size so one flush still maps to one shard.
+		return symbolsPerShard
 	}
 }
 

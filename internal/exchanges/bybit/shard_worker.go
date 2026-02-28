@@ -166,8 +166,9 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 	sw.mu.Unlock()
 
 	flushCommands := func() error {
+		chunkSize := bybitCommandChunkSize(sw.marketType)
 		if len(pendingSubs) > 0 {
-			for _, chunk := range chunkTopics(pendingSubs, bybitMaxArgsPerCommand) {
+			for _, chunk := range chunkTopics(pendingSubs, chunkSize) {
 				reqID, err := sw.sendSubscription(conn, "subscribe", chunk)
 				if err != nil {
 					return err
@@ -177,7 +178,7 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 			pendingSubs = pendingSubs[:0]
 		}
 		if len(pendingUnsubs) > 0 {
-			for _, chunk := range chunkTopics(pendingUnsubs, bybitMaxArgsPerCommand) {
+			for _, chunk := range chunkTopics(pendingUnsubs, chunkSize) {
 				reqID, err := sw.sendSubscription(conn, "unsubscribe", chunk)
 				if err != nil {
 					return err
