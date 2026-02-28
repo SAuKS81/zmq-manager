@@ -2,6 +2,7 @@ package binance
 
 import (
 	"bytes"
+	"fmt"
 	json "github.com/goccy/go-json"
 	"log"
 	"sync"
@@ -64,9 +65,15 @@ func (sw *ShardWorker) Run() {
 
 		conn, _, err := websocket.DefaultDialer.Dial(sw.wsURL, nil)
 		if err != nil {
+			metrics.RecordStreamReconnect("binance", sw.marketType, "trades", "connect_failed")
+			metrics.LogStreamLifecycle("stream_reconnecting", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", nil, reconnectAttempts+1, "connect_failed", err.Error())
 			log.Printf("[BINANCE-TRADE-SHARD] Connect Fehler: %v", err)
 			reconnectAttempts++
 			continue
+		}
+		if reconnectAttempts > 0 {
+			metrics.RecordStreamRestoreSuccess("binance", sw.marketType, "trades")
+			metrics.LogStreamLifecycle("stream_restored", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", nil, reconnectAttempts, "", "")
 		}
 
 		done := make(chan struct{})
@@ -88,6 +95,8 @@ func (sw *ShardWorker) Run() {
 		if !sw.hasDesiredStreams() {
 			return
 		}
+		metrics.RecordStreamReconnect("binance", sw.marketType, "trades", "read_loop_exit")
+		metrics.LogStreamLifecycle("stream_reconnecting", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", nil, reconnectAttempts+1, "read_loop_exit", "")
 		reconnectAttempts++
 	}
 }
@@ -197,6 +206,8 @@ func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}, respC
 			delete(inflight, resp.ID)
 			if resp.Code != 0 {
 				if cmd.method == "UNSUBSCRIBE" && cmd.attempt < 4 {
+					metrics.RecordUnsubscribeFailure("binance", sw.marketType, "trades", "unsubscribe_nack")
+					metrics.LogStreamLifecycle("stream_unsubscribe_failed", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", cmd.streams, cmd.attempt, "unsubscribe_nack", resp.Msg)
 					log.Printf("[BINANCE-TRADE-SHARD] unsubscribe nack id=%d attempt=%d code=%d msg=%q retrying", resp.ID, cmd.attempt, resp.Code, resp.Msg)
 					for _, stream := range cmd.streams {
 						pendingUnsubs = queueUniqueStream(pendingUnsubs, stream)
@@ -238,6 +249,9 @@ func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}, respC
 				}
 				delete(inflight, id)
 				if cmd.attempt >= 4 {
+					metrics.RecordUnsubscribeFailure("binance", sw.marketType, "trades", "unsubscribe_ack_timeout")
+					metrics.RecordForcedShardRecycle("binance", sw.marketType, "trades", "unsubscribe_ack_timeout")
+					metrics.LogStreamLifecycle("stream_force_closed", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", cmd.streams, cmd.attempt, "unsubscribe_ack_timeout", "")
 					log.Printf("[BINANCE-TRADE-SHARD] unsubscribe ack timeout for %v after %d attempts; forcing shard recycle", cmd.streams, cmd.attempt)
 					_ = conn.Close()
 					return
@@ -324,6 +338,9 @@ func (sw *ShardWorker) batchAndSend(conn *websocket.Conn, method string, streams
 
 		if err := conn.WriteJSON(req); err != nil {
 			return nil, err
+		}
+		if method == "UNSUBSCRIBE" {
+			metrics.RecordUnsubscribeAttempt("binance", sw.marketType, "trades", len(streams[i:end]))
 		}
 		reqs = append(reqs, binanceBatchRequest{id: id, streams: append([]string(nil), streams[i:end]...)})
 		time.Sleep(350 * time.Millisecond)

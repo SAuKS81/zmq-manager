@@ -120,6 +120,11 @@ func Init() {
 		prometheus.MustRegister(queueCap)
 		prometheus.MustRegister(queueFillRatio)
 		prometheus.MustRegister(queueHighWatermark)
+		prometheus.MustRegister(unsubscribeAttemptsTotal)
+		prometheus.MustRegister(unsubscribeFailuresTotal)
+		prometheus.MustRegister(forcedShardRecyclesTotal)
+		prometheus.MustRegister(streamReconnectsTotal)
+		prometheus.MustRegister(streamRestoreSuccessTotal)
 
 		publishTradeInternal = publishMessagesTotal.WithLabelValues(TypeTrade, ClientTierInternal)
 		publishOBUpdateInternal = publishMessagesTotal.WithLabelValues(TypeOBUpdate, ClientTierInternal)

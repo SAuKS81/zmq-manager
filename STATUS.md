@@ -120,6 +120,15 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - damit werden nur noch gewuenschte Streams/Symbole/Themen nach einem Recycle wieder aufgebaut
   - stale `active*`-Eintraege koennen entfernte Streams nicht mehr versehentlich zurueckbringen
   - abgesichert durch Unit-Tests fuer Binance Trade/OB und Bybit Trade/OB Snapshot-Pfade
+- P7-6 Metriken und Logs abgeschlossen:
+  - neue Lifecycle-Counter unter `/metrics`:
+    - `zmq_unsubscribe_attempts_total`
+    - `zmq_unsubscribe_failures_total`
+    - `zmq_forced_shard_recycles_total`
+    - `zmq_stream_reconnects_total`
+    - `zmq_stream_restore_success_total`
+  - Bybit, Bitget und Binance haengen ihre nativen Lifecycle-Pfade jetzt an diese Counter
+  - neue strukturierte Lifecycle-Logs im Format `STREAM_LIFECYCLE ...` mit `event`, `exchange`, `shard`, `market_type`, `data_type`, `symbols`, `attempt`, `reason`, `message`
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
@@ -168,10 +177,6 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
     - in Arbeit: ConnectionManager nutzt jetzt eigene lokale Unsubscribe-Helfer fuer Trade- und Orderbook-Shards
-  - P7-6 Metriken und Logs
-    - `unsubscribe_attempts_total`, `unsubscribe_failures_total`, `forced_shard_recycles_total`, `stream_reconnects_total`
-    - strukturierte Logs mit `exchange`, `shard`, `symbol`, `data_type`, `attempt`, `reason`
-    - noch offen
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar

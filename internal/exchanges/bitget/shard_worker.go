@@ -2,6 +2,7 @@ package bitget
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
@@ -312,6 +313,9 @@ func (sw *ShardWorker) sendSubscription(writeCh chan<- []byte, op string, symbol
 	if len(symbols) == 0 {
 		return nil
 	}
+	if op == "unsubscribe" {
+		metrics.RecordUnsubscribeAttempt("bitget", sw.marketType, "trades", len(symbols))
+	}
 
 	instType, err := getInstType(sw.marketType)
 	if err != nil {
@@ -355,6 +359,7 @@ func (sw *ShardWorker) sendSubscription(writeCh chan<- []byte, op string, symbol
 
 func (sw *ShardWorker) emitStatusForSymbols(eventType string, symbols []string, reason string, attempt int, message string) {
 	if sw.statusCh == nil {
+		sw.recordStatus(eventType, symbols, reason, attempt, message)
 		return
 	}
 
@@ -381,4 +386,19 @@ func (sw *ShardWorker) emitStatusForSymbols(eventType string, symbols []string, 
 			Timestamp:  time.Now().UnixMilli(),
 		}
 	}
+	sw.recordStatus(eventType, targets, reason, attempt, message)
+}
+
+func (sw *ShardWorker) recordStatus(eventType string, symbols []string, reason string, attempt int, message string) {
+	switch eventType {
+	case "stream_reconnecting":
+		metrics.RecordStreamReconnect("bitget", sw.marketType, "trades", reason)
+	case "stream_restored":
+		metrics.RecordStreamRestoreSuccess("bitget", sw.marketType, "trades")
+	case "stream_unsubscribe_failed":
+		metrics.RecordUnsubscribeFailure("bitget", sw.marketType, "trades", reason)
+	case "stream_force_closed":
+		metrics.RecordForcedShardRecycle("bitget", sw.marketType, "trades", reason)
+	}
+	metrics.LogStreamLifecycle(eventType, "bitget", fmt.Sprintf("%p", sw), sw.marketType, "trades", symbols, attempt, reason, message)
 }

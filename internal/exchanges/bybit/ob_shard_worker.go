@@ -511,6 +511,9 @@ func (sw *OrderBookShardWorker) sendSubscription(op string, topics []string) (st
 	if len(topics) == 0 || sw.conn == nil {
 		return "", nil
 	}
+	if op == "unsubscribe" {
+		metrics.RecordUnsubscribeAttempt("bybit", sw.marketType, "orderbook", len(topics))
+	}
 	reqID := strconv.FormatUint(sw.requestID.Add(1), 10)
 	msg := bybitCommandRequest{Op: op, Args: topics, ReqID: reqID}
 	if err := sw.conn.WriteJSON(msg); err != nil {
@@ -522,6 +525,7 @@ func (sw *OrderBookShardWorker) sendSubscription(op string, topics []string) (st
 
 func (sw *OrderBookShardWorker) emitStatusForTopics(eventType string, topics []string, reason string, attempt int, message string) {
 	if sw.statusCh == nil {
+		sw.recordStatus(eventType, topics, reason, attempt, message)
 		return
 	}
 
@@ -559,6 +563,21 @@ func (sw *OrderBookShardWorker) emitStatusForTopics(eventType string, topics []s
 			Timestamp:  time.Now().UnixMilli(),
 		}
 	}
+	sw.recordStatus(eventType, targets, reason, attempt, message)
+}
+
+func (sw *OrderBookShardWorker) recordStatus(eventType string, topics []string, reason string, attempt int, message string) {
+	switch eventType {
+	case "stream_reconnecting":
+		metrics.RecordStreamReconnect("bybit", sw.marketType, "orderbook", reason)
+	case "stream_restored":
+		metrics.RecordStreamRestoreSuccess("bybit", sw.marketType, "orderbook")
+	case "stream_unsubscribe_failed":
+		metrics.RecordUnsubscribeFailure("bybit", sw.marketType, "orderbook", reason)
+	case "stream_force_closed":
+		metrics.RecordForcedShardRecycle("bybit", sw.marketType, "orderbook", reason)
+	}
+	metrics.LogStreamLifecycle(eventType, "bybit", fmt.Sprintf("%p", sw), sw.marketType, "orderbook", topics, attempt, reason, message)
 }
 
 func readWSMessagePooled(conn *websocket.Conn) (int, *bytes.Buffer, error) {

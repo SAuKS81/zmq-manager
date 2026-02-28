@@ -332,6 +332,7 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 
 func (sw *ShardWorker) emitStatusForSymbols(eventType string, symbols []string, reason string, attempt int, message string) {
 	if sw.statusCh == nil {
+		sw.recordStatus(eventType, symbols, reason, attempt, message)
 		return
 	}
 
@@ -358,6 +359,21 @@ func (sw *ShardWorker) emitStatusForSymbols(eventType string, symbols []string, 
 			Timestamp:  time.Now().UnixMilli(),
 		}
 	}
+	sw.recordStatus(eventType, targets, reason, attempt, message)
+}
+
+func (sw *ShardWorker) recordStatus(eventType string, symbols []string, reason string, attempt int, message string) {
+	switch eventType {
+	case "stream_reconnecting":
+		metrics.RecordStreamReconnect("bybit", sw.marketType, "trades", reason)
+	case "stream_restored":
+		metrics.RecordStreamRestoreSuccess("bybit", sw.marketType, "trades")
+	case "stream_unsubscribe_failed":
+		metrics.RecordUnsubscribeFailure("bybit", sw.marketType, "trades", reason)
+	case "stream_force_closed":
+		metrics.RecordForcedShardRecycle("bybit", sw.marketType, "trades", reason)
+	}
+	metrics.LogStreamLifecycle(eventType, "bybit", fmt.Sprintf("%p", sw), sw.marketType, "trades", symbols, attempt, reason, message)
 }
 
 func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols []string) (string, error) {
@@ -365,6 +381,9 @@ func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols
 		return "", nil
 	}
 	log.Printf("[SHARD-SEND] Sende '%s' fuer %d Symbole", op, len(symbols))
+	if op == "unsubscribe" {
+		metrics.RecordUnsubscribeAttempt("bybit", sw.marketType, "trades", len(symbols))
+	}
 	args := make([]string, len(symbols))
 	for i, s := range symbols {
 		args[i] = fmt.Sprintf("publicTrade.%s", s)
