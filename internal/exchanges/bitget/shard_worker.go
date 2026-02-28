@@ -287,38 +287,63 @@ func (sw *ShardWorker) handleEventResponse(msg []byte, writeCh chan<- []byte) er
 	if err := json.Unmarshal(msg, &resp); err != nil {
 		return nil
 	}
-	if resp.Arg.InstID == "" {
+	args := parseBitgetResponseArgs(resp.Arg)
+	if len(args) == 0 {
 		return nil
 	}
-	symbol := resp.Arg.InstID
+
 	switch resp.Event {
 	case "subscribe":
+		redundant := make([]string, 0, len(args))
 		sw.mu.Lock()
-		delete(sw.pending, symbol)
-		sw.activeSymbols[symbol] = true
-		stillDesired := sw.desiredSymbols[symbol]
+		for _, arg := range args {
+			symbol := arg.InstID
+			delete(sw.pending, symbol)
+			sw.activeSymbols[symbol] = true
+			if !sw.desiredSymbols[symbol] {
+				redundant = append(redundant, symbol)
+			}
+		}
 		sw.mu.Unlock()
-		if !stillDesired {
-			return sw.issueCommand(writeCh, "unsubscribe", []string{symbol})
+		if len(redundant) > 0 {
+			return sw.issueCommand(writeCh, "unsubscribe", redundant)
 		}
 	case "unsubscribe":
 		sw.mu.Lock()
-		delete(sw.pending, symbol)
-		delete(sw.activeSymbols, symbol)
+		for _, arg := range args {
+			symbol := arg.InstID
+			delete(sw.pending, symbol)
+			delete(sw.activeSymbols, symbol)
+		}
 		sw.mu.Unlock()
 	case "error":
+		retrySymbols := make([]string, 0, len(args))
 		sw.mu.Lock()
-		pending, ok := sw.pending[symbol]
+		for _, arg := range args {
+			symbol := arg.InstID
+			pending, ok := sw.pending[symbol]
+			if !ok {
+				continue
+			}
+			if pending.op == "unsubscribe" && pending.attempt >= 4 {
+				sw.mu.Unlock()
+				sw.emitStatusForSymbols("stream_unsubscribe_failed", []string{symbol}, "unsubscribe_nack", pending.attempt, resp.Msg)
+				sw.emitStatusForSymbols("stream_force_closed", []string{symbol}, "unsubscribe_nack", pending.attempt, resp.Msg)
+				return &websocket.CloseError{Code: websocket.CloseInternalServerErr, Text: "bitget unsubscribe nack"}
+			}
+			retrySymbols = append(retrySymbols, symbol)
+		}
 		sw.mu.Unlock()
-		if !ok {
+		if len(retrySymbols) == 0 {
 			return nil
 		}
-		if pending.op == "unsubscribe" && pending.attempt >= 4 {
-			sw.emitStatusForSymbols("stream_unsubscribe_failed", []string{symbol}, "unsubscribe_nack", pending.attempt, resp.Msg)
-			sw.emitStatusForSymbols("stream_force_closed", []string{symbol}, "unsubscribe_nack", pending.attempt, resp.Msg)
-			return &websocket.CloseError{Code: websocket.CloseInternalServerErr, Text: "bitget unsubscribe nack"}
+		op := "subscribe"
+		sw.mu.Lock()
+		if pending, ok := sw.pending[retrySymbols[0]]; ok {
+			op = pending.op
 		}
-		return sw.issueCommand(writeCh, pending.op, []string{symbol})
+		sw.mu.Unlock()
+		return sw.issueCommand(writeCh, op, retrySymbols)
 	}
 	return nil
 }
