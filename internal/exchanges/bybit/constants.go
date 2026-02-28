@@ -1,10 +1,14 @@
 package bybit
 
-const (
-	// WebSocket Endpoints
-	spotWsURL   = "wss://stream.bybit.com/v5/public/spot"
-	linearWsURL = "wss://stream.bybit.com/v5/public/linear"
+import "os"
 
+var (
+	// WebSocket Endpoints
+	spotWsURL   = getenvDefault("BYBIT_SPOT_WS_URL", "wss://stream.bybit.com/v5/public/spot")
+	linearWsURL = getenvDefault("BYBIT_LINEAR_WS_URL", "wss://stream.bybit.com/v5/public/linear")
+)
+
+const (
 	// WebSocket Timings
 	readIdleSec  = 60
 	pingEverySec = 15
@@ -12,3 +16,10 @@ const (
 	// Sharding
 	symbolsPerShard = 40
 )
+
+func getenvDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}

@@ -1,3 +1,6 @@
+//go:build ccxt
+// +build ccxt
+
 package ccxt
 
 import (
@@ -128,22 +131,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 			symbolsToRemove[cmd.Symbol] = 0
 		}
 	}
-	removalsByShard := make(map[IShardWorker]map[string]int)
-	for symbol := range symbolsToRemove {
-		if shard, exists := cm.symbolToTradeShard[symbol]; exists {
-			if _, ok := removalsByShard[shard]; !ok {
-				removalsByShard[shard] = make(map[string]int)
-			}
-			removalsByShard[shard][symbol] = 0
-			delete(cm.symbolToTradeShard, symbol)
-			if cm.tradeShardLoad[shard] > 0 {
-				cm.tradeShardLoad[shard]--
-			}
-		}
-	}
-	for shard, symbols := range removalsByShard {
-		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
-	}
+	cm.unsubscribeTradeSymbolsLocked(symbolsToRemove)
 	if len(symbolsToAdd) == 0 {
 		return
 	}
@@ -196,22 +184,7 @@ func (cm *ConnectionManager) processSingleOrderBookCommands(cmds []ManagerComman
 			symbolsToRemove[cmd.Symbol] = 0
 		}
 	}
-	removalsByShard := make(map[IShardWorker]map[string]int)
-	for symbol := range symbolsToRemove {
-		if shard, exists := cm.symbolToOBShard[symbol]; exists {
-			if _, ok := removalsByShard[shard]; !ok {
-				removalsByShard[shard] = make(map[string]int)
-			}
-			removalsByShard[shard][symbol] = 0
-			delete(cm.symbolToOBShard, symbol)
-			if cm.obShardLoad[shard] > 0 {
-				cm.obShardLoad[shard]--
-			}
-		}
-	}
-	for shard, symbols := range removalsByShard {
-		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
-	}
+	cm.unsubscribeOrderBookSymbolsLocked(symbolsToRemove)
 	if len(symbolsToAdd) == 0 {
 		return
 	}
@@ -263,23 +236,7 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 		}
 	}
 
-	// Unsubscribe-Logik bleibt gleich
-	removalsByShard := make(map[IShardWorker]map[string]int)
-	for symbol := range symbolsToRemove {
-		if shard, exists := cm.symbolToOBShard[symbol]; exists {
-			if _, ok := removalsByShard[shard]; !ok {
-				removalsByShard[shard] = make(map[string]int)
-			}
-			removalsByShard[shard][symbol] = 0
-			delete(cm.symbolToOBShard, symbol)
-			if cm.obShardLoad[shard] > 0 {
-				cm.obShardLoad[shard]--
-			}
-		}
-	}
-	for shard, symbols := range removalsByShard {
-		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
-	}
+	cm.unsubscribeOrderBookSymbolsLocked(symbolsToRemove)
 
 	if len(symbolsToAdd) == 0 {
 		return
@@ -323,6 +280,60 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 	for shard, symbols := range additionsByShard {
 		log.Printf("[CCXT-CONN-MANAGER] Sende %d OB-Symbole an BATCH Shard. Neue Auslastung: %d/%d", len(symbols), cm.obShardLoad[shard], cm.config.SymbolsPerShard)
 		shard.getCommandChannel() <- ShardCommand{Action: "subscribe", Symbols: symbols}
+	}
+}
+
+func (cm *ConnectionManager) unsubscribeTradeSymbolsLocked(symbolsToRemove map[string]int) {
+	if len(symbolsToRemove) == 0 {
+		return
+	}
+
+	removalsByShard := make(map[IShardWorker]map[string]int)
+	for symbol := range symbolsToRemove {
+		shard, exists := cm.symbolToTradeShard[symbol]
+		if !exists {
+			continue
+		}
+		if _, ok := removalsByShard[shard]; !ok {
+			removalsByShard[shard] = make(map[string]int)
+		}
+		removalsByShard[shard][symbol] = 0
+		delete(cm.symbolToTradeShard, symbol)
+		if cm.tradeShardLoad[shard] > 0 {
+			cm.tradeShardLoad[shard]--
+		}
+	}
+
+	for shard, symbols := range removalsByShard {
+		log.Printf("[CCXT-CONN-MANAGER] Reconfigure trade shard: unsubscribe %d Symbole", len(symbols))
+		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
+	}
+}
+
+func (cm *ConnectionManager) unsubscribeOrderBookSymbolsLocked(symbolsToRemove map[string]int) {
+	if len(symbolsToRemove) == 0 {
+		return
+	}
+
+	removalsByShard := make(map[IShardWorker]map[string]int)
+	for symbol := range symbolsToRemove {
+		shard, exists := cm.symbolToOBShard[symbol]
+		if !exists {
+			continue
+		}
+		if _, ok := removalsByShard[shard]; !ok {
+			removalsByShard[shard] = make(map[string]int)
+		}
+		removalsByShard[shard][symbol] = 0
+		delete(cm.symbolToOBShard, symbol)
+		if cm.obShardLoad[shard] > 0 {
+			cm.obShardLoad[shard]--
+		}
+	}
+
+	for shard, symbols := range removalsByShard {
+		log.Printf("[CCXT-CONN-MANAGER] Reconfigure orderbook shard: unsubscribe %d Symbole", len(symbols))
+		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
 	}
 }
 

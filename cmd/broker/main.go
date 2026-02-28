@@ -1,20 +1,34 @@
 package main
 
 import (
+	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
 	"bybit-watcher/internal/broker"
 	"bybit-watcher/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"net/http"
-	_ "net/http/pprof" // Der _ import registriert die pprof-Handler
+	_ "net/http/pprof"
 )
 
 func main() {
+	pprofBlockRate := flag.Int("pprof-block-rate", 0, "Go block profile rate (0=off)")
+	pprofMutexFrac := flag.Int("pprof-mutex-fraction", 0, "Go mutex profile fraction (0=off)")
+	flag.Parse()
+
+	if *pprofBlockRate > 0 {
+		runtime.SetBlockProfileRate(*pprofBlockRate)
+	}
+	if *pprofMutexFrac > 0 {
+		runtime.SetMutexProfileFraction(*pprofMutexFrac)
+	}
+
 	metrics.Init()
 	http.Handle("/metrics", promhttp.Handler())
 
@@ -25,30 +39,37 @@ func main() {
 
 	log.Println("Starte Bybit-Daten-Broker...")
 
-	// 1. Erstelle den SubscriptionManager. Er benötigt einen Kanal,
-	//    um Daten an den ClientManager zu senden.
-	// Wir holen uns diesen Kanal vom ClientManager, nachdem er erstellt wurde.
 	var clientMgr *broker.ClientManager
-	subMgr := broker.NewSubscriptionManager(nil) // Temporär nil
-
-	// 2. Erstelle den ClientManager. Er benötigt einen Kanal,
-	//    um Anfragen an den SubscriptionManager zu senden.
+	subMgr := broker.NewSubscriptionManager(nil)
 	clientMgr = broker.NewClientManager(subMgr.RequestCh)
-
-	// 3. Verbinde die beiden Manager, indem wir die Kanäle zuweisen.
 	subMgr.DistributionCh = clientMgr.DistributionCh
+	clientMgr.StatusCh = subMgr.StatusCh
 
-	// 4. Starte die Hauptschleifen der Manager in separaten Goroutinen.
 	go subMgr.Run()
 	go clientMgr.Run()
+	go sampleQueueMetrics(subMgr, clientMgr)
 
-	log.Println("Broker läuft. Drücke CTRL+C zum Beenden.")
+	log.Println("Broker laeuft. Druecke CTRL+C zum Beenden.")
 
-	// Warte auf ein Beendigungssignal (z.B. Strg+C)
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM)
 	<-sc
 
 	log.Println("Beende Broker...")
-	// In einer echten Anwendung gäbe es hier noch eine saubere Shutdown-Logik.
+}
+
+func sampleQueueMetrics(sm *broker.SubscriptionManager, cm *broker.ClientManager) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		metrics.SetQueueSample("trade_ingest_to_broker", len(sm.TradeDataCh), cap(sm.TradeDataCh))
+		metrics.SetQueueSample("ob_ingest_to_broker", len(sm.OrderBookCh), cap(sm.OrderBookCh))
+		metrics.SetQueueSample("broker_request", len(sm.RequestCh), cap(sm.RequestCh))
+		metrics.SetQueueSample("broker_to_distribution", len(cm.DistributionCh), cap(cm.DistributionCh))
+
+		p1Len, p1Cap, p2Len, p2Cap := cm.SendQueueStats()
+		metrics.SetQueueSample("router_send_p1", p1Len, p1Cap)
+		metrics.SetQueueSample("router_send_p2_latest", p2Len, p2Cap)
+	}
 }

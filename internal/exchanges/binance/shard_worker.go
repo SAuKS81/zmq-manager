@@ -1,9 +1,10 @@
 package binance
 
 import (
+	"bytes"
+	"fmt"
 	json "github.com/goccy/go-json"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,32 +14,36 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var binanceStreamNeedle = []byte(`"stream"`)
+
 type ShardCommand struct {
 	Action string
 	Symbol string
 }
 
 type ShardWorker struct {
-	wsURL         string
-	marketType    string
-	commandCh     chan ShardCommand
-	stopCh        <-chan struct{}
-	dataCh        chan<- *shared_types.TradeUpdate
-	wg            *sync.WaitGroup
-	mu            sync.Mutex
-	activeStreams map[string]bool
-	requestID     atomic.Uint64
+	wsURL          string
+	marketType     string
+	commandCh      chan ShardCommand
+	stopCh         <-chan struct{}
+	dataCh         chan<- *shared_types.TradeUpdate
+	wg             *sync.WaitGroup
+	mu             sync.Mutex
+	desiredStreams map[string]bool
+	activeStreams  map[string]bool
+	requestID      atomic.Uint64
 }
 
 func NewShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *ShardWorker {
 	return &ShardWorker{
-		wsURL:         wsURL,
-		marketType:    marketType,
-		commandCh:     make(chan ShardCommand, 2000),
-		stopCh:        stopCh,
-		dataCh:        dataCh,
-		wg:            wg,
-		activeStreams: make(map[string]bool),
+		wsURL:          wsURL,
+		marketType:     marketType,
+		commandCh:      make(chan ShardCommand, 2000),
+		stopCh:         stopCh,
+		dataCh:         dataCh,
+		wg:             wg,
+		desiredStreams: make(map[string]bool),
+		activeStreams:  make(map[string]bool),
 	}
 }
 
@@ -60,65 +65,103 @@ func (sw *ShardWorker) Run() {
 
 		conn, _, err := websocket.DefaultDialer.Dial(sw.wsURL, nil)
 		if err != nil {
+			metrics.RecordStreamReconnect("binance", sw.marketType, "trades", "connect_failed")
+			metrics.LogStreamLifecycle("stream_reconnecting", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", nil, reconnectAttempts+1, "connect_failed", err.Error())
 			log.Printf("[BINANCE-TRADE-SHARD] Connect Fehler: %v", err)
 			reconnectAttempts++
 			continue
 		}
+		if reconnectAttempts > 0 {
+			metrics.RecordStreamRestoreSuccess("binance", sw.marketType, "trades")
+			metrics.LogStreamLifecycle("stream_restored", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", nil, reconnectAttempts, "", "")
+		}
 
 		done := make(chan struct{})
+		respCh := make(chan wsCommandResponse, 128)
 
-		// 1. Resubscribe
-		sw.mu.Lock()
-		var streamsToResub []string
-		for s := range sw.activeStreams {
-			streamsToResub = append(streamsToResub, s)
-		}
-		sw.mu.Unlock()
+		streamsToResub := sw.desiredStreamsSnapshot()
 		if len(streamsToResub) > 0 {
-			go func() {
-				sw.batchAndSend(conn, "SUBSCRIBE", streamsToResub)
-			}()
+			if _, err := sw.batchAndSend(conn, "SUBSCRIBE", streamsToResub); err != nil {
+				conn.Close()
+				reconnectAttempts++
+				continue
+			}
 		}
 
-		// 2. Start Read Pump
-		go sw.readPump(conn, done)
-
-		// 3. Start Write Pump
-		sw.writePump(conn, done)
+		go sw.readPump(conn, done, respCh)
+		sw.writePump(conn, done, respCh)
 
 		conn.Close()
+		if !sw.hasDesiredStreams() {
+			return
+		}
+		metrics.RecordStreamReconnect("binance", sw.marketType, "trades", "read_loop_exit")
+		metrics.LogStreamLifecycle("stream_reconnecting", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", nil, reconnectAttempts+1, "read_loop_exit", "")
 		reconnectAttempts++
 	}
 }
 
-func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}) {
+func (sw *ShardWorker) hasDesiredStreams() bool {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return len(sw.desiredStreams) > 0
+}
+
+func (sw *ShardWorker) desiredStreamsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	streams := make([]string, 0, len(sw.desiredStreams))
+	for stream := range sw.desiredStreams {
+		streams = append(streams, stream)
+	}
+	return streams
+}
+
+func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}, respCh <-chan wsCommandResponse) {
 	batchTicker := time.NewTicker(500 * time.Millisecond)
+	retryTicker := time.NewTicker(250 * time.Millisecond)
 	defer batchTicker.Stop()
+	defer retryTicker.Stop()
 
 	pendingSubs := make([]string, 0, 100)
 	pendingUnsubs := make([]string, 0, 100)
+	inflight := make(map[uint64]binanceInflightCommand)
 
 	flushCmds := func() error {
 		if len(pendingSubs) > 0 {
-			if err := sw.batchAndSend(conn, "SUBSCRIBE", pendingSubs); err != nil {
+			ids, err := sw.batchAndSend(conn, "SUBSCRIBE", pendingSubs)
+			if err != nil {
 				return err
 			}
-			sw.mu.Lock()
-			for _, s := range pendingSubs {
-				sw.activeStreams[s] = true
+			now := time.Now()
+			for _, req := range ids {
+				inflight[req.id] = binanceInflightCommand{method: "SUBSCRIBE", streams: req.streams, attempt: 1, sentAt: now}
 			}
-			sw.mu.Unlock()
 			pendingSubs = pendingSubs[:0]
 		}
 		if len(pendingUnsubs) > 0 {
-			if err := sw.batchAndSend(conn, "UNSUBSCRIBE", pendingUnsubs); err != nil {
+			ids, err := sw.batchAndSend(conn, "UNSUBSCRIBE", pendingUnsubs)
+			if err != nil {
 				return err
 			}
-			sw.mu.Lock()
-			for _, s := range pendingUnsubs {
-				delete(sw.activeStreams, s)
+			now := time.Now()
+			for _, req := range ids {
+				attempt := 1
+				for _, stream := range req.streams {
+					for _, cmd := range inflight {
+						if cmd.method != "UNSUBSCRIBE" {
+							continue
+						}
+						for _, existing := range cmd.streams {
+							if existing == stream && cmd.attempt >= attempt {
+								attempt = cmd.attempt + 1
+							}
+						}
+					}
+				}
+				inflight[req.id] = binanceInflightCommand{method: "UNSUBSCRIBE", streams: req.streams, attempt: attempt, sentAt: now}
 			}
-			sw.mu.Unlock()
 			pendingUnsubs = pendingUnsubs[:0]
 		}
 		return nil
@@ -133,52 +176,116 @@ func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}) {
 		case cmd := <-sw.commandCh:
 			stream := cmd.Symbol + "@trade"
 			if cmd.Action == "subscribe" {
-				pendingSubs = append(pendingSubs, stream)
+				sw.mu.Lock()
+				sw.desiredStreams[stream] = true
+				alreadyActive := sw.activeStreams[stream]
+				sw.mu.Unlock()
+				if !alreadyActive {
+					pendingSubs = queueUniqueStream(pendingSubs, stream)
+				}
 			} else {
-				pendingUnsubs = append(pendingUnsubs, stream)
+				sw.mu.Lock()
+				delete(sw.desiredStreams, stream)
+				wasActive := sw.activeStreams[stream]
+				sw.mu.Unlock()
+				if wasActive {
+					pendingUnsubs = queueUniqueStream(pendingUnsubs, stream)
+				}
 			}
 			if len(pendingSubs) >= 40 || len(pendingUnsubs) >= 40 {
 				if err := flushCmds(); err != nil {
+					log.Printf("[BINANCE-TRADE-SHARD] flush command error: %v", err)
 					return
 				}
 			}
+		case resp := <-respCh:
+			cmd, ok := inflight[resp.ID]
+			if !ok {
+				continue
+			}
+			delete(inflight, resp.ID)
+			if resp.Code != 0 {
+				if cmd.method == "UNSUBSCRIBE" && cmd.attempt < 4 {
+					metrics.RecordUnsubscribeFailure("binance", sw.marketType, "trades", "unsubscribe_nack")
+					metrics.LogStreamLifecycle("stream_unsubscribe_failed", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", cmd.streams, cmd.attempt, "unsubscribe_nack", resp.Msg)
+					log.Printf("[BINANCE-TRADE-SHARD] unsubscribe nack id=%d attempt=%d code=%d msg=%q retrying", resp.ID, cmd.attempt, resp.Code, resp.Msg)
+					for _, stream := range cmd.streams {
+						pendingUnsubs = queueUniqueStream(pendingUnsubs, stream)
+					}
+					continue
+				}
+				log.Printf("[BINANCE-TRADE-SHARD] command nack id=%d method=%s code=%d msg=%q forcing shard recycle", resp.ID, cmd.method, resp.Code, resp.Msg)
+				_ = conn.Close()
+				return
+			}
+			sw.mu.Lock()
+			switch cmd.method {
+			case "SUBSCRIBE":
+				for _, stream := range cmd.streams {
+					sw.activeStreams[stream] = true
+					if !sw.desiredStreams[stream] {
+						pendingUnsubs = queueUniqueStream(pendingUnsubs, stream)
+					}
+				}
+			case "UNSUBSCRIBE":
+				for _, stream := range cmd.streams {
+					delete(sw.activeStreams, stream)
+				}
+			}
+			sw.mu.Unlock()
 		case <-batchTicker.C:
 			if err := flushCmds(); err != nil {
+				log.Printf("[BINANCE-TRADE-SHARD] periodic flush error: %v", err)
 				return
+			}
+		case <-retryTicker.C:
+			now := time.Now()
+			for id, cmd := range inflight {
+				if cmd.method != "UNSUBSCRIBE" {
+					continue
+				}
+				if now.Sub(cmd.sentAt) < nextUnsubscribeRetryDelay(cmd.attempt) {
+					continue
+				}
+				delete(inflight, id)
+				if cmd.attempt >= 4 {
+					metrics.RecordUnsubscribeFailure("binance", sw.marketType, "trades", "unsubscribe_ack_timeout")
+					metrics.RecordForcedShardRecycle("binance", sw.marketType, "trades", "unsubscribe_ack_timeout")
+					metrics.LogStreamLifecycle("stream_force_closed", "binance", fmt.Sprintf("%p", sw), sw.marketType, "trades", cmd.streams, cmd.attempt, "unsubscribe_ack_timeout", "")
+					log.Printf("[BINANCE-TRADE-SHARD] unsubscribe ack timeout for %v after %d attempts; forcing shard recycle", cmd.streams, cmd.attempt)
+					_ = conn.Close()
+					return
+				}
+				log.Printf("[BINANCE-TRADE-SHARD] unsubscribe ack timeout for %v attempt=%d retrying", cmd.streams, cmd.attempt)
+				for _, stream := range cmd.streams {
+					pendingUnsubs = queueUniqueStream(pendingUnsubs, stream)
+				}
 			}
 		}
 	}
 }
 
-func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
+func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}, respCh chan<- wsCommandResponse) {
 	defer close(done)
 
-	// Initial Deadline setzen
 	readWait := 180 * time.Second
 	conn.SetReadDeadline(time.Now().Add(readWait))
-
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(readWait))
 		return nil
 	})
 
 	for {
-		_, msg, err := conn.ReadMessage()
+		_, msg, err := readWSMessagePooled(conn)
 		if err != nil {
 			log.Printf("[BINANCE-TRADE-SHARD] Read Error: %v", err)
 			return
 		}
 
-		// --- FIX: Deadline bei JEDER Nachricht verlängern ---
-		// Wenn wir Daten bekommen, lebt die Verbindung noch.
 		conn.SetReadDeadline(time.Now().Add(readWait))
-		// ---------------------------------------------------
-
-		msgStr := string(msg)
 		ingestNow := time.Now()
 
-		if strings.Contains(msgStr, `"stream"`) {
-			// ... Rest der Parsing Logik bleibt gleich ...
+		if bytes.Contains(msg, binanceStreamNeedle) {
 			var wrapper struct {
 				Stream string  `json:"stream"`
 				Data   wsTrade `json:"data"`
@@ -197,28 +304,46 @@ func (sw *ShardWorker) readPump(conn *websocket.Conn, done chan struct{}) {
 			} else if err != nil {
 				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 			}
+			continue
+		}
+
+		var resp wsCommandResponse
+		if err := json.Unmarshal(msg, &resp); err == nil && resp.ID != 0 {
+			select {
+			case respCh <- resp:
+			case <-sw.stopCh:
+				return
+			case <-done:
+				return
+			}
 		}
 	}
 }
 
-func (sw *ShardWorker) batchAndSend(conn *websocket.Conn, method string, streams []string) error {
+func (sw *ShardWorker) batchAndSend(conn *websocket.Conn, method string, streams []string) ([]binanceBatchRequest, error) {
 	const batchSize = 40
+	reqs := make([]binanceBatchRequest, 0, (len(streams)+batchSize-1)/batchSize)
 	for i := 0; i < len(streams); i += batchSize {
 		end := i + batchSize
 		if end > len(streams) {
 			end = len(streams)
 		}
 
+		id := sw.requestID.Add(1)
 		req := wsRequest{
 			Method: method,
 			Params: streams[i:end],
-			ID:     sw.requestID.Add(1),
+			ID:     id,
 		}
 
 		if err := conn.WriteJSON(req); err != nil {
-			return err
+			return nil, err
 		}
+		if method == "UNSUBSCRIBE" {
+			metrics.RecordUnsubscribeAttempt("binance", sw.marketType, "trades", len(streams[i:end]))
+		}
+		reqs = append(reqs, binanceBatchRequest{id: id, streams: append([]string(nil), streams[i:end]...)})
 		time.Sleep(350 * time.Millisecond)
 	}
-	return nil
+	return reqs, nil
 }

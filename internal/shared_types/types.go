@@ -55,3 +55,16 @@ type BulkClientRequest struct {
 	DataType       string   `json:"data_type"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 }
+
+type StreamStatusEvent struct {
+	Type       string   `json:"type"`
+	Exchange   string   `json:"exchange,omitempty"`
+	MarketType string   `json:"market_type,omitempty"`
+	DataType   string   `json:"data_type,omitempty"`
+	Symbol     string   `json:"symbol,omitempty"`
+	Symbols    []string `json:"symbols,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
+	Attempt    int      `json:"attempt,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	Timestamp  int64    `json:"ts,omitempty"`
+}

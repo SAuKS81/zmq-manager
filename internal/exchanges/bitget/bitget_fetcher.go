@@ -3,6 +3,7 @@ package bitget
 import (
 	"log"
 	"sync"
+	"time"
 
 	"bybit-watcher/internal/exchanges"
 	"bybit-watcher/internal/shared_types"
@@ -10,18 +11,22 @@ import (
 
 // BitgetExchange implementiert das Exchange-Interface für Bitget.
 type BitgetExchange struct {
-	mu         sync.Mutex
-	spotMgr    *ConnectionManager
-	swapMgr    *ConnectionManager
-	requestCh  chan<- *shared_types.ClientRequest
-	dataCh     chan<- *shared_types.TradeUpdate
+	mu        sync.Mutex
+	spotMgr   *ConnectionManager
+	swapMgr   *ConnectionManager
+	requestCh chan<- *shared_types.ClientRequest
+	dataCh    chan<- *shared_types.TradeUpdate
+	statusCh  chan<- *shared_types.StreamStatusEvent
+	limiter   *bitgetSendLimiter
 }
 
 // NewBitgetExchange erstellt eine neue Instanz der Bitget-Implementierung.
-func NewBitgetExchange(requestCh chan<- *shared_types.ClientRequest, dataCh chan<- *shared_types.TradeUpdate) exchanges.Exchange {
+func NewBitgetExchange(requestCh chan<- *shared_types.ClientRequest, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
 	return &BitgetExchange{
 		requestCh: requestCh,
 		dataCh:    dataCh,
+		statusCh:  statusCh,
+		limiter:   newBitgetSendLimiter(delayPerBatchMs * time.Millisecond),
 	}
 }
 
@@ -32,15 +37,15 @@ func (e *BitgetExchange) HandleRequest(req *shared_types.ClientRequest) {
 
 	exchangeSymbol := TranslateSymbolToExchange(req.Symbol)
 
-    var managerAction string
-    switch req.Action {
-    case "subscribe":
-        managerAction = "add"
-    case "unsubscribe":
-        managerAction = "remove"
-    default:
-        return
-    }
+	var managerAction string
+	switch req.Action {
+	case "subscribe":
+		managerAction = "add"
+	case "unsubscribe":
+		managerAction = "remove"
+	default:
+		return
+	}
 
 	cmd := ManagerCommand{
 		Action: managerAction,
@@ -51,19 +56,19 @@ func (e *BitgetExchange) HandleRequest(req *shared_types.ClientRequest) {
 	case "spot":
 		if e.spotMgr == nil {
 			log.Println("[BITGET-EXCHANGE] Erster Spot-Abonnent. Starte Spot Connection Manager.")
-			e.spotMgr = NewConnectionManager("spot", e.dataCh)
+			e.spotMgr = NewConnectionManager("spot", e.dataCh, e.statusCh, e.limiter)
 			go e.spotMgr.Run()
 		}
 		e.spotMgr.commandCh <- cmd
-	
+
 	case "swap":
 		if e.swapMgr == nil {
 			log.Println("[BITGET-EXCHANGE] Erster Swap-Abonnent. Starte Swap Connection Manager.")
-			e.swapMgr = NewConnectionManager("swap", e.dataCh)
+			e.swapMgr = NewConnectionManager("swap", e.dataCh, e.statusCh, e.limiter)
 			go e.swapMgr.Run()
 		}
 		e.swapMgr.commandCh <- cmd
-	
+
 	default:
 		log.Printf("[BITGET-EXCHANGE] Unbekannter Markt-Typ in Anfrage: %s", req.MarketType)
 	}

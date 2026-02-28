@@ -1,214 +1,323 @@
 package bybit
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"log"
 	"math"
 	"math/rand"
-	"strings"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
+	gjson "github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 )
 
-// ShardCommand ist ein Befehl, der an einen laufenden Shard gesendet wird.
 type ShardCommand struct {
 	Action  string
 	Symbols []string
 }
 
-// ShardWorker verwaltet eine einzelne WebSocket-Verbindung.
 type ShardWorker struct {
 	wsURL          string
 	marketType     string
-	initialSymbols []string
 	commandCh      chan ShardCommand
 	stopCh         <-chan struct{}
 	dataCh         chan<- *shared_types.TradeUpdate
+	statusCh       chan<- *shared_types.StreamStatusEvent
 	wg             *sync.WaitGroup
-
-	// KORREKTUR: mu schützt den Zugriff auf activeSymbols von verschiedenen Goroutinen
-	mu            sync.Mutex
-	activeSymbols map[string]bool
+	mu             sync.Mutex
+	desiredSymbols map[string]bool
+	activeSymbols  map[string]bool
+	requestID      atomic.Uint64
 }
 
-// NewShardWorker erstellt einen neuen Worker.
-func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *ShardWorker {
+var (
+	bybitTradeTopicNeedle = []byte(`"topic":"publicTrade.`)
+	bybitTradePongNeedle  = []byte(`"op":"pong"`)
+	bybitTradeReadBufPool = sync.Pool{New: func() any { buf := &bytes.Buffer{}; buf.Grow(16 * 1024); return buf }}
+	bybitTradeMsgPool     = sync.Pool{New: func() any { return &wsMsg{Data: make([]wsTrade, 0, 64)} }}
+)
+
+func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *ShardWorker {
 	sw := &ShardWorker{
 		wsURL:          wsURL,
 		marketType:     marketType,
-		initialSymbols: initialSymbols, // Wird nur für den allerersten Start benötigt
 		commandCh:      make(chan ShardCommand, 10),
 		stopCh:         stopCh,
 		dataCh:         dataCh,
+		statusCh:       statusCh,
 		wg:             wg,
+		desiredSymbols: make(map[string]bool),
 		activeSymbols:  make(map[string]bool),
 	}
-	// Initialisiere die Liste der aktiven Symbole
 	for _, s := range initialSymbols {
-		sw.activeSymbols[s] = true
+		sw.desiredSymbols[s] = true
 	}
 	return sw
 }
 
-// Run startet die Hauptschleife des Workers.
 func (sw *ShardWorker) Run() {
 	defer sw.wg.Done()
+	log.Printf("[SHARD] Starte Worker fuer %s", sw.marketType)
 
-	sw.mu.Lock()
-	symbolCount := len(sw.activeSymbols)
-	sw.mu.Unlock()
-	log.Printf("[SHARD] Starte Worker für %d Symbole (%s)", symbolCount, sw.marketType)
-
-	// NEU: Zähler für aufeinanderfolgende Reconnect-Versuche
-	var reconnectAttempts int = 0
-
-reconnectLoop:
+	var reconnectAttempts int
 	for {
 		select {
 		case <-sw.stopCh:
-			break reconnectLoop
+			log.Printf("[SHARD] Worker beendet.")
+			return
 		default:
 		}
 
-		// NEU: Exponential Backoff Logik
 		if reconnectAttempts > 0 {
-			// Berechne die Basis-Wartezeit (z.B. 1s, 2s, 4s, 8s...)
 			backoff := time.Duration(math.Pow(2, float64(reconnectAttempts))) * time.Second
-			// Begrenze auf ein Maximum (z.B. 30 Sekunden)
 			if backoff > 30*time.Second {
 				backoff = 30 * time.Second
 			}
-			// Füge zufälligen Jitter hinzu (z.B. +/- 500ms)
 			jitter := time.Duration(rand.Intn(1000)-500) * time.Millisecond
 			waitTime := backoff + jitter
-
-			log.Printf("[SHARD-BACKOFF] Reconnect-Versuch #%d. Warte für %v...", reconnectAttempts, waitTime)
+			log.Printf("[SHARD-BACKOFF] Reconnect-Versuch #%d. Warte fuer %v...", reconnectAttempts, waitTime)
 			time.Sleep(waitTime)
 		}
 
 		conn, _, err := websocket.DefaultDialer.Dial(sw.wsURL, nil)
 		if err != nil {
 			log.Printf("[SHARD-ERROR] Connect fehlgeschlagen: %v", err)
-			reconnectAttempts++ // Erhöhe den Zähler
+			sw.emitStatusForSymbols("stream_reconnecting", nil, "connect_failed", reconnectAttempts+1, err.Error())
+			reconnectAttempts++
 			continue
 		}
 
-		sw.mu.Lock()
-		var symbolsToSub []string
-		for s := range sw.activeSymbols {
-			symbolsToSub = append(symbolsToSub, s)
-		}
-		sw.mu.Unlock()
-
-		log.Printf("[SHARD-INFO] (Re)Connect: Versuche %d Symbole zu abonnieren.", len(symbolsToSub))
-		if err := sw.sendSubscription(conn, "subscribe", symbolsToSub); err != nil {
-			log.Printf("[SHARD-ERROR] (Re)Subscribe fehlgeschlagen: %v", err)
-			conn.Close()
-			reconnectAttempts++ // Erhöhe den Zähler
-			continue
+		if reconnectAttempts > 0 {
+			sw.emitStatusForSymbols("stream_restored", nil, "", reconnectAttempts, "")
 		}
 
-		log.Printf("[SHARD-SUCCESS] (Re)Connect und Subscribe für %d Symbole erfolgreich.", len(symbolsToSub))
-
-		// NEU: Setze den Zähler bei Erfolg zurück
-		reconnectAttempts = 0
-
-		err = sw.readLoop(conn)
+		if err := sw.runSession(conn); err != nil {
+			sw.emitStatusForSymbols("stream_reconnecting", nil, "read_loop_exit", reconnectAttempts+1, err.Error())
+			log.Printf("[SHARD-INFO] Verbindung unterbrochen (Fehler: %v), versuche Reconnect...", err)
+		}
 		conn.Close()
-
-		if err == nil {
-			break reconnectLoop
+		if !sw.hasDesiredSymbols() {
+			log.Printf("[SHARD] Worker beendet.")
+			return
 		}
-
-		log.Printf("[SHARD-INFO] Verbindung unterbrochen (Fehler: %v), versuche Reconnect...", err)
-		reconnectAttempts++ // Erhöhe den Zähler
+		reconnectAttempts++
 	}
-
-	log.Printf("[SHARD] Worker beendet.")
 }
 
-// sendSubscription sendet eine (Un-)Subscribe-Nachricht.
-func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols []string) error {
-	if len(symbols) == 0 {
-		return nil
-	}
-	log.Printf("[SHARD-SEND] Sende '%s' für %d Symbole", op, len(symbols))
-
-	args := make([]string, len(symbols))
-	for i, s := range symbols {
-		args[i] = fmt.Sprintf("publicTrade.%s", s)
-	}
-
-	msg := map[string]interface{}{"op": op, "args": args}
-	err := conn.WriteJSON(msg)
-	if err != nil {
-		log.Printf("[SHARD-SEND-ERROR] Fehler beim Senden von '%s': %v", op, err)
-	}
-	return err
+func (sw *ShardWorker) hasDesiredSymbols() bool {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return len(sw.desiredSymbols) > 0
 }
 
-// readLoop ist die Hauptschleife zum Lesen von WebSocket-Nachrichten und Befehlen.
-func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
-	msgCh := make(chan []byte)
+func (sw *ShardWorker) desiredSymbolsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	symbols := make([]string, 0, len(sw.desiredSymbols))
+	for symbol := range sw.desiredSymbols {
+		symbols = append(symbols, symbol)
+	}
+	return symbols
+}
+
+func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
+	msgCh := make(chan *bytes.Buffer, 256)
 	errCh := make(chan error, 1)
+	respCh := make(chan wsCommandResponse, 128)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
+	batchTicker := time.NewTicker(200 * time.Millisecond)
+	retryTicker := time.NewTicker(250 * time.Millisecond)
 	defer pingTicker.Stop()
+	defer batchTicker.Stop()
+	defer retryTicker.Stop()
 
 	go func() {
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(readIdleSec * time.Second))
-			_, message, err := conn.ReadMessage()
+			buf, err := readWSTradeMessagePooled(conn)
 			if err != nil {
 				errCh <- err
 				return
 			}
-			msgCh <- message
+			if buf == nil {
+				continue
+			}
+			msg := buf.Bytes()
+			if bytes.Contains(msg, bybitTradePongNeedle) {
+				bybitTradeReadBufPool.Put(buf)
+				continue
+			}
+			if !bytes.Contains(msg, bybitTradeTopicNeedle) {
+				var resp wsCommandResponse
+				if err := gjson.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
+					bybitTradeReadBufPool.Put(buf)
+					respCh <- resp
+					continue
+				}
+			}
+			msgCh <- buf
 		}
 	}()
 
+	pendingSubs := make([]string, 0, 128)
+	pendingUnsubs := make([]string, 0, 128)
+	inflight := make(map[string]bybitInflightCommand)
+
+	for _, symbol := range sw.desiredSymbolsSnapshot() {
+		pendingSubs = queueUniqueTopic(pendingSubs, symbol)
+	}
+
+	flushCommands := func() error {
+		chunkSize := bybitCommandChunkSize(sw.marketType)
+		if len(pendingSubs) > 0 {
+			for _, chunk := range chunkTopics(pendingSubs, chunkSize) {
+				reqID, err := sw.sendSubscription(conn, "subscribe", chunk)
+				if err != nil {
+					return err
+				}
+				inflight[reqID] = bybitInflightCommand{op: "subscribe", topics: chunk, attempt: 1, sentAt: time.Now()}
+			}
+			pendingSubs = pendingSubs[:0]
+		}
+		if len(pendingUnsubs) > 0 {
+			for _, chunk := range chunkTopics(pendingUnsubs, chunkSize) {
+				reqID, err := sw.sendSubscription(conn, "unsubscribe", chunk)
+				if err != nil {
+					return err
+				}
+				attempt := 1
+				for _, topic := range chunk {
+					for _, cmd := range inflight {
+						if cmd.op != "unsubscribe" {
+							continue
+						}
+						for _, existing := range cmd.topics {
+							if existing == topic && cmd.attempt >= attempt {
+								attempt = cmd.attempt + 1
+							}
+						}
+					}
+				}
+				inflight[reqID] = bybitInflightCommand{op: "unsubscribe", topics: chunk, attempt: attempt, sentAt: time.Now()}
+			}
+			pendingUnsubs = pendingUnsubs[:0]
+		}
+		return nil
+	}
+
 	for {
 		select {
-		case msg := <-msgCh:
-			// ... (Nachrichtenverarbeitung bleibt gleich)
+		case buf := <-msgCh:
+			msg := buf.Bytes()
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
-			if strings.Contains(string(msg), `"topic":"publicTrade.`) {
-				var wsMsg wsMsg
-				if err := json.Unmarshal(msg, &wsMsg); err != nil {
+			if bytes.Contains(msg, bybitTradeTopicNeedle) {
+				tradeMsg := bybitTradeMsgPool.Get().(*wsMsg)
+				tradeMsg.Topic = ""
+				tradeMsg.Type = ""
+				tradeMsg.Data = tradeMsg.Data[:0]
+				if err := gjson.Unmarshal(msg, tradeMsg); err != nil {
+					bybitTradeMsgPool.Put(tradeMsg)
+					bybitTradeReadBufPool.Put(buf)
 					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 					continue
 				}
-				for _, trade := range wsMsg.Data {
+				for _, trade := range tradeMsg.Data {
 					normalizedTrade, err := NormalizeTrade(trade, sw.marketType, goTimestamp, ingestNow.UnixNano())
 					if err != nil {
 						continue
 					}
 					sw.dataCh <- normalizedTrade
 				}
+				tradeMsg.Data = tradeMsg.Data[:0]
+				bybitTradeMsgPool.Put(tradeMsg)
 			}
-
+			bybitTradeReadBufPool.Put(buf)
 		case cmd := <-sw.commandCh:
-			log.Printf("[SHARD] Erhalte Befehl: %s für %v", cmd.Action, cmd.Symbols)
-			if err := sw.sendSubscription(conn, cmd.Action, cmd.Symbols); err != nil {
-				return err // Erzwinge Reconnect bei Fehler
-			}
-
-			// KORREKTUR: Schütze den Zugriff auf die Map mit einem Mutex
-			sw.mu.Lock()
-			for _, s := range cmd.Symbols {
+			for _, symbol := range cmd.Symbols {
 				if cmd.Action == "subscribe" {
-					sw.activeSymbols[s] = true
+					sw.mu.Lock()
+					sw.desiredSymbols[symbol] = true
+					_, active := sw.activeSymbols[symbol]
+					sw.mu.Unlock()
+					if !active {
+						pendingSubs = queueUniqueTopic(pendingSubs, symbol)
+					}
 				} else {
-					delete(sw.activeSymbols, s)
+					sw.mu.Lock()
+					_, hadDesired := sw.desiredSymbols[symbol]
+					_, active := sw.activeSymbols[symbol]
+					delete(sw.desiredSymbols, symbol)
+					sw.mu.Unlock()
+					if hadDesired || active {
+						pendingUnsubs = queueUniqueTopic(pendingUnsubs, symbol)
+					}
+				}
+			}
+		case resp := <-respCh:
+			cmd, ok := inflight[resp.ReqID]
+			if !ok {
+				continue
+			}
+			delete(inflight, resp.ReqID)
+			if !resp.Success {
+				if cmd.op == "unsubscribe" && cmd.attempt < 4 {
+					log.Printf("[SHARD-ERROR] unsubscribe nack req_id=%s attempt=%d ret_msg=%q retrying", resp.ReqID, cmd.attempt, resp.RetMsg)
+					for _, topic := range cmd.topics {
+						pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+					}
+					continue
+				}
+				sw.emitStatusForSymbols("stream_unsubscribe_failed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+				sw.emitStatusForSymbols("stream_force_closed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+				return fmt.Errorf("bybit command nack op=%s req_id=%s ret_msg=%q", cmd.op, resp.ReqID, resp.RetMsg)
+			}
+			sw.mu.Lock()
+			switch cmd.op {
+			case "subscribe":
+				for _, symbol := range cmd.topics {
+					sw.activeSymbols[symbol] = true
+					if !sw.desiredSymbols[symbol] {
+						pendingUnsubs = queueUniqueTopic(pendingUnsubs, symbol)
+					}
+				}
+			case "unsubscribe":
+				for _, symbol := range cmd.topics {
+					delete(sw.activeSymbols, symbol)
 				}
 			}
 			sw.mu.Unlock()
-
+		case <-batchTicker.C:
+			if err := flushCommands(); err != nil {
+				return err
+			}
+		case <-retryTicker.C:
+			now := time.Now()
+			for reqID, cmd := range inflight {
+				if cmd.op != "unsubscribe" {
+					continue
+				}
+				if now.Sub(cmd.sentAt) < nextBybitRetryDelay(cmd.attempt) {
+					continue
+				}
+				delete(inflight, reqID)
+				if cmd.attempt >= 4 {
+					sw.emitStatusForSymbols("stream_unsubscribe_failed", cmd.topics, "unsubscribe_ack_timeout", cmd.attempt, "")
+					sw.emitStatusForSymbols("stream_force_closed", cmd.topics, "unsubscribe_ack_timeout", cmd.attempt, "")
+					return fmt.Errorf("bybit unsubscribe ack timeout for %v after %d attempts", cmd.topics, cmd.attempt)
+				}
+				log.Printf("[SHARD-ERROR] unsubscribe ack timeout for %v attempt=%d retrying", cmd.topics, cmd.attempt)
+				for _, topic := range cmd.topics {
+					pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+				}
+			}
 		case <-pingTicker.C:
 			if err := conn.WriteJSON(map[string]string{"op": "ping"}); err != nil {
 				return err
@@ -219,4 +328,90 @@ func (sw *ShardWorker) readLoop(conn *websocket.Conn) error {
 			return nil
 		}
 	}
+}
+
+func (sw *ShardWorker) emitStatusForSymbols(eventType string, symbols []string, reason string, attempt int, message string) {
+	if sw.statusCh == nil {
+		sw.recordStatus(eventType, symbols, reason, attempt, message)
+		return
+	}
+
+	targets := symbols
+	if len(targets) == 0 {
+		sw.mu.Lock()
+		targets = make([]string, 0, len(sw.desiredSymbols))
+		for symbol := range sw.desiredSymbols {
+			targets = append(targets, symbol)
+		}
+		sw.mu.Unlock()
+	}
+
+	for _, symbol := range targets {
+		sw.statusCh <- &shared_types.StreamStatusEvent{
+			Type:       eventType,
+			Exchange:   "bybit",
+			MarketType: sw.marketType,
+			DataType:   "trades",
+			Symbol:     TranslateSymbolFromExchange(symbol, sw.marketType),
+			Reason:     reason,
+			Attempt:    attempt,
+			Message:    message,
+			Timestamp:  time.Now().UnixMilli(),
+		}
+	}
+	sw.recordStatus(eventType, targets, reason, attempt, message)
+}
+
+func (sw *ShardWorker) recordStatus(eventType string, symbols []string, reason string, attempt int, message string) {
+	switch eventType {
+	case "stream_reconnecting":
+		metrics.RecordStreamReconnect("bybit", sw.marketType, "trades", reason)
+	case "stream_restored":
+		metrics.RecordStreamRestoreSuccess("bybit", sw.marketType, "trades")
+	case "stream_unsubscribe_failed":
+		metrics.RecordUnsubscribeFailure("bybit", sw.marketType, "trades", reason)
+	case "stream_force_closed":
+		metrics.RecordForcedShardRecycle("bybit", sw.marketType, "trades", reason)
+	}
+	metrics.LogStreamLifecycle(eventType, "bybit", fmt.Sprintf("%p", sw), sw.marketType, "trades", symbols, attempt, reason, message)
+}
+
+func (sw *ShardWorker) sendSubscription(conn *websocket.Conn, op string, symbols []string) (string, error) {
+	if len(symbols) == 0 {
+		return "", nil
+	}
+	log.Printf("[SHARD-SEND] Sende '%s' fuer %d Symbole", op, len(symbols))
+	if op == "unsubscribe" {
+		metrics.RecordUnsubscribeAttempt("bybit", sw.marketType, "trades", len(symbols))
+	}
+	args := make([]string, len(symbols))
+	for i, s := range symbols {
+		args[i] = fmt.Sprintf("publicTrade.%s", s)
+	}
+	reqID := strconv.FormatUint(sw.requestID.Add(1), 10)
+	msg := bybitCommandRequest{Op: op, Args: args, ReqID: reqID}
+	if err := conn.WriteJSON(msg); err != nil {
+		log.Printf("[SHARD-SEND-ERROR] Fehler beim Senden von '%s': %v", op, err)
+		return "", err
+	}
+	return reqID, nil
+}
+
+func readWSTradeMessagePooled(conn *websocket.Conn) (*bytes.Buffer, error) {
+	msgType, r, err := conn.NextReader()
+	if err != nil {
+		return nil, err
+	}
+	if msgType != websocket.TextMessage {
+		return nil, nil
+	}
+
+	buf := bybitTradeReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(r)
+	if err != nil {
+		bybitTradeReadBufPool.Put(buf)
+		return nil, err
+	}
+	return buf, nil
 }

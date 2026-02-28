@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"os"
@@ -22,7 +23,29 @@ const (
 	HeaderJSON     = "J"
 	HeaderTradeBin = "T"
 	HeaderOBBin    = "O"
+	p2LatestMax    = 200000
 )
+
+var (
+	headerTradeBinFrame = []byte(HeaderTradeBin)
+	headerOBBinFrame    = []byte(HeaderOBBin)
+	emptyFrame          = []byte{}
+	msgpackCtxPool      = sync.Pool{
+		New: func() any {
+			buf := &bytes.Buffer{}
+			buf.Grow(8 * 1024)
+			return &msgpackEncoderCtx{
+				buf: buf,
+				enc: msgpack.NewEncoder(buf),
+			}
+		},
+	}
+)
+
+type msgpackEncoderCtx struct {
+	buf *bytes.Buffer
+	enc *msgpack.Encoder
+}
 
 type Client struct {
 	ID       []byte
@@ -33,7 +56,35 @@ type Client struct {
 type outboundEnvelope struct {
 	msg         zmq4.Msg
 	metricType  string
+	ingestNano  int64
 	ingestNanos []int64
+	priority    sendPriority
+	p2Key       p2LatestKey
+}
+
+type sendPriority uint8
+
+const (
+	priorityP1 sendPriority = iota + 1
+	priorityP2
+)
+
+type perEncodingOrderBookCache struct {
+	jsonByOB    map[*shared_types.OrderBookUpdate][]byte
+	msgpackByOB map[*shared_types.OrderBookUpdate][]byte
+}
+
+type p2LatestKey struct {
+	clientID   string
+	exchange   string
+	marketType string
+	symbol     string
+}
+
+type obBatchLatestKey struct {
+	exchange   string
+	marketType string
+	symbol     string
 }
 
 type ClientManager struct {
@@ -41,8 +92,11 @@ type ClientManager struct {
 	clients        map[string]*Client
 	clientsMu      sync.RWMutex
 	requestCh      chan<- *shared_types.ClientRequest
+	StatusCh       chan *shared_types.StreamStatusEvent
 	DistributionCh chan *DistributionMessage
-	sendCh         chan outboundEnvelope
+	sendChP1       chan outboundEnvelope
+	p2Mu           sync.Mutex
+	p2Latest       map[p2LatestKey]outboundEnvelope
 	bindAddress    string
 }
 
@@ -83,8 +137,10 @@ func NewClientManager(requestCh chan<- *shared_types.ClientRequest) *ClientManag
 		socket:         socket,
 		clients:        make(map[string]*Client),
 		requestCh:      requestCh,
+		StatusCh:       make(chan *shared_types.StreamStatusEvent, 1024),
 		DistributionCh: make(chan *DistributionMessage, 10000),
-		sendCh:         make(chan outboundEnvelope, 4096),
+		sendChP1:       make(chan outboundEnvelope, 4096),
+		p2Latest:       make(map[p2LatestKey]outboundEnvelope, 4096),
 		bindAddress:    bindAddr,
 	}
 }
@@ -127,79 +183,15 @@ func (cm *ClientManager) readLoop() {
 
 func (cm *ClientManager) distributionLoop() {
 	for msg := range cm.DistributionCh {
-		var jsonCache []byte
-		var msgpackCache []byte
-
-		metricType := metrics.TypeOBUpdate
-		msgTypeHeader := HeaderOBBin
-		ingestNanos := make([]int64, 0)
-
 		switch payload := msg.RawPayload.(type) {
 		case []*shared_types.TradeUpdate:
-			msgTypeHeader = HeaderTradeBin
-			metricType = metrics.TypeTrade
-			ingestNanos = make([]int64, 0, len(payload))
-			for _, t := range payload {
-				if t != nil && t.IngestUnixNano > 0 {
-					ingestNanos = append(ingestNanos, t.IngestUnixNano)
-				}
-			}
+			cm.distributeTradeBatch(msg.ClientIDs, payload)
 		case []*shared_types.OrderBookUpdate:
-			if len(payload) > 0 && payload[0] != nil && payload[0].UpdateType == metrics.TypeOBSnapshot {
-				metricType = metrics.TypeOBSnapshot
-			}
-			ingestNanos = make([]int64, 0, len(payload))
-			for _, ob := range payload {
-				if ob != nil {
-					if ob.UpdateType == metrics.TypeOBSnapshot {
-						metricType = metrics.TypeOBSnapshot
-					}
-					if ob.IngestUnixNano > 0 {
-						ingestNanos = append(ingestNanos, ob.IngestUnixNano)
-					}
-				}
-			}
+			cm.distributeOrderBookBatch(msg.ClientIDs, payload)
+		case *shared_types.StreamStatusEvent:
+			cm.distributeStatusEvent(msg.ClientIDs, payload)
 		default:
 			continue
-		}
-
-		for _, clientID := range msg.ClientIDs {
-			clientIDStr := string(clientID)
-
-			cm.clientsMu.RLock()
-			client, exists := cm.clients[clientIDStr]
-			encoding := ""
-			if exists {
-				encoding = client.Encoding
-			}
-			cm.clientsMu.RUnlock()
-			if !exists {
-				continue
-			}
-
-			if encoding == "msgpack" || encoding == "binary" {
-				if msgpackCache == nil {
-					var err error
-					msgpackCache, err = msgpack.Marshal(msg.RawPayload)
-					if err != nil {
-						metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
-						log.Printf("[MSGPACK ERROR] %v", err)
-						continue
-					}
-				}
-				cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(clientID, []byte(msgTypeHeader), msgpackCache), metricType: metricType, ingestNanos: ingestNanos})
-			} else {
-				if jsonCache == nil {
-					var err error
-					jsonCache, err = json.Marshal(msg.RawPayload)
-					if err != nil {
-						metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
-						continue
-					}
-				}
-				cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(clientID, jsonCache), metricType: metricType, ingestNanos: ingestNanos})
-			}
-			metrics.RecordPublish(metricType)
 		}
 
 		if msg.OnComplete != nil {
@@ -208,16 +200,323 @@ func (cm *ClientManager) distributionLoop() {
 	}
 }
 
-func (cm *ClientManager) writeLoop() {
-	for outbound := range cm.sendCh {
-		now := time.Now()
-		if err := cm.socket.Send(outbound.msg); err != nil {
-			metrics.RecordDropped(metrics.ReasonInternalErr, outbound.metricType)
+func (cm *ClientManager) distributeTradeBatch(clientIDs [][]byte, trades []*shared_types.TradeUpdate) {
+	if len(trades) == 0 {
+		return
+	}
+
+	ingestNanos := make([]int64, 0, len(trades))
+	for _, t := range trades {
+		if t != nil && t.IngestUnixNano > 0 {
+			ingestNanos = append(ingestNanos, t.IngestUnixNano)
+		}
+	}
+
+	var jsonCache []byte
+	var msgpackCache []byte
+	for _, clientID := range clientIDs {
+		clientIDStr := string(clientID)
+		encoding, exists := cm.clientEncoding(clientIDStr)
+		if !exists {
 			continue
 		}
-		for _, ingest := range outbound.ingestNanos {
-			if ingest > 0 {
-				metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, ingest)).Seconds())
+
+		msg, ok := cm.encodePayloadForClient(clientID, encoding, HeaderTradeBin, trades, &jsonCache, &msgpackCache, metrics.TypeTrade)
+		if !ok {
+			continue
+		}
+		cm.enqueueSocketSend(outboundEnvelope{
+			msg:         msg,
+			metricType:  metrics.TypeTrade,
+			ingestNanos: ingestNanos,
+			priority:    priorityP1,
+		})
+	}
+}
+
+func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []*shared_types.OrderBookUpdate) {
+	if len(updates) == 0 {
+		return
+	}
+
+	// P2 messages are latest-only by design. Collapse to latest per symbol in-batch
+	// before doing any client-specific encoding work.
+	p1Updates := make([]*shared_types.OrderBookUpdate, 0, len(updates))
+	p2LatestBySymbol := make(map[obBatchLatestKey]*shared_types.OrderBookUpdate, len(updates))
+	p2Order := make([]obBatchLatestKey, 0, len(updates))
+
+	for _, ob := range updates {
+		if ob == nil {
+			continue
+		}
+		if classifyOrderBookPriority(ob) == priorityP1 {
+			p1Updates = append(p1Updates, ob)
+			continue
+		}
+
+		key := obBatchLatestKey{
+			exchange:   ob.Exchange,
+			marketType: ob.MarketType,
+			symbol:     ob.Symbol,
+		}
+		if _, exists := p2LatestBySymbol[key]; !exists {
+			p2Order = append(p2Order, key)
+		}
+		p2LatestBySymbol[key] = ob
+	}
+
+	if len(p1Updates) == 0 && len(p2Order) == 0 {
+		return
+	}
+
+	p1IngestNanos := make([]int64, 0, len(p1Updates))
+	for _, ob := range p1Updates {
+		if ob != nil && ob.IngestUnixNano > 0 {
+			p1IngestNanos = append(p1IngestNanos, ob.IngestUnixNano)
+		}
+	}
+
+	// Reuse serialized single-update envelopes across clients in this batch.
+	// This removes repeated msgpack/json marshal for identical OB pointers.
+	cacheSize := len(p1Updates) + len(p2Order)
+	encodedCache := perEncodingOrderBookCache{
+		jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+		msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, cacheSize),
+	}
+	var p1JSONCache []byte
+	var p1MsgpackCache []byte
+
+	for _, clientID := range clientIDs {
+		clientIDStr := string(clientID)
+		encoding, exists := cm.clientEncoding(clientIDStr)
+		if !exists {
+			continue
+		}
+
+		if len(p1Updates) > 0 {
+			msg, ok := cm.encodePayloadForClient(
+				clientID,
+				encoding,
+				HeaderOBBin,
+				p1Updates,
+				&p1JSONCache,
+				&p1MsgpackCache,
+				metrics.TypeOBUpdate,
+			)
+			if ok {
+				cm.enqueueSocketSend(outboundEnvelope{
+					msg:         msg,
+					metricType:  metrics.TypeOBUpdate,
+					ingestNanos: p1IngestNanos,
+					priority:    priorityP1,
+				})
+			}
+		}
+
+		for _, key := range p2Order {
+			ob := p2LatestBySymbol[key]
+			if ob == nil {
+				continue
+			}
+			metricType := orderBookEnvelopeType(ob)
+			cm.enqueueOrderBookEnvelope(clientID, clientIDStr, encoding, ob, metricType, priorityP2, &encodedCache)
+		}
+	}
+}
+
+func (cm *ClientManager) enqueueOrderBookEnvelope(
+	clientID []byte,
+	clientIDStr string,
+	encoding string,
+	ob *shared_types.OrderBookUpdate,
+	metricType string,
+	priority sendPriority,
+	encodedCache *perEncodingOrderBookCache,
+) {
+	if ob == nil {
+		return
+	}
+	msg, ok := cm.encodeSingleOrderBookForClient(clientID, encoding, ob, metricType, encodedCache)
+	if !ok {
+		return
+	}
+
+	var p2Key p2LatestKey
+	if priority == priorityP2 {
+		p2Key = p2LatestKey{
+			clientID:   clientIDStr,
+			exchange:   ob.Exchange,
+			marketType: ob.MarketType,
+			symbol:     ob.Symbol,
+		}
+	}
+
+	cm.enqueueSocketSend(outboundEnvelope{
+		msg:        msg,
+		metricType: metricType,
+		ingestNano: ob.IngestUnixNano,
+		priority:   priority,
+		p2Key:      p2Key,
+	})
+}
+
+func (cm *ClientManager) clientEncoding(clientID string) (string, bool) {
+	cm.clientsMu.RLock()
+	client, exists := cm.clients[clientID]
+	encoding := ""
+	if exists {
+		encoding = client.Encoding
+	}
+	cm.clientsMu.RUnlock()
+	return encoding, exists
+}
+
+func (cm *ClientManager) encodePayloadForClient(
+	clientID []byte,
+	encoding string,
+	msgTypeHeader string,
+	payload any,
+	jsonCache *[]byte,
+	msgpackCache *[]byte,
+	metricType string,
+) (zmq4.Msg, bool) {
+	if encoding == "msgpack" || encoding == "binary" {
+		if *msgpackCache == nil {
+			binPayload, err := marshalMsgpack(payload)
+			if err != nil {
+				metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
+				log.Printf("[MSGPACK ERROR] %v", err)
+				return zmq4.Msg{}, false
+			}
+			*msgpackCache = binPayload
+		}
+		switch msgTypeHeader {
+		case HeaderTradeBin:
+			return zmq4.NewMsgFrom(clientID, headerTradeBinFrame, *msgpackCache), true
+		case HeaderOBBin:
+			return zmq4.NewMsgFrom(clientID, headerOBBinFrame, *msgpackCache), true
+		}
+		return zmq4.NewMsgFrom(clientID, []byte(msgTypeHeader), *msgpackCache), true
+	}
+
+	if *jsonCache == nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
+			return zmq4.Msg{}, false
+		}
+		*jsonCache = raw
+	}
+	return zmq4.NewMsgFrom(clientID, *jsonCache), true
+}
+
+func (cm *ClientManager) encodeSingleOrderBookForClient(
+	clientID []byte,
+	encoding string,
+	ob *shared_types.OrderBookUpdate,
+	metricType string,
+	cache *perEncodingOrderBookCache,
+) (zmq4.Msg, bool) {
+	var payload []byte
+	var ok bool
+
+	if encoding == "msgpack" || encoding == "binary" {
+		payload, ok = cache.msgpackByOB[ob]
+		if !ok {
+			binPayload, err := marshalSingleOBAsMsgpackArray(ob)
+			if err != nil {
+				metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
+				log.Printf("[MSGPACK ERROR] %v", err)
+				return zmq4.Msg{}, false
+			}
+			cache.msgpackByOB[ob] = binPayload
+			payload = binPayload
+		}
+		return zmq4.NewMsgFrom(clientID, headerOBBinFrame, payload), true
+	}
+
+	payload, ok = cache.jsonByOB[ob]
+	if !ok {
+		single := [1]*shared_types.OrderBookUpdate{ob}
+		raw, err := json.Marshal(single[:])
+		if err != nil {
+			metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
+			return zmq4.Msg{}, false
+		}
+		cache.jsonByOB[ob] = raw
+		payload = raw
+	}
+	return zmq4.NewMsgFrom(clientID, payload), true
+}
+
+func orderBookEnvelopeType(ob *shared_types.OrderBookUpdate) string {
+	if ob != nil && ob.UpdateType == metrics.TypeOBSnapshot {
+		return metrics.TypeOBSnapshot
+	}
+	return metrics.TypeOBUpdate
+}
+
+func marshalMsgpack(v any) ([]byte, error) {
+	ctx := msgpackCtxPool.Get().(*msgpackEncoderCtx)
+	ctx.buf.Reset()
+	ctx.enc.ResetWriter(ctx.buf)
+	if err := ctx.enc.Encode(v); err != nil {
+		msgpackCtxPool.Put(ctx)
+		return nil, err
+	}
+	out := append([]byte(nil), ctx.buf.Bytes()...)
+	msgpackCtxPool.Put(ctx)
+	return out, nil
+}
+
+func marshalSingleOBAsMsgpackArray(ob *shared_types.OrderBookUpdate) ([]byte, error) {
+	ctx := msgpackCtxPool.Get().(*msgpackEncoderCtx)
+	ctx.buf.Reset()
+	ctx.enc.ResetWriter(ctx.buf)
+	if err := ctx.enc.EncodeArrayLen(1); err != nil {
+		msgpackCtxPool.Put(ctx)
+		return nil, err
+	}
+	if err := ctx.enc.Encode(ob); err != nil {
+		msgpackCtxPool.Put(ctx)
+		return nil, err
+	}
+	out := append([]byte(nil), ctx.buf.Bytes()...)
+	msgpackCtxPool.Put(ctx)
+	return out, nil
+}
+
+func classifyOrderBookPriority(ob *shared_types.OrderBookUpdate) sendPriority {
+	if ob == nil {
+		return priorityP2
+	}
+	if ob.UpdateType == metrics.TypeOBSnapshot {
+		return priorityP2
+	}
+	if len(ob.Bids) <= 1 && len(ob.Asks) <= 1 {
+		return priorityP1
+	}
+	return priorityP2
+}
+
+func (cm *ClientManager) writeLoop() {
+	flushTicker := time.NewTicker(25 * time.Millisecond)
+	defer flushTicker.Stop()
+
+	for {
+		if cm.drainP1() {
+			continue
+		}
+
+		select {
+		case outbound := <-cm.sendChP1:
+			cm.sendOutbound(outbound)
+		case <-flushTicker.C:
+			if len(cm.sendChP1) > 0 {
+				continue
+			}
+			if outbound, ok := cm.popP2LatestDeterministic(); ok {
+				cm.sendOutbound(outbound)
 			}
 		}
 	}
@@ -250,7 +549,7 @@ func (cm *ClientManager) healthCheckLoop() {
 				clientsToRemove = append(clientsToRemove, client.id)
 				continue
 			}
-			cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(client.clientID, []byte{}, pingPayload), metricType: metrics.TypeTrade})
+			cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(client.clientID, emptyFrame, pingPayload), metricType: metrics.TypeTrade})
 		}
 
 		for _, id := range clientsToRemove {
@@ -339,6 +638,10 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			return
 		}
 	case "disconnect":
+		cm.clientsMu.Lock()
+		delete(cm.clients, clientIDStr)
+		cm.clientsMu.Unlock()
+		cm.dropP2ForClient(clientIDStr)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect"})
 		return
 	default:
@@ -376,10 +679,141 @@ func normalizeClientEncoding(input string) (string, bool) {
 	}
 }
 
-func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) {
+func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) bool {
+	if envelope.priority == priorityP2 {
+		return cm.enqueueP2Latest(envelope)
+	}
+
 	select {
-	case cm.sendCh <- envelope:
+	case cm.sendChP1 <- envelope:
+		return true
 	default:
 		metrics.RecordDropped(metrics.ReasonBufferFull, envelope.metricType)
+		if caller, stack, ok := logDropCallsite(envelope.metricType, metrics.ReasonBufferFull); ok {
+			log.Printf("DROP_CALLSITE type=%s reason=%s caller=%s stack=%s", envelope.metricType, metrics.ReasonBufferFull, caller, stack)
+		}
+		return false
 	}
+}
+
+func (cm *ClientManager) enqueueP2Latest(envelope outboundEnvelope) bool {
+	if envelope.p2Key.clientID == "" {
+		metrics.RecordDropped(metrics.ReasonInternalErr, envelope.metricType)
+		return false
+	}
+
+	cm.p2Mu.Lock()
+	if _, exists := cm.p2Latest[envelope.p2Key]; !exists && len(cm.p2Latest) >= p2LatestMax {
+		cm.p2Mu.Unlock()
+		metrics.RecordDropped(metrics.ReasonBufferFull, envelope.metricType)
+		if caller, stack, ok := logDropCallsite(envelope.metricType, metrics.ReasonBufferFull); ok {
+			log.Printf("DROP_CALLSITE type=%s reason=%s caller=%s stack=%s", envelope.metricType, metrics.ReasonBufferFull, caller, stack)
+		}
+		return false
+	}
+	cm.p2Latest[envelope.p2Key] = envelope
+	cm.p2Mu.Unlock()
+	return true
+}
+
+func (cm *ClientManager) popP2LatestDeterministic() (outboundEnvelope, bool) {
+	cm.p2Mu.Lock()
+	defer cm.p2Mu.Unlock()
+
+	if len(cm.p2Latest) == 0 {
+		return outboundEnvelope{}, false
+	}
+
+	var (
+		minKey p2LatestKey
+		hasKey bool
+	)
+	for key := range cm.p2Latest {
+		if !hasKey || lessP2Key(key, minKey) {
+			minKey = key
+			hasKey = true
+		}
+	}
+
+	outbound := cm.p2Latest[minKey]
+	delete(cm.p2Latest, minKey)
+	return outbound, true
+}
+
+func (cm *ClientManager) distributeStatusEvent(clientIDs [][]byte, event *shared_types.StreamStatusEvent) {
+	if event == nil || len(clientIDs) == 0 {
+		return
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		metrics.RecordDropped(metrics.ReasonInternalErr, metrics.TypeTrade)
+		return
+	}
+	for _, clientID := range clientIDs {
+		cm.enqueueSocketSend(outboundEnvelope{
+			msg:        zmq4.NewMsgFrom(clientID, []byte(HeaderJSON), payload),
+			metricType: metrics.TypeTrade,
+			priority:   priorityP1,
+		})
+	}
+}
+
+func (cm *ClientManager) dropP2ForClient(clientID string) {
+	cm.p2Mu.Lock()
+	defer cm.p2Mu.Unlock()
+	for key := range cm.p2Latest {
+		if key.clientID == clientID {
+			delete(cm.p2Latest, key)
+		}
+	}
+}
+
+func lessP2Key(a, b p2LatestKey) bool {
+	if a.clientID != b.clientID {
+		return a.clientID < b.clientID
+	}
+	if a.exchange != b.exchange {
+		return a.exchange < b.exchange
+	}
+	if a.marketType != b.marketType {
+		return a.marketType < b.marketType
+	}
+	return a.symbol < b.symbol
+}
+
+func (cm *ClientManager) drainP1() bool {
+	drained := false
+	for {
+		select {
+		case outbound := <-cm.sendChP1:
+			drained = true
+			cm.sendOutbound(outbound)
+		default:
+			return drained
+		}
+	}
+}
+
+func (cm *ClientManager) sendOutbound(outbound outboundEnvelope) {
+	now := time.Now()
+	if err := cm.socket.Send(outbound.msg); err != nil {
+		metrics.RecordDropped(metrics.ReasonInternalErr, outbound.metricType)
+		return
+	}
+	metrics.RecordPublish(outbound.metricType)
+	if outbound.ingestNano > 0 {
+		metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, outbound.ingestNano)).Seconds())
+	}
+	for _, ingest := range outbound.ingestNanos {
+		if ingest > 0 {
+			metrics.ObserveProcessing(outbound.metricType, now.Sub(time.Unix(0, ingest)).Seconds())
+		}
+	}
+}
+
+func (cm *ClientManager) SendQueueStats() (p1Len int, p1Cap int, p2Len int, p2Cap int) {
+	cm.p2Mu.Lock()
+	p2Len = len(cm.p2Latest)
+	cm.p2Mu.Unlock()
+	return len(cm.sendChP1), cap(cm.sendChP1), p2Len, p2LatestMax
 }

@@ -1,53 +1,70 @@
 package bybit
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
+	json "github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 )
 
-// localOrderbook hält den Zustand und die UpdateID
 type localOrderbook struct {
-	Bids         map[string]string
-	Asks         map[string]string
+	Bids         map[string]shared_types.OrderBookLevel
+	Asks         map[string]shared_types.OrderBookLevel
 	LastUpdateID int64
 }
 
-// OrderBookShardWorker verwaltet eine einzelne WebSocket-Verbindung
 type OrderBookShardWorker struct {
-	wsURL               string
-	marketType          string
-	commandCh           chan ManagerCommand
-	stopCh              <-chan struct{}
-	dataCh              chan<- *shared_types.OrderBookUpdate
-	wg                  *sync.WaitGroup
-	mu                  sync.Mutex
-	conn                *websocket.Conn
-	orderbooks          map[string]*localOrderbook
-	activeSubscriptions map[string]int // topic -> depth
+	wsURL                string
+	marketType           string
+	commandCh            chan ManagerCommand
+	stopCh               <-chan struct{}
+	dataCh               chan<- *shared_types.OrderBookUpdate
+	statusCh             chan<- *shared_types.StreamStatusEvent
+	wg                   *sync.WaitGroup
+	mu                   sync.Mutex
+	conn                 *websocket.Conn
+	orderbooks           map[string]*localOrderbook
+	desiredSubscriptions map[string]int
+	activeSubscriptions  map[string]int
+	topicSymbols         map[string]string
+	requestID            atomic.Uint64
 }
 
-func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *OrderBookShardWorker {
+var (
+	bybitOrderBookTopicNeedle = []byte(`"topic":"orderbook.`)
+	bybitPongNeedle           = []byte(`"op":"pong"`)
+	bybitReadBufPool          = sync.Pool{New: func() any { buf := &bytes.Buffer{}; buf.Grow(16 * 1024); return buf }}
+)
+
+type incomingOBMessage struct {
+	payload        []byte
+	ingestUnixNano int64
+}
+
+func NewOrderBookShardWorker(wsURL, marketType string, stopCh <-chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *OrderBookShardWorker {
 	return &OrderBookShardWorker{
-		wsURL:               wsURL,
-		marketType:          marketType,
-		commandCh:           make(chan ManagerCommand, 50),
-		stopCh:              stopCh,
-		dataCh:              dataCh,
-		wg:                  wg,
-		orderbooks:          make(map[string]*localOrderbook),
-		activeSubscriptions: make(map[string]int),
+		wsURL:                wsURL,
+		marketType:           marketType,
+		commandCh:            make(chan ManagerCommand, 50),
+		stopCh:               stopCh,
+		dataCh:               dataCh,
+		statusCh:             statusCh,
+		wg:                   wg,
+		orderbooks:           make(map[string]*localOrderbook),
+		desiredSubscriptions: make(map[string]int),
+		activeSubscriptions:  make(map[string]int),
+		topicSymbols:         make(map[string]string),
 	}
 }
 
@@ -66,150 +83,334 @@ func getBybitDepth(requestedDepth int) int {
 
 func (sw *OrderBookShardWorker) Run() {
 	defer sw.wg.Done()
-	log.Printf("[BYBIT-OB-SHARD] Starte OrderBook Worker für %s", sw.marketType)
-	var err error
+	log.Printf("[BYBIT-OB-SHARD] Starte OrderBook Worker fuer %s", sw.marketType)
+
+	var reconnectAttempts int
 	for {
-		sw.conn, _, err = websocket.DefaultDialer.Dial(sw.wsURL, nil)
-		if err != nil {
-			log.Printf("[BYBIT-OB-SHARD-ERROR] Connect fehlgeschlagen: %v. Versuche in 5s erneut.", err)
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		log.Printf("[BYBIT-OB-SHARD] Erfolgreich verbunden mit %s", sw.wsURL)
-		sw.resubscribeAll()
-		ctx, cancel := context.WithCancel(context.Background())
-		go sw.readLoop(ctx)
-		sw.writeLoop(ctx)
-		cancel()
-		sw.conn.Close()
-		log.Printf("[BYBIT-OB-SHARD] Verbindung getrennt. Versuche Reconnect...")
 		select {
 		case <-sw.stopCh:
 			log.Printf("[BYBIT-OB-SHARD] Worker wird beendet.")
 			return
 		default:
 		}
+
+		if reconnectAttempts > 0 {
+			sleepDur := time.Second * time.Duration(reconnectAttempts*2)
+			if sleepDur > 30*time.Second {
+				sleepDur = 30 * time.Second
+			}
+			time.Sleep(sleepDur)
+		}
+
+		conn, _, err := websocket.DefaultDialer.Dial(sw.wsURL, nil)
+		if err != nil {
+			log.Printf("[BYBIT-OB-SHARD-ERROR] Connect fehlgeschlagen: %v. Versuche in 5s erneut.", err)
+			sw.emitStatusForTopics("stream_reconnecting", nil, "connect_failed", reconnectAttempts+1, err.Error())
+			reconnectAttempts++
+			continue
+		}
+		sw.conn = conn
+		log.Printf("[BYBIT-OB-SHARD] Erfolgreich verbunden mit %s", sw.wsURL)
+		if reconnectAttempts > 0 {
+			sw.emitStatusForTopics("stream_restored", nil, "", reconnectAttempts, "")
+		}
+		if err := sw.runSession(context.Background()); err != nil {
+			sw.emitStatusForTopics("stream_reconnecting", nil, "read_loop_exit", reconnectAttempts+1, err.Error())
+			log.Printf("[BYBIT-OB-SHARD] Verbindung getrennt. Versuche Reconnect... (%v)", err)
+		}
+		conn.Close()
+		if !sw.hasDesiredSubscriptions() {
+			log.Printf("[BYBIT-OB-SHARD] Worker wird beendet.")
+			return
+		}
+		reconnectAttempts++
 	}
 }
 
-func (sw *OrderBookShardWorker) writeLoop(ctx context.Context) {
+func (sw *OrderBookShardWorker) hasDesiredSubscriptions() bool {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return len(sw.desiredSubscriptions) > 0
+}
+
+func (sw *OrderBookShardWorker) desiredTopicsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	topics := make([]string, 0, len(sw.desiredSubscriptions))
+	for topic := range sw.desiredSubscriptions {
+		topics = append(topics, topic)
+	}
+	return topics
+}
+
+func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
+	msgCh := make(chan incomingOBMessage, 250)
+	errCh := make(chan error, 1)
+	respCh := make(chan wsCommandResponse, 128)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
+	batchTicker := time.NewTicker(200 * time.Millisecond)
+	retryTicker := time.NewTicker(250 * time.Millisecond)
 	defer pingTicker.Stop()
+	defer batchTicker.Stop()
+	defer retryTicker.Stop()
+
+	go func() {
+		defer close(msgCh)
+		for {
+			_, buf, err := readWSMessagePooled(sw.conn)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if buf == nil {
+				continue
+			}
+			msg := buf.Bytes()
+			if bytes.Contains(msg, bybitPongNeedle) {
+				bybitReadBufPool.Put(buf)
+				continue
+			}
+			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
+				var resp wsCommandResponse
+				if err := json.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
+					bybitReadBufPool.Put(buf)
+					respCh <- resp
+					continue
+				}
+			}
+			msgCh <- incomingOBMessage{payload: msg, ingestUnixNano: time.Now().UnixNano()}
+		}
+	}()
+
+	pendingSubs := make([]string, 0, 128)
+	pendingUnsubs := make([]string, 0, 128)
+	inflight := make(map[string]bybitInflightCommand)
+
+	for _, topic := range sw.desiredTopicsSnapshot() {
+		pendingSubs = queueUniqueTopic(pendingSubs, topic)
+	}
+
+	flushCommands := func() error {
+		chunkSize := bybitCommandChunkSize(sw.marketType)
+		if len(pendingSubs) > 0 {
+			for _, chunk := range chunkTopics(pendingSubs, chunkSize) {
+				reqID, err := sw.sendSubscription("subscribe", chunk)
+				if err != nil {
+					return err
+				}
+				inflight[reqID] = bybitInflightCommand{op: "subscribe", topics: chunk, attempt: 1, sentAt: time.Now()}
+			}
+			pendingSubs = pendingSubs[:0]
+		}
+		if len(pendingUnsubs) > 0 {
+			for _, chunk := range chunkTopics(pendingUnsubs, chunkSize) {
+				reqID, err := sw.sendSubscription("unsubscribe", chunk)
+				if err != nil {
+					return err
+				}
+				attempt := 1
+				for _, topic := range chunk {
+					for _, cmd := range inflight {
+						if cmd.op != "unsubscribe" {
+							continue
+						}
+						for _, existing := range cmd.topics {
+							if existing == topic && cmd.attempt >= attempt {
+								attempt = cmd.attempt + 1
+							}
+						}
+					}
+				}
+				inflight[reqID] = bybitInflightCommand{op: "unsubscribe", topics: chunk, attempt: attempt, sentAt: time.Now()}
+			}
+			pendingUnsubs = pendingUnsubs[:0]
+		}
+		return nil
+	}
+
 	for {
 		select {
+		case incoming, ok := <-msgCh:
+			if !ok {
+				return <-errCh
+			}
+			sw.handleIncomingMessage(incoming.payload, incoming.ingestUnixNano)
 		case cmd := <-sw.commandCh:
 			depth := getBybitDepth(cmd.Depth)
 			topic := fmt.Sprintf("orderbook.%d.%s", depth, cmd.Symbol)
-			sw.mu.Lock()
+			translated := TranslateSymbolFromExchange(cmd.Symbol, sw.marketType)
 			if cmd.Action == "subscribe" {
-				sw.activeSubscriptions[topic] = cmd.Depth
+				sw.mu.Lock()
+				sw.desiredSubscriptions[topic] = cmd.Depth
+				sw.topicSymbols[topic] = translated
+				_, active := sw.activeSubscriptions[topic]
+				sw.mu.Unlock()
+				if !active {
+					pendingSubs = queueUniqueTopic(pendingSubs, topic)
+				}
 			} else {
-				delete(sw.activeSubscriptions, topic)
-				// WICHTIG: Hier muss der Key der Topic sein, nicht das Symbol!
-				// Dies war ein subtiler Bug in der vorherigen Version.
+				sw.mu.Lock()
+				_, hadDesired := sw.desiredSubscriptions[topic]
+				_, active := sw.activeSubscriptions[topic]
+				delete(sw.desiredSubscriptions, topic)
 				delete(sw.orderbooks, topic)
+				sw.mu.Unlock()
+				if hadDesired || active {
+					pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+				}
+			}
+		case resp := <-respCh:
+			cmd, ok := inflight[resp.ReqID]
+			if !ok {
+				continue
+			}
+			delete(inflight, resp.ReqID)
+			if !resp.Success {
+				if cmd.op == "unsubscribe" && cmd.attempt < 4 {
+					log.Printf("[BYBIT-OB-SHARD-ERROR] unsubscribe nack req_id=%s attempt=%d ret_msg=%q retrying", resp.ReqID, cmd.attempt, resp.RetMsg)
+					for _, topic := range cmd.topics {
+						pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+					}
+					continue
+				}
+				sw.emitStatusForTopics("stream_unsubscribe_failed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+				sw.emitStatusForTopics("stream_force_closed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+				return fmt.Errorf("bybit ob command nack op=%s req_id=%s ret_msg=%q", cmd.op, resp.ReqID, resp.RetMsg)
+			}
+			sw.mu.Lock()
+			switch cmd.op {
+			case "subscribe":
+				for _, topic := range cmd.topics {
+					depth := sw.desiredSubscriptions[topic]
+					sw.activeSubscriptions[topic] = depth
+					if _, stillDesired := sw.desiredSubscriptions[topic]; !stillDesired {
+						pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+					}
+				}
+			case "unsubscribe":
+				for _, topic := range cmd.topics {
+					delete(sw.activeSubscriptions, topic)
+					delete(sw.orderbooks, topic)
+					if _, stillDesired := sw.desiredSubscriptions[topic]; !stillDesired {
+						delete(sw.topicSymbols, topic)
+					}
+				}
 			}
 			sw.mu.Unlock()
-			sw.sendSubscription(cmd.Action, []string{topic})
+		case <-batchTicker.C:
+			if err := flushCommands(); err != nil {
+				return err
+			}
+		case <-retryTicker.C:
+			now := time.Now()
+			for reqID, cmd := range inflight {
+				if cmd.op != "unsubscribe" {
+					continue
+				}
+				if now.Sub(cmd.sentAt) < nextBybitRetryDelay(cmd.attempt) {
+					continue
+				}
+				delete(inflight, reqID)
+				if cmd.attempt >= 4 {
+					sw.emitStatusForTopics("stream_unsubscribe_failed", cmd.topics, "unsubscribe_ack_timeout", cmd.attempt, "")
+					sw.emitStatusForTopics("stream_force_closed", cmd.topics, "unsubscribe_ack_timeout", cmd.attempt, "")
+					return fmt.Errorf("bybit ob unsubscribe ack timeout for %v after %d attempts", cmd.topics, cmd.attempt)
+				}
+				log.Printf("[BYBIT-OB-SHARD-ERROR] unsubscribe ack timeout for %v attempt=%d retrying", cmd.topics, cmd.attempt)
+				for _, topic := range cmd.topics {
+					pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+				}
+			}
 		case <-pingTicker.C:
 			if err := sw.conn.WriteJSON(map[string]string{"op": "ping"}); err != nil {
-				log.Printf("[BYBIT-OB-SHARD-ERROR] Ping fehlgeschlagen: %v", err)
-				return
+				return err
 			}
+		case err := <-errCh:
+			return err
 		case <-ctx.Done():
-			return
+			return nil
 		case <-sw.stopCh:
-			return
+			return nil
 		}
 	}
 }
 
-func (sw *OrderBookShardWorker) readLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			_, msg, err := sw.conn.ReadMessage()
-			if err != nil {
-				log.Printf("[BYBIT-OB-SHARD-ERROR] Fehler beim Lesen: %v", err)
-				return
-			}
-			ingestUnixNano := time.Now().UnixNano()
+func (sw *OrderBookShardWorker) handleIncomingMessage(msg []byte, ingestUnixNano int64) {
+	if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
+		return
+	}
 
-			// +++ LOGGING 1 +++
-			// Wir protokollieren die rohe Nachricht, aber nur, wenn es ein Orderbuch ist.
-			if strings.Contains(string(msg), `"topic":"orderbook.`) {
-				// log.Printf("[BYBIT-OB-SHARD-RECV] Rohe WS-Nachricht: %s", string(msg))
-			}
+	var obMsg wsOrderBookMsg
+	if err := json.Unmarshal(msg, &obMsg); err != nil {
+		metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
+		return
+	}
+	if obMsg.Topic == "" {
+		return
+	}
 
-			if strings.Contains(string(msg), `"op":"pong"`) {
-				continue
-			}
+	goTimestamp := ingestUnixNano / int64(time.Millisecond)
+	var updateToSend *shared_types.OrderBookUpdate
 
-			var obMsg wsOrderBookMsg
-			if err := json.Unmarshal(msg, &obMsg); err != nil {
-				metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeOBUpdate)
-				continue
-			}
+	sw.mu.Lock()
+	if obMsg.Type == "snapshot" {
+		updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp, goTimestamp, ingestUnixNano)
+	} else if obMsg.Type == "delta" {
+		updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, goTimestamp, ingestUnixNano)
+	}
+	sw.mu.Unlock()
 
-			if obMsg.Topic == "" {
-				continue
-			}
-
-			var updateToSend *shared_types.OrderBookUpdate
-
-			sw.mu.Lock()
-			if obMsg.Type == "snapshot" {
-				updateToSend = sw.handleSmartSnapshot(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
-			} else if obMsg.Type == "delta" {
-				updateToSend = sw.handleDelta(obMsg.Topic, obMsg.Data, obMsg.Timestamp, ingestUnixNano)
-			}
-			sw.mu.Unlock()
-
-			if updateToSend != nil {
-				// +++ LOGGING 2 +++
-				// Wir protokollieren das normalisierte Objekt, das wir versenden.
-				// Um die Ausgabe lesbar zu halten, protokollieren wir nur die Anzahl der Bids/Asks.
-				// log.Printf("[BYBIT-OB-SHARD-SEND] Sende Update für %s: Bids=%d, Asks=%d",
-				// 	updateToSend.Symbol, len(updateToSend.Bids), len(updateToSend.Asks))
-
-				sw.dataCh <- updateToSend
-			}
-		}
+	if updateToSend != nil {
+		sw.dataCh <- updateToSend
 	}
 }
 
-// Ich habe die intelligente Snapshot-Funktion umbenannt, um sie klar zu kennzeichnen.
-func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleSmartSnapshot(topic string, data wsOrderBookData, ts int64, goTimestamp int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
-		book = &localOrderbook{
-			Bids: make(map[string]string),
-			Asks: make(map[string]string),
-		}
+		book = &localOrderbook{Bids: make(map[string]shared_types.OrderBookLevel), Asks: make(map[string]shared_types.OrderBookLevel)}
 		sw.orderbooks[topic] = book
 	}
 	book.LastUpdateID = data.UpdateID
-
 	if len(data.Bids) > 0 {
-		book.Bids = make(map[string]string)
+		clear(book.Bids)
 		for _, level := range data.Bids {
-			book.Bids[level[0]] = level[1]
+			if level[0] == "" || level[1] == "" {
+				continue
+			}
+			price, err := strconv.ParseFloat(level[0], 64)
+			if err != nil {
+				continue
+			}
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			book.Bids[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
 	if len(data.Asks) > 0 {
-		book.Asks = make(map[string]string)
+		clear(book.Asks)
 		for _, level := range data.Asks {
-			book.Asks[level[0]] = level[1]
+			if level[0] == "" || level[1] == "" {
+				continue
+			}
+			price, err := strconv.ParseFloat(level[0], 64)
+			if err != nil {
+				continue
+			}
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
-	// ts weitergeben
-	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBSnapshot)
+	return sw.createUpdate(topic, ts, goTimestamp, ingestUnixNano, metrics.TypeOBSnapshot)
 }
 
-// FIX: Parameter 'ts int64' hinzugefügt
-func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, ts int64, goTimestamp int64, ingestUnixNano int64) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
@@ -221,89 +422,219 @@ func (sw *OrderBookShardWorker) handleDelta(topic string, data wsOrderBookData, 
 
 	book.LastUpdateID = data.UpdateID
 	for _, level := range data.Bids {
+		if level[0] == "" || level[1] == "" {
+			continue
+		}
 		if level[1] == "0" {
 			delete(book.Bids, level[0])
 		} else {
-			book.Bids[level[0]] = level[1]
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			price := 0.0
+			if existing, ok := book.Bids[level[0]]; ok {
+				price = existing.Price
+			} else {
+				price, err = strconv.ParseFloat(level[0], 64)
+				if err != nil {
+					continue
+				}
+			}
+			book.Bids[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
 	for _, level := range data.Asks {
+		if level[0] == "" || level[1] == "" {
+			continue
+		}
 		if level[1] == "0" {
 			delete(book.Asks, level[0])
 		} else {
-			book.Asks[level[0]] = level[1]
+			amount, err := strconv.ParseFloat(level[1], 64)
+			if err != nil {
+				continue
+			}
+			price := 0.0
+			if existing, ok := book.Asks[level[0]]; ok {
+				price = existing.Price
+			} else {
+				price, err = strconv.ParseFloat(level[0], 64)
+				if err != nil {
+					continue
+				}
+			}
+			book.Asks[level[0]] = shared_types.OrderBookLevel{Price: price, Amount: amount}
 		}
 	}
-	// ts weitergeben
-	return sw.createUpdate(topic, ts, ingestUnixNano, metrics.TypeOBUpdate)
+	return sw.createUpdate(topic, ts, goTimestamp, ingestUnixNano, metrics.TypeOBUpdate)
 }
 
-func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, ingestUnixNano int64, updateType string) *shared_types.OrderBookUpdate {
+func (sw *OrderBookShardWorker) createUpdate(topic string, ts int64, goTimestamp int64, ingestUnixNano int64, updateType string) *shared_types.OrderBookUpdate {
 	book, ok := sw.orderbooks[topic]
 	if !ok {
 		return nil
 	}
-	parts := strings.Split(topic, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-	symbol := parts[2]
 
 	update := pools.GetOrderBookUpdate()
-
 	update.Exchange = "bybit"
-	update.Symbol = TranslateSymbolFromExchange(symbol, sw.marketType)
+	if translated, ok := sw.topicSymbols[topic]; ok {
+		update.Symbol = translated
+	} else {
+		lastDot := strings.LastIndexByte(topic, '.')
+		if lastDot < 0 || lastDot+1 >= len(topic) {
+			pools.PutOrderBookUpdate(update)
+			return nil
+		}
+		update.Symbol = TranslateSymbolFromExchange(topic[lastDot+1:], sw.marketType)
+	}
 	update.MarketType = sw.marketType
-
-	// KORREKTUR: Wir nutzen den echten Timestamp von Bybit, nicht die ID!
 	update.Timestamp = ts
-	update.GoTimestamp = time.Now().UnixMilli()
+	update.GoTimestamp = goTimestamp
 	update.IngestUnixNano = ingestUnixNano
 	update.UpdateType = updateType
 
-	update.Bids = mapToSlice(book.Bids, update.Bids, true)
-	update.Asks = mapToSlice(book.Asks, update.Asks, false)
+	requestedDepth := sw.activeSubscriptions[topic]
+	if requestedDepth <= 0 {
+		requestedDepth = 20
+	}
+	if requestedDepth > 20 {
+		requestedDepth = 20
+	}
 
+	update.Bids = mapToTopLevels(book.Bids, update.Bids, true, requestedDepth)
+	update.Asks = mapToTopLevels(book.Asks, update.Asks, false, requestedDepth)
 	return update
 }
 
-func (sw *OrderBookShardWorker) sendSubscription(op string, topics []string) {
+func (sw *OrderBookShardWorker) sendSubscription(op string, topics []string) (string, error) {
 	if len(topics) == 0 || sw.conn == nil {
-		return
+		return "", nil
 	}
-	msg := map[string]interface{}{"op": op, "args": topics}
+	if op == "unsubscribe" {
+		metrics.RecordUnsubscribeAttempt("bybit", sw.marketType, "orderbook", len(topics))
+	}
+	reqID := strconv.FormatUint(sw.requestID.Add(1), 10)
+	msg := bybitCommandRequest{Op: op, Args: topics, ReqID: reqID}
 	if err := sw.conn.WriteJSON(msg); err != nil {
 		log.Printf("[BYBIT-OB-SHARD-ERROR] Subscription '%s' fehlgeschlagen: %v", op, err)
+		return "", err
 	}
+	return reqID, nil
 }
 
-func (sw *OrderBookShardWorker) resubscribeAll() {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	if len(sw.activeSubscriptions) > 0 {
-		topics := make([]string, 0, len(sw.activeSubscriptions))
-		for topic := range sw.activeSubscriptions {
-			topics = append(topics, topic)
+func (sw *OrderBookShardWorker) emitStatusForTopics(eventType string, topics []string, reason string, attempt int, message string) {
+	if sw.statusCh == nil {
+		sw.recordStatus(eventType, topics, reason, attempt, message)
+		return
+	}
+
+	targets := topics
+	if len(targets) == 0 {
+		sw.mu.Lock()
+		targets = make([]string, 0, len(sw.desiredSubscriptions))
+		for topic := range sw.desiredSubscriptions {
+			targets = append(targets, topic)
 		}
-		log.Printf("[BYBIT-OB-SHARD] Re-subscribing to %d topics upon reconnect...", len(topics))
-		sw.sendSubscription("subscribe", topics)
+		sw.mu.Unlock()
 	}
+
+	for _, topic := range targets {
+		symbol := ""
+		sw.mu.Lock()
+		if translated, ok := sw.topicSymbols[topic]; ok {
+			symbol = translated
+		} else if lastDot := strings.LastIndexByte(topic, '.'); lastDot >= 0 && lastDot+1 < len(topic) {
+			symbol = TranslateSymbolFromExchange(topic[lastDot+1:], sw.marketType)
+		}
+		sw.mu.Unlock()
+		if symbol == "" {
+			continue
+		}
+		sw.statusCh <- &shared_types.StreamStatusEvent{
+			Type:       eventType,
+			Exchange:   "bybit",
+			MarketType: sw.marketType,
+			DataType:   "orderbooks",
+			Symbol:     symbol,
+			Reason:     reason,
+			Attempt:    attempt,
+			Message:    message,
+			Timestamp:  time.Now().UnixMilli(),
+		}
+	}
+	sw.recordStatus(eventType, targets, reason, attempt, message)
 }
 
-func mapToSlice(priceMap map[string]string, slice []shared_types.OrderBookLevel, sortDesc bool) []shared_types.OrderBookLevel {
-	if slice != nil {
+func (sw *OrderBookShardWorker) recordStatus(eventType string, topics []string, reason string, attempt int, message string) {
+	switch eventType {
+	case "stream_reconnecting":
+		metrics.RecordStreamReconnect("bybit", sw.marketType, "orderbook", reason)
+	case "stream_restored":
+		metrics.RecordStreamRestoreSuccess("bybit", sw.marketType, "orderbook")
+	case "stream_unsubscribe_failed":
+		metrics.RecordUnsubscribeFailure("bybit", sw.marketType, "orderbook", reason)
+	case "stream_force_closed":
+		metrics.RecordForcedShardRecycle("bybit", sw.marketType, "orderbook", reason)
+	}
+	metrics.LogStreamLifecycle(eventType, "bybit", fmt.Sprintf("%p", sw), sw.marketType, "orderbook", topics, attempt, reason, message)
+}
+
+func readWSMessagePooled(conn *websocket.Conn) (int, *bytes.Buffer, error) {
+	msgType, r, err := conn.NextReader()
+	if err != nil {
+		return 0, nil, err
+	}
+
+	buf := bybitReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(r)
+	if err != nil {
+		bybitReadBufPool.Put(buf)
+		return 0, nil, err
+	}
+
+	return msgType, buf, nil
+}
+
+func mapToTopLevels(priceMap map[string]shared_types.OrderBookLevel, slice []shared_types.OrderBookLevel, sortDesc bool, limit int) []shared_types.OrderBookLevel {
+	if limit <= 0 {
+		limit = 20
+	}
+	if len(priceMap) == 0 {
+		if slice != nil {
+			return slice[:0]
+		}
+		return slice
+	}
+	if cap(slice) < limit {
+		slice = make([]shared_types.OrderBookLevel, 0, limit)
+	} else {
 		slice = slice[:0]
 	}
-	for p, s := range priceMap {
-		price, _ := strconv.ParseFloat(p, 64)
-		size, _ := strconv.ParseFloat(s, 64)
-		slice = append(slice, shared_types.OrderBookLevel{Price: price, Amount: size})
-	}
-	sort.Slice(slice, func(i, j int) bool {
-		if sortDesc {
-			return slice[i].Price > slice[j].Price
+	for _, level := range priceMap {
+		price := level.Price
+		insertAt := 0
+		for insertAt < len(slice) {
+			if sortDesc {
+				if price > slice[insertAt].Price {
+					break
+				}
+			} else if price < slice[insertAt].Price {
+				break
+			}
+			insertAt++
 		}
-		return slice[i].Price < slice[j].Price
-	})
+		if len(slice) < limit {
+			slice = append(slice, level)
+			if insertAt < len(slice)-1 {
+				copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
+				slice[insertAt] = level
+			}
+		} else if insertAt < limit {
+			copy(slice[insertAt+1:], slice[insertAt:len(slice)-1])
+			slice[insertAt] = level
+		}
+	}
 	return slice
 }

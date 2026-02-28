@@ -56,12 +56,50 @@ var (
 		[]string{"type"},
 	)
 
+	queueLen = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zmq_queue_len",
+			Help: "Current queue length by queue name.",
+		},
+		[]string{"queue"},
+	)
+
+	queueCap = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zmq_queue_cap",
+			Help: "Queue capacity by queue name.",
+		},
+		[]string{"queue"},
+	)
+
+	queueFillRatio = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zmq_queue_fill_ratio",
+			Help: "Current queue fill ratio (len/cap) by queue name.",
+		},
+		[]string{"queue"},
+	)
+
+	queueHighWatermark = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zmq_queue_high_watermark",
+			Help: "Queue high watermark (max observed len) by queue name since process start.",
+		},
+		[]string{"queue"},
+	)
+
 	publishTradeInternal      prometheus.Counter
 	publishOBUpdateInternal   prometheus.Counter
 	publishOBSnapshotInternal prometheus.Counter
 
 	droppedByReasonType map[string]map[string]prometheus.Counter
 	observeByType       map[string]prometheus.Observer
+	queueLenByName      map[string]prometheus.Gauge
+	queueCapByName      map[string]prometheus.Gauge
+	queueFillByName     map[string]prometheus.Gauge
+	queueHWMByName      map[string]prometheus.Gauge
+	queueHWMMu          sync.Mutex
+	queueHWMValue       map[string]int
 
 	ingestMu       sync.RWMutex
 	ingestByLabels map[ingestKey]prometheus.Counter
@@ -78,6 +116,15 @@ func Init() {
 		prometheus.MustRegister(publishMessagesTotal)
 		prometheus.MustRegister(droppedMessagesTotal)
 		prometheus.MustRegister(processingDuration)
+		prometheus.MustRegister(queueLen)
+		prometheus.MustRegister(queueCap)
+		prometheus.MustRegister(queueFillRatio)
+		prometheus.MustRegister(queueHighWatermark)
+		prometheus.MustRegister(unsubscribeAttemptsTotal)
+		prometheus.MustRegister(unsubscribeFailuresTotal)
+		prometheus.MustRegister(forcedShardRecyclesTotal)
+		prometheus.MustRegister(streamReconnectsTotal)
+		prometheus.MustRegister(streamRestoreSuccessTotal)
 
 		publishTradeInternal = publishMessagesTotal.WithLabelValues(TypeTrade, ClientTierInternal)
 		publishOBUpdateInternal = publishMessagesTotal.WithLabelValues(TypeOBUpdate, ClientTierInternal)
@@ -117,6 +164,11 @@ func Init() {
 		}
 
 		ingestByLabels = make(map[ingestKey]prometheus.Counter, 16)
+		queueLenByName = make(map[string]prometheus.Gauge, 8)
+		queueCapByName = make(map[string]prometheus.Gauge, 8)
+		queueFillByName = make(map[string]prometheus.Gauge, 8)
+		queueHWMByName = make(map[string]prometheus.Gauge, 8)
+		queueHWMValue = make(map[string]int, 8)
 	})
 }
 
@@ -171,6 +223,47 @@ func ObserveProcessing(typeName string, seconds float64) {
 	t := normalizeProcessingType(typeName)
 	if obs, ok := observeByType[t]; ok {
 		obs.Observe(seconds)
+	}
+}
+
+func SetQueueSample(queue string, length, capacity int) {
+	Init()
+
+	if queue == "" {
+		return
+	}
+	if length < 0 {
+		length = 0
+	}
+	if capacity < 0 {
+		capacity = 0
+	}
+
+	queueHWMMu.Lock()
+	lenGauge, ok := queueLenByName[queue]
+	if !ok {
+		lenGauge = queueLen.WithLabelValues(queue)
+		queueLenByName[queue] = lenGauge
+		queueCapByName[queue] = queueCap.WithLabelValues(queue)
+		queueFillByName[queue] = queueFillRatio.WithLabelValues(queue)
+		queueHWMByName[queue] = queueHighWatermark.WithLabelValues(queue)
+	}
+	capGauge := queueCapByName[queue]
+	fillGauge := queueFillByName[queue]
+	hwmGauge := queueHWMByName[queue]
+
+	if length > queueHWMValue[queue] {
+		queueHWMValue[queue] = length
+		hwmGauge.Set(float64(length))
+	}
+	queueHWMMu.Unlock()
+
+	lenGauge.Set(float64(length))
+	capGauge.Set(float64(capacity))
+	if capacity > 0 {
+		fillGauge.Set(float64(length) / float64(capacity))
+	} else {
+		fillGauge.Set(0)
 	}
 }
 

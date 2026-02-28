@@ -14,6 +14,15 @@ func (t *testExchange) Stop()                                         {}
 
 var _ exchanges.Exchange = (*testExchange)(nil)
 
+type recordingExchange struct {
+	reqs []*shared_types.ClientRequest
+}
+
+func (r *recordingExchange) HandleRequest(req *shared_types.ClientRequest) {
+	r.reqs = append(r.reqs, req)
+}
+func (r *recordingExchange) Stop() {}
+
 func TestDisconnectCleansAllSubscriptionMaps(t *testing.T) {
 	clientID := []byte("client-a")
 	otherID := "client-b"
@@ -142,6 +151,89 @@ func TestDisconnectCleanupFlappingLeavesNoGhostSubscribers(t *testing.T) {
 	for wildcardID, clients := range sm.wildcardSubscribers {
 		if clients["client-flap"] {
 			t.Fatalf("client-flap leaked in wildcardSubscribers[%s]", wildcardID)
+		}
+	}
+}
+
+func TestDisconnectSendsUnsubscribeForLastSubscriber(t *testing.T) {
+	clientID := []byte("client-a")
+	rec := &recordingExchange{}
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			"binance-spot-BTC/USDT": {string(clientID): true},
+		},
+		orderBookSubscriptions: map[string]map[string]bool{
+			"binance-spot-ETH/USDT": {string(clientID): true},
+		},
+		wildcardSubscribers: make(map[string]map[string]bool),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": &testExchange{},
+			"ccxt_generic":   rec,
+		},
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID: clientID,
+		Action:   "disconnect",
+	})
+
+	if len(rec.reqs) != 2 {
+		t.Fatalf("expected 2 unsubscribe requests, got %d", len(rec.reqs))
+	}
+	seen := map[string]bool{}
+	for _, req := range rec.reqs {
+		if req.Action != "unsubscribe" || req.Exchange != "binance" || req.MarketType != "spot" {
+			t.Fatalf("unexpected unsubscribe request: %+v", req)
+		}
+		seen[req.DataType+":"+req.Symbol] = true
+	}
+	if !seen["trades:BTC/USDT"] {
+		t.Fatalf("missing trades unsubscribe")
+	}
+	if !seen["orderbooks:ETH/USDT"] {
+		t.Fatalf("missing orderbooks unsubscribe")
+	}
+}
+
+func TestDisconnectKeepsExactCCXTRoute(t *testing.T) {
+	clientID := []byte("client-a")
+	rec := &recordingExchange{}
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			"binance-spot-BTC/USDT": {string(clientID): true},
+		},
+		orderBookSubscriptions: map[string]map[string]bool{
+			"binance-spot-ETH/USDT": {string(clientID): true},
+		},
+		tradeSubscriptionRoutes: map[string]string{
+			getClientRouteKey(string(clientID), "binance-spot-BTC/USDT"): "binance",
+		},
+		orderBookSubscriptionRoutes: map[string]string{
+			getClientRouteKey(string(clientID), "binance-spot-ETH/USDT"): "binance",
+		},
+		wildcardSubscribers: make(map[string]map[string]bool),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": &testExchange{},
+			"ccxt_generic":   rec,
+		},
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID: clientID,
+		Action:   "disconnect",
+	})
+
+	if len(rec.reqs) != 2 {
+		t.Fatalf("expected 2 ccxt unsubscribe requests, got %d", len(rec.reqs))
+	}
+	for _, req := range rec.reqs {
+		if req.Exchange != "binance" {
+			t.Fatalf("expected exact ccxt exchange route, got %+v", req)
+		}
+		if req.Action != "unsubscribe" {
+			t.Fatalf("expected unsubscribe action, got %+v", req)
 		}
 	}
 }
