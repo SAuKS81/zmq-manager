@@ -180,6 +180,9 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
       - ConnectionManager nutzt jetzt eigene lokale Unsubscribe-Helfer fuer Trade- und Orderbook-Shards
       - CCXT-Worker rufen jetzt explizit `UnWatchTrades`, `UnWatchOrderBook`, `UnWatchTradesForSymbols` und `UnWatchOrderBookForSymbols` auf
       - die verwendeten CCXT-Go-Pro-Interfaces enthalten die `*ForSymbols`-Varianten weiterhin
+      - CCXT-Konfiguration ist jetzt als getypte Default-/Override-Registry aufgebaut
+      - unbekannte Exchanges fallen konservativ auf einen langsamen Default zurueck (`BatchSize=1`, `SymbolsPerShard=1`, erhoehte Subscribe-/Shard-Pausen)
+      - nur verifizierte Boersen behalten explizite Overrides; fuer 20+ weitere Arbitrage-Ziele ist keine Einzelkonfig mehr noetig
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar
