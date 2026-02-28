@@ -3,6 +3,7 @@ package bitget
 import (
 	"log"
 	"sync"
+	"time"
 
 	"bybit-watcher/internal/exchanges"
 	"bybit-watcher/internal/shared_types"
@@ -16,6 +17,7 @@ type BitgetExchange struct {
 	requestCh chan<- *shared_types.ClientRequest
 	dataCh    chan<- *shared_types.TradeUpdate
 	statusCh  chan<- *shared_types.StreamStatusEvent
+	limiter   *bitgetSendLimiter
 }
 
 // NewBitgetExchange erstellt eine neue Instanz der Bitget-Implementierung.
@@ -24,6 +26,7 @@ func NewBitgetExchange(requestCh chan<- *shared_types.ClientRequest, dataCh chan
 		requestCh: requestCh,
 		dataCh:    dataCh,
 		statusCh:  statusCh,
+		limiter:   newBitgetSendLimiter(delayPerBatchMs * time.Millisecond),
 	}
 }
 
@@ -53,7 +56,7 @@ func (e *BitgetExchange) HandleRequest(req *shared_types.ClientRequest) {
 	case "spot":
 		if e.spotMgr == nil {
 			log.Println("[BITGET-EXCHANGE] Erster Spot-Abonnent. Starte Spot Connection Manager.")
-			e.spotMgr = NewConnectionManager("spot", e.dataCh, e.statusCh)
+			e.spotMgr = NewConnectionManager("spot", e.dataCh, e.statusCh, e.limiter)
 			go e.spotMgr.Run()
 		}
 		e.spotMgr.commandCh <- cmd
@@ -61,7 +64,7 @@ func (e *BitgetExchange) HandleRequest(req *shared_types.ClientRequest) {
 	case "swap":
 		if e.swapMgr == nil {
 			log.Println("[BITGET-EXCHANGE] Erster Swap-Abonnent. Starte Swap Connection Manager.")
-			e.swapMgr = NewConnectionManager("swap", e.dataCh, e.statusCh)
+			e.swapMgr = NewConnectionManager("swap", e.dataCh, e.statusCh, e.limiter)
 			go e.swapMgr.Run()
 		}
 		e.swapMgr.commandCh <- cmd

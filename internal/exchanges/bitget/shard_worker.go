@@ -31,6 +31,7 @@ type ShardWorker struct {
 	stopCh         <-chan struct{}
 	dataCh         chan<- *shared_types.TradeUpdate
 	statusCh       chan<- *shared_types.StreamStatusEvent
+	limiter        *bitgetSendLimiter
 	wg             *sync.WaitGroup
 	mu             sync.Mutex
 	desiredSymbols map[string]bool
@@ -50,7 +51,7 @@ var (
 	}
 )
 
-func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *ShardWorker {
+func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, limiter *bitgetSendLimiter, wg *sync.WaitGroup) *ShardWorker {
 	sw := &ShardWorker{
 		wsURL:          wsURL,
 		marketType:     marketType,
@@ -58,6 +59,7 @@ func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-
 		stopCh:         stopCh,
 		dataCh:         dataCh,
 		statusCh:       statusCh,
+		limiter:        limiter,
 		wg:             wg,
 		desiredSymbols: make(map[string]bool),
 		activeSymbols:  make(map[string]bool),
@@ -303,14 +305,14 @@ func (sw *ShardWorker) sendSubscription(writeCh chan<- []byte, op string, symbol
 			continue
 		}
 
+		if sw.limiter != nil && !sw.limiter.Wait(sw.stopCh) {
+			return nil
+		}
+
 		select {
 		case writeCh <- payload:
 		case <-sw.stopCh:
 			return nil
-		}
-
-		if end < len(symbols) {
-			time.Sleep(delayPerBatchMs * time.Millisecond)
 		}
 	}
 	return nil

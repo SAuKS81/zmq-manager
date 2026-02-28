@@ -19,6 +19,7 @@ type ConnectionManager struct {
 	stopCh     chan struct{}
 	dataCh     chan<- *shared_types.TradeUpdate
 	statusCh   chan<- *shared_types.StreamStatusEvent
+	limiter    *bitgetSendLimiter
 
 	activeSubscriptions map[string]bool
 	shards              []*ShardWorker
@@ -34,13 +35,14 @@ type ConnectionManager struct {
 	unsubTimers          map[*ShardWorker]*time.Timer
 }
 
-func NewConnectionManager(marketType string, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent) *ConnectionManager {
+func NewConnectionManager(marketType string, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, limiter *bitgetSendLimiter) *ConnectionManager {
 	return &ConnectionManager{
 		marketType:           marketType,
 		commandCh:            make(chan ManagerCommand, 100),
 		stopCh:               make(chan struct{}),
 		dataCh:               dataCh,
 		statusCh:             statusCh,
+		limiter:              limiter,
 		activeSubscriptions:  make(map[string]bool),
 		symbolToShard:        make(map[string]*ShardWorker),
 		shardLoad:            make(map[*ShardWorker]int),
@@ -99,7 +101,7 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 		time.Sleep(1100 * time.Millisecond)
 
 		stopCh := make(chan struct{})
-		targetShard = NewShardWorker(wsURL, cm.marketType, []string{}, stopCh, cm.dataCh, cm.statusCh, &cm.wg)
+		targetShard = NewShardWorker(wsURL, cm.marketType, []string{}, stopCh, cm.dataCh, cm.statusCh, cm.limiter, &cm.wg)
 		cm.shards = append(cm.shards, targetShard)
 		cm.shardLoad[targetShard] = 0
 		cm.wg.Add(1)
