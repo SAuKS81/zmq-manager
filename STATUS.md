@@ -136,6 +136,11 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - P7-1 Unsubscribe-State-Machine fuer native Adapter
     - Ziel: `unsubscribe` nicht nur senden, sondern pro Stream/Batch verfolgen (`pending`, `acked`, `retry`, `failed`, `removed`)
     - inkl. Retry-Policy, Timeout und forced shard close als letzte Eskalation
+    - in Arbeit:
+      - erster Schnitt fuer `binance_native` umgesetzt
+      - Trade- und OB-Shards verfolgen jetzt Binance-Command-Responses ueber Request-ID
+      - Unsubscribe-Ack-Timeout/Nack fuehrt zu begrenztem Retry und danach zu gezieltem Shard-Recycle
+      - Verifikation auf Vultr noch offen
   - P7-2 Selektiver Shard-Recycle
     - wenn ein Shard wegen fehlgeschlagenem unsubscribe hart geschlossen wird:
       - nur noch gewuenschte Streams reconnecten

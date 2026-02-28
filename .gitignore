@@ -12,3 +12,6 @@
 
 # IDE
 .vscode/
+
+# Local one-off helper scripts
+scripts/gen_symbols_binance_spot.sh

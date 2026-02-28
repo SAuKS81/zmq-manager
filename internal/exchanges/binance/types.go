@@ -1,18 +1,21 @@
 package binance
 
-// HINWEIS: Kein Import von "json" nötig, da wir hier nur Struct-Tags verwenden.
-
 type wsRequest struct {
 	Method string   `json:"method"`
 	Params []string `json:"params"`
 	ID     uint64   `json:"id"`
 }
 
-// KORREKTUR: Name angepasst an ob_shard_worker.go
-// KORREKTUR: Direktes Struct für Data statt json.RawMessage
+type wsCommandResponse struct {
+	Result any    `json:"result"`
+	ID     uint64 `json:"id"`
+	Code   int    `json:"code"`
+	Msg    string `json:"msg"`
+}
+
 type wsOrderBookCombined struct {
 	Stream string             `json:"stream"`
-	Data   wsOrderBookPartial `json:"data"` 
+	Data   wsOrderBookPartial `json:"data"`
 }
 
 type wsTrade struct {
@@ -28,17 +31,13 @@ type wsTrade struct {
 
 type wsOrderBookLevel []string
 
-// Hier ist das Mapping entscheidend:
-// Spot sendet "bids", Swap sendet "b". Wir brauchen beides.
 type wsOrderBookPartial struct {
 	EventType    string             `json:"e"`
 	EventTime    int64              `json:"E"`
 	Symbol       string             `json:"s"`
 	LastUpdateID int64              `json:"lastUpdateId"`
-	
-	BidsSpot     []wsOrderBookLevel `json:"bids"` // Für Spot
-	AsksSpot     []wsOrderBookLevel `json:"asks"` // Für Spot
-	
-	BidsFut      []wsOrderBookLevel `json:"b"`    // Für Futures
-	AsksFut      []wsOrderBookLevel `json:"a"`    // Für Futures
+	BidsSpot     []wsOrderBookLevel `json:"bids"`
+	AsksSpot     []wsOrderBookLevel `json:"asks"`
+	BidsFut      []wsOrderBookLevel `json:"b"`
+	AsksFut      []wsOrderBookLevel `json:"a"`
 }
