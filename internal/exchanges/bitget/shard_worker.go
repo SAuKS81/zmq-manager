@@ -161,13 +161,20 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	errCh := make(chan error, 1)
 	writeCh := make(chan []byte, 32)
 	outboundCh := make(chan bitgetOutboundCommand, 32)
+	senderDone := make(chan struct{})
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
 	defer pingTicker.Stop()
-	defer close(outboundCh)
+	defer func() {
+		close(outboundCh)
+		<-senderDone
+	}()
+
+	var idleTimer *time.Timer
+	var idleCh <-chan time.Time
 
 	go sw.readPump(conn, msgCh, errCh)
 	go sw.writePump(conn, writeCh, errCh)
-	go sw.senderLoop(writeCh, outboundCh, errCh)
+	go sw.senderLoop(writeCh, outboundCh, errCh, senderDone)
 
 	sw.mu.Lock()
 	initial := make([]string, 0, len(sw.desiredSymbols))
@@ -178,6 +185,9 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	if len(initial) > 0 {
 		log.Printf("[BITGET-SHARD-INFO] (Re)Connect erfolgreich. Sende initiale Abos fuer %d Symbole.", len(initial))
 		outboundCh <- bitgetOutboundCommand{action: "subscribe", symbols: initial}
+	} else {
+		idleTimer = time.NewTimer(idleShutdownMs * time.Millisecond)
+		idleCh = idleTimer.C
 	}
 
 	for {
@@ -231,9 +241,32 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 			if len(symbols) > 0 {
 				outboundCh <- bitgetOutboundCommand{action: cmd.Action, symbols: symbols}
 			}
+			if sw.hasDesiredSymbols() {
+				if idleTimer != nil {
+					if !idleTimer.Stop() {
+						select {
+						case <-idleCh:
+						default:
+						}
+					}
+					idleTimer = nil
+					idleCh = nil
+				}
+			} else if idleTimer == nil {
+				idleTimer = time.NewTimer(idleShutdownMs * time.Millisecond)
+				idleCh = idleTimer.C
+			}
 
 		case <-pingTicker.C:
 			writeCh <- []byte("ping")
+
+		case <-idleCh:
+			if !sw.hasDesiredSymbols() {
+				log.Printf("[BITGET-SHARD] Keine gewuenschten Symbole mehr. Beende leeren Shard.")
+				return nil
+			}
+			idleTimer = nil
+			idleCh = nil
 
 		case err := <-errCh:
 			return err
@@ -245,7 +278,9 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	}
 }
 
-func (sw *ShardWorker) senderLoop(writeCh chan<- []byte, outboundCh <-chan bitgetOutboundCommand, errCh chan<- error) {
+func (sw *ShardWorker) senderLoop(writeCh chan<- []byte, outboundCh <-chan bitgetOutboundCommand, errCh chan<- error, done chan<- struct{}) {
+	defer close(done)
+	defer close(writeCh)
 	for cmd := range outboundCh {
 		if err := sw.sendSubscription(writeCh, cmd.action, cmd.symbols); err != nil {
 			errCh <- err

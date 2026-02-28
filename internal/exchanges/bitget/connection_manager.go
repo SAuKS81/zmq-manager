@@ -166,7 +166,7 @@ func (cm *ConnectionManager) removeSubscription(symbol string) {
 	}
 
 	if cm.shardLoad[shard] <= 0 {
-		log.Printf("[BITGET-CONN-MANAGER-TODO] Shard ist jetzt leer (Load: %d). Beendigungslogik fehlt noch.", cm.shardLoad[shard])
+		cm.retireShardLocked(shard)
 	}
 }
 
@@ -236,4 +236,36 @@ func (cm *ConnectionManager) flushUnsubs(shard *ShardWorker) {
 
 	delete(cm.pendingUnsubs, shard)
 	delete(cm.unsubTimers, shard)
+}
+
+func (cm *ConnectionManager) retireShardLocked(shard *ShardWorker) {
+	log.Printf("[BITGET-CONN-MANAGER] Shard ist jetzt leer (Load: %d). Entferne ihn aus dem aktiven Satz.", cm.shardLoad[shard])
+
+	if timer, ok := cm.subscriptionTimers[shard]; ok {
+		timer.Stop()
+		delete(cm.subscriptionTimers, shard)
+	}
+	if timer, ok := cm.unsubTimers[shard]; ok {
+		timer.Stop()
+		delete(cm.unsubTimers, shard)
+	}
+
+	delete(cm.pendingSubscriptions, shard)
+	delete(cm.pendingUnsubs, shard)
+	delete(cm.shardLoad, shard)
+
+	for symbol, mappedShard := range cm.symbolToShard {
+		if mappedShard == shard {
+			delete(cm.symbolToShard, symbol)
+		}
+	}
+
+	filtered := cm.shards[:0]
+	for _, existing := range cm.shards {
+		if existing == shard {
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	cm.shards = filtered
 }

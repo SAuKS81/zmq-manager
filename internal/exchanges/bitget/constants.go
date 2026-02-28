@@ -14,6 +14,7 @@ const (
 	symbolsPerShard = 50
 	symbolsPerBatch = 20 // number of symbols per subscribe command
 	delayPerBatchMs = 500
+	idleShutdownMs  = 2000
 )
 
 func getenvDefault(key, fallback string) string {
