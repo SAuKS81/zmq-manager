@@ -166,7 +166,7 @@ func (cm *ConnectionManager) removeSubscription(symbol string) {
 	}
 
 	if cm.shardLoad[shard] <= 0 {
-		cm.retireShardLocked(shard)
+		cm.maybeRetireShardLocked(shard)
 	}
 }
 
@@ -236,6 +236,7 @@ func (cm *ConnectionManager) flushUnsubs(shard *ShardWorker) {
 
 	delete(cm.pendingUnsubs, shard)
 	delete(cm.unsubTimers, shard)
+	cm.maybeRetireShardLocked(shard)
 }
 
 func (cm *ConnectionManager) retireShardLocked(shard *ShardWorker) {
@@ -268,4 +269,17 @@ func (cm *ConnectionManager) retireShardLocked(shard *ShardWorker) {
 		filtered = append(filtered, existing)
 	}
 	cm.shards = filtered
+}
+
+func (cm *ConnectionManager) maybeRetireShardLocked(shard *ShardWorker) {
+	if cm.shardLoad[shard] > 0 {
+		return
+	}
+	if len(cm.pendingSubscriptions[shard]) > 0 {
+		return
+	}
+	if len(cm.pendingUnsubs[shard]) > 0 {
+		return
+	}
+	cm.retireShardLocked(shard)
 }
