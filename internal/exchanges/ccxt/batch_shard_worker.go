@@ -227,18 +227,13 @@ func (sw *BatchShardWorker) safeUnWatchTradesForSymbols(symbolsBatch []string) (
 }
 
 func (sw *BatchShardWorker) filterSupportedSymbols(symbols []string) []string {
-	markets, err := sw.exchange.LoadMarkets()
+	supported, err := getSupportedSymbols(sw.exchangeName, sw.marketType)
 	if err != nil {
-		log.Printf("[CCXT-BATCH-SHARD-WARN] LoadMarkets failed for %s/%s: %v", sw.exchangeName, sw.marketType, err)
+		log.Printf("[CCXT-BATCH-SHARD-WARN] supported symbol cache failed for %s/%s: %v", sw.exchangeName, sw.marketType, err)
 		return symbols
 	}
-	if len(markets) == 0 {
+	if len(supported) == 0 {
 		return symbols
-	}
-
-	supported := make(map[string]struct{}, len(markets))
-	for symbol := range markets {
-		supported[symbol] = struct{}{}
 	}
 
 	filtered := make([]string, 0, len(symbols))

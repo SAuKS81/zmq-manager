@@ -185,6 +185,7 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
       - nur verifizierte Boersen behalten explizite Overrides; fuer 20+ weitere Arbitrage-Ziele ist keine Einzelkonfig mehr noetig
       - `UnWatch*` wird jetzt nur noch genutzt, wenn die Policy die Capability explizit freigibt
       - unbekannte oder nicht verifizierte Exchanges fallen beim Unsubscribe auf harten Shard-Recycle mit Neuaufbau nur der verbleibenden `desired`-Streams zurueck
+      - `LoadMarkets()` fuer Batch-Symbolfilter laeuft jetzt ueber einen einmaligen, gecachten CCXT-Market-Load pro `exchange/marketType` statt shardweise; das vermeidet REST-Weight-Spikes und Binance-418-Bans
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar
