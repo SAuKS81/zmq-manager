@@ -129,6 +129,19 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - `zmq_stream_restore_success_total`
   - Bybit, Bitget und Binance haengen ihre nativen Lifecycle-Pfade jetzt an diese Counter
   - neue strukturierte Lifecycle-Logs im Format `STREAM_LIFECYCLE ...` mit `event`, `exchange`, `shard`, `market_type`, `data_type`, `symbols`, `attempt`, `reason`, `message`
+- P7-1 Unsubscribe-State-Machine fuer native Adapter abgeschlossen:
+  - `unsubscribe` wird in den nativen Adaptern nicht mehr nur fire-and-forget gesendet, sondern pro Adapter kontrolliert abgearbeitet
+  - Binance und Bybit verfolgen Command-Responses/Acks und koppeln Timeouts/Nacks an gezielten Recycle
+  - Bitget bleibt bewusst auf dem verifizierten paced Pfad mit globaler Sendetaktung und finalem Unsubscribe-Flush vor Shard-Retirement
+  - native Lifecycle-Pfade sind auf Vultr fuer Binance, Bybit und Bitget verifiziert
+- P7-5 CCXT-Sonderpfad abgeschlossen:
+  - ConnectionManager nutzt eigene lokale Unsubscribe-Helfer fuer CCXT-Trade- und Orderbook-Shards
+  - CCXT-Worker rufen explizit `UnWatchTrades`, `UnWatchOrderBook`, `UnWatchTradesForSymbols` und `UnWatchOrderBookForSymbols` auf
+  - `UnWatch*` wird nur noch genutzt, wenn die Policy die Capability explizit freigibt; sonst harter shard-scope Fallback mit Neuaufbau nur der verbleibenden `desired`-Streams
+  - CCXT-Konfiguration ist als getypte Default-/Override-Registry aufgebaut; unbekannte Exchanges fallen konservativ auf einen langsamen Default zurueck
+  - `LoadMarkets()` fuer Batch-Symbolfilter laeuft ueber einen gecachten Market-Load pro `exchange/marketType`; dadurch keine shardweisen REST-Weight-Spikes mehr
+  - Broker-Disconnect-Cleanup bewahrt den exakten Adapter-Route-Typ (`binance` vs `binance_native`), damit CCXT-Disconnect keinen nativen Pfad mehr triggert
+  - isolierter Vultr-CCXT-Lauf auf `binance` ist nach Route-Fix und Cache-Haertung wieder `PASS`
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
@@ -160,39 +173,12 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - nur technische Dokumentation (WS-Channel, Subscribe/Unsubscribe, Snapshot/Delta, Mapping auf `shared_types.OrderBookUpdate`, Recovery-Regeln)
   - explizit ohne Implementierung und ohne Testlauf
 - neuer technischer Backlog ausserhalb des Baseline-v2 Pfads:
-  - P7-1 Unsubscribe-State-Machine fuer native Adapter
-    - Ziel: `unsubscribe` nicht nur senden, sondern pro Stream/Batch verfolgen (`pending`, `acked`, `retry`, `failed`, `removed`)
-    - inkl. Retry-Policy, Timeout und forced shard close als letzte Eskalation
-    - in Arbeit:
-      - erster Schnitt fuer `binance_native` umgesetzt und auf Vultr verifiziert (`unsubscribe` fuehrt sauber auf `trades=0`/`ob=0`)
-      - erster Schnitt fuer `bybit_native` umgesetzt:
-        - Trade- und OB-Shards verfolgen Command-Responses ueber `req_id`
-        - Unsubscribe-Ack-Timeout/Nack fuehrt zu begrenztem Retry und danach zu gezieltem Shard-Recycle
-        - Replay-Server (`cmd/wsreplay`) liefert passende Bybit-Acks fuer diesen Pfad
-      - neue minimale Broker-Plumbing fuer `StreamStatusEvent` liegt:
-        - Broker kann `stream_reconnecting` / `stream_restored` / `stream_unsubscribe_failed` / `stream_force_closed` verteilen
-        - neuer schlanker `clients/smoke_client.go` loggt diese JSON-Status-Events
-      - Vultr-Verifikation fuer `bybit_native` erfolgt; Lifecycle-Pfad laeuft stabil
-  - P7-5 CCXT-Sonderpfad
-    - eigene `unsubscribe`-Funktion fuer CCXT
-    - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
-    - in Arbeit:
-      - ConnectionManager nutzt jetzt eigene lokale Unsubscribe-Helfer fuer Trade- und Orderbook-Shards
-      - CCXT-Worker rufen jetzt explizit `UnWatchTrades`, `UnWatchOrderBook`, `UnWatchTradesForSymbols` und `UnWatchOrderBookForSymbols` auf
-      - die verwendeten CCXT-Go-Pro-Interfaces enthalten die `*ForSymbols`-Varianten weiterhin
-      - CCXT-Konfiguration ist jetzt als getypte Default-/Override-Registry aufgebaut
-      - unbekannte Exchanges fallen konservativ auf einen langsamen Default zurueck (`BatchSize=1`, `SymbolsPerShard=1`, erhoehte Subscribe-/Shard-Pausen)
-      - nur verifizierte Boersen behalten explizite Overrides; fuer 20+ weitere Arbitrage-Ziele ist keine Einzelkonfig mehr noetig
-      - `UnWatch*` wird jetzt nur noch genutzt, wenn die Policy die Capability explizit freigibt
-      - unbekannte oder nicht verifizierte Exchanges fallen beim Unsubscribe auf harten Shard-Recycle mit Neuaufbau nur der verbleibenden `desired`-Streams zurueck
-      - `LoadMarkets()` fuer Batch-Symbolfilter laeuft jetzt ueber einen einmaligen, gecachten CCXT-Market-Load pro `exchange/marketType` statt shardweise; das vermeidet REST-Weight-Spikes und Binance-418-Bans
-      - Broker-Disconnect-Cleanup bewahrt jetzt den exakten Adapter-Route-Typ (`binance` vs `binance_native`) pro Client-Subscription; damit triggert ein CCXT-Disconnect keinen nativen Fallback mehr
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar
     - andere Streams werden nach forced recycle sauber wiederhergestellt
     - Clients sehen `reconnecting`/`restored`
-    - noch offen bis `P7-5` abgeschlossen ist
+    - letzter offener P7-Abnahmepunkt nach Abschluss von P7-1 bis P7-6
 
 ## Aktueller Arbeitsmodus
 
