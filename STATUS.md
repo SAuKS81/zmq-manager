@@ -106,6 +106,15 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - alte Go/Python-Testclients bewusst geloescht
   - neuer schlanker `clients/smoke_client.go` fuer Baseline/Verifikation neu aufgebaut
   - Repo-Build/Test damit wieder sauber
+- P7-3 Client-Signalierung erster produktiver Schnitt abgeschlossen:
+  - Broker verteilt `StreamStatusEvent` gezielt an abonnierte Clients
+  - Multi-Symbol-Status-Events (`symbol` oder `symbols`) werden korrekt geroutet
+  - `clients/smoke_client.go` loggt und zaehlt `stream_reconnecting`, `stream_restored`, `stream_unsubscribe_failed`, `stream_force_closed`
+  - lokal vorlaeufig abgenommen; finale Beobachtung im Beta-Deployment
+- P7-4 Native Adapter Lifecycle-Haertung erster produktiver Schnitt abgeschlossen:
+  - Binance: verifizierter Ack/Nack + Retry + gezielter Recycle
+  - Bybit: verifizierter Ack/Nack + Retry + gezielter Recycle; Command-Chunking marktspezifisch (`spot=10`, `swap` bis Shard-Groesse)
+  - Bitget: verifizierter paced Pfad mit globaler Sendetaktung und Empty-Shard-Cleanup nach finalem Unsubscribe-Flush
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
@@ -155,30 +164,10 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
       - nur noch gewuenschte Streams reconnecten
       - entfernte Streams duerfen nicht wieder auftauchen
     - noch offen als gezielt verifizierter Fehlerpfad
-  - P7-3 Client-Signalierung bei Feed-Stoerungen
-    - neue Broker-Status-Events fuer `stream_reconnecting`, `stream_restored`, `stream_unsubscribe_failed`, `stream_force_closed`
-    - Clients muessen Feed-Unterbrechungen und Reconnects explizit sehen koennen
-    - erster Schnitt umgesetzt:
-      - Broker verteilt `StreamStatusEvent` gezielt an abonnierte Clients
-      - Broker kann jetzt auch Multi-Symbol-Status-Events (`symbol` oder `symbols`) gezielt an betroffene Clients routen
-      - neuer schlanker `clients/smoke_client.go` loggt diese Status-Events sichtbar
-      - Smoke-Client wertet Status-Events jetzt getrennt nach `reconnecting`, `restored`, `unsubscribe_failed`, `force_closed` aus
-      - Bybit- und Bitget-Worker emitten diese Events bereits auf Reconnect/Restore/Unsubscribe-Fehlerpfaden
-    - noch offen: gezielte Abnahme der Signalierung als eigener Testfall
-  - P7-4 Native Adapter nacheinander haerten
-    - Bybit: Ack/Nack + Retry + forced recycle
-    - Binance: Ack/Nack + Retry + forced recycle
-    - Bitget: Ack/Nack + Retry + forced recycle
-    - Stand:
-      - Binance erster Schnitt verifiziert
-      - Bybit erster Schnitt verifiziert; Command-Chunking jetzt marktspezifisch (`spot=10`, `swap` bis Shard-Groesse)
-      - Bitget Ack/Timeout-Schnitt verworfen; verifizierter Stand ist bewusst ein strikt getakteter, serieller Batch-Sender mit Status-Events
-      - Bitget globale Sendetaktung ueber alle Shards eines Managers ist verifiziert
-      - Bitget Empty-Shard-Cleanup ist verifiziert; Retirement erfolgt erst nach dem letzten Unsubscribe-Flush
   - P7-5 CCXT-Sonderpfad
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
-    - noch offen
+    - in Arbeit: ConnectionManager nutzt jetzt eigene lokale Unsubscribe-Helfer fuer Trade- und Orderbook-Shards
   - P7-6 Metriken und Logs
     - `unsubscribe_attempts_total`, `unsubscribe_failures_total`, `forced_shard_recycles_total`, `stream_reconnects_total`
     - strukturierte Logs mit `exchange`, `shard`, `symbol`, `data_type`, `attempt`, `reason`
@@ -188,7 +177,7 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - Fehler sind sichtbar
     - andere Streams werden nach forced recycle sauber wiederhergestellt
     - Clients sehen `reconnecting`/`restored`
-    - noch offen bis `P7-2`, `P7-3`, `P7-5`, `P7-6` abgeschlossen sind
+    - noch offen bis `P7-2`, `P7-5`, `P7-6` abgeschlossen sind
 
 ## Aktueller Arbeitsmodus
 

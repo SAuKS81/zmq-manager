@@ -11,6 +11,88 @@ import (
 	"bybit-watcher/internal/shared_types"
 )
 
+type fakeShardWorker struct {
+	commandCh chan ShardCommand
+}
+
+func (f *fakeShardWorker) Run() {}
+
+func (f *fakeShardWorker) getCommandChannel() chan<- ShardCommand {
+	return f.commandCh
+}
+
+func TestUnsubscribeTradeSymbolsLocked(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 1)}
+	cm.tradeShards = []IShardWorker{shard}
+	cm.symbolToTradeShard["BTC/USDT"] = shard
+	cm.tradeShardLoad[shard] = 1
+
+	cm.unsubscribeTradeSymbolsLocked(map[string]int{"BTC/USDT": 0})
+
+	select {
+	case cmd := <-shard.commandCh:
+		if cmd.Action != "unsubscribe" {
+			t.Fatalf("unexpected action: %s", cmd.Action)
+		}
+		if _, ok := cmd.Symbols["BTC/USDT"]; !ok {
+			t.Fatalf("expected BTC/USDT in unsubscribe payload")
+		}
+	default:
+		t.Fatalf("expected unsubscribe command")
+	}
+
+	if _, ok := cm.symbolToTradeShard["BTC/USDT"]; ok {
+		t.Fatalf("symbolToTradeShard entry was not removed")
+	}
+	if got := cm.tradeShardLoad[shard]; got != 0 {
+		t.Fatalf("expected shard load 0, got %d", got)
+	}
+}
+
+func TestUnsubscribeOrderBookSymbolsLocked(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 1)}
+	cm.obShards = []IShardWorker{shard}
+	cm.symbolToOBShard["BTC/USDT"] = shard
+	cm.obShardLoad[shard] = 1
+
+	cm.unsubscribeOrderBookSymbolsLocked(map[string]int{"BTC/USDT": 5})
+
+	select {
+	case cmd := <-shard.commandCh:
+		if cmd.Action != "unsubscribe" {
+			t.Fatalf("unexpected action: %s", cmd.Action)
+		}
+		if _, ok := cmd.Symbols["BTC/USDT"]; !ok {
+			t.Fatalf("expected BTC/USDT in unsubscribe payload")
+		}
+	default:
+		t.Fatalf("expected unsubscribe command")
+	}
+
+	if _, ok := cm.symbolToOBShard["BTC/USDT"]; ok {
+		t.Fatalf("symbolToOBShard entry was not removed")
+	}
+	if got := cm.obShardLoad[shard]; got != 0 {
+		t.Fatalf("expected shard load 0, got %d", got)
+	}
+}
+
 func TestConnectionManagerStartStopNoDeadlock(t *testing.T) {
 	cfg := ExchangeConfig{
 		Enabled:         true,
@@ -69,4 +151,3 @@ func waitChanOrTimeout(t *testing.T, ch <-chan struct{}, timeout time.Duration, 
 		t.Fatalf("%s", msg)
 	}
 }
-
