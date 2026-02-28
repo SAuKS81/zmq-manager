@@ -31,8 +31,7 @@ type BatchShardWorker struct {
 }
 
 func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *BatchShardWorker {
-	options := makeExchangeOptions(exchangeName, marketType)
-	exchange := ccxtpro.CreateExchange(exchangeName, options)
+	exchange := createCCXTExchange(exchangeName, marketType)
 	if exchange == nil {
 		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange-Instanz fuer %s nicht erstellen", exchangeName)
 		return nil
@@ -124,8 +123,14 @@ drain:
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
 		}
-		if _, err := sw.safeUnWatchTradesForSymbols(symbolsToUnwatch); err != nil {
-			log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+		if sw.config.SupportsTradeBatchUnwatch {
+			if _, err := sw.safeUnWatchTradesForSymbols(symbolsToUnwatch); err != nil {
+				log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v. Fallback auf Shard-Recycle.", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+				sw.recycleExchange()
+			}
+		} else {
+			log.Printf("[CCXT-BATCH-SHARD-INFO] Batch trade unwatch nicht freigegeben (%s/%s). Nutze harten Shard-Recycle fuer %d Symbole.", sw.exchangeName, sw.marketType, len(symbolsToUnwatch))
+			sw.recycleExchange()
 		}
 	}
 
@@ -144,6 +149,14 @@ drain:
 		}
 	} else {
 		sw.cancelWorkers = nil
+	}
+}
+
+func (sw *BatchShardWorker) recycleExchange() {
+	closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
+	if sw.exchange == nil {
+		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange nach Recycle fuer %s/%s nicht neu erstellen", sw.exchangeName, sw.marketType)
 	}
 }
 

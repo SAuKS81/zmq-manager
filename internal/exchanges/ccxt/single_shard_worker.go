@@ -46,7 +46,7 @@ func (sw *SingleWatchShardWorker) Run() {
 	defer sw.wg.Done()
 	log.Printf("[CCXT-SINGLE-SHARD] Starte Worker fuer %s", sw.exchangeName)
 
-	sw.exchange = ccxtpro.CreateExchange(sw.exchangeName, nil)
+	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
 	if sw.exchange == nil {
 		log.Printf("[CCXT-SINGLE-SHARD] Instanz fuer %s konnte nicht erstellt werden.", sw.exchangeName)
 		return
@@ -73,6 +73,7 @@ func (sw *SingleWatchShardWorker) getCommandChannel() chan<- ShardCommand {
 }
 
 func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
+	recycleNeeded := false
 	for symbol := range cmd.Symbols {
 		switch cmd.Action {
 		case "subscribe":
@@ -98,11 +99,20 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 				continue
 			}
 			log.Printf("[CCXT-SINGLE-SHARD] Stoppe Watcher fuer %s.", symbol)
-			if _, err := sw.safeUnWatchTrades(symbol); err != nil {
-				log.Printf("[CCXT-SINGLE-SHARD-WARN] UnWatchTrades('%s') fehlgeschlagen: %v", symbol, err)
+			if sw.config.SupportsTradeUnwatch {
+				if _, err := sw.safeUnWatchTrades(symbol); err != nil {
+					log.Printf("[CCXT-SINGLE-SHARD-WARN] UnWatchTrades('%s') fehlgeschlagen: %v. Fallback auf Shard-Recycle.", symbol, err)
+					recycleNeeded = true
+				}
+			} else {
+				log.Printf("[CCXT-SINGLE-SHARD-INFO] Trade unwatch nicht freigegeben (%s/%s). Nutze harten Shard-Recycle.", sw.exchangeName, sw.marketType)
+				recycleNeeded = true
 			}
 			cancel()
 		}
+	}
+	if recycleNeeded {
+		sw.recycleExchangeAndRestart()
 	}
 }
 
@@ -147,4 +157,35 @@ func (sw *SingleWatchShardWorker) safeUnWatchTrades(symbol string) (_ interface{
 		}
 	}()
 	return sw.exchange.UnWatchTrades(symbol)
+}
+
+func (sw *SingleWatchShardWorker) recycleExchangeAndRestart() {
+	sw.mu.Lock()
+	symbols := make([]string, 0, len(sw.activeWatchers))
+	oldWatchers := make([]context.CancelFunc, 0, len(sw.activeWatchers))
+	for symbol, cancel := range sw.activeWatchers {
+		symbols = append(symbols, symbol)
+		oldWatchers = append(oldWatchers, cancel)
+	}
+	sw.activeWatchers = make(map[string]context.CancelFunc)
+	sw.mu.Unlock()
+
+	for _, cancel := range oldWatchers {
+		cancel()
+	}
+	closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
+	if sw.exchange == nil {
+		log.Printf("[CCXT-SINGLE-SHARD-FATAL] Konnte Exchange nach Recycle fuer %s/%s nicht neu erstellen", sw.exchangeName, sw.marketType)
+		return
+	}
+
+	for _, symbol := range symbols {
+		ctx, cancel := context.WithCancel(context.Background())
+		sw.mu.Lock()
+		sw.activeWatchers[symbol] = cancel
+		sw.mu.Unlock()
+		go sw.runSingleWatch(ctx, symbol)
+		time.Sleep(sw.config.SubscribePause)
+	}
 }

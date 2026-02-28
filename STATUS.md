@@ -183,6 +183,8 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
       - CCXT-Konfiguration ist jetzt als getypte Default-/Override-Registry aufgebaut
       - unbekannte Exchanges fallen konservativ auf einen langsamen Default zurueck (`BatchSize=1`, `SymbolsPerShard=1`, erhoehte Subscribe-/Shard-Pausen)
       - nur verifizierte Boersen behalten explizite Overrides; fuer 20+ weitere Arbitrage-Ziele ist keine Einzelkonfig mehr noetig
+      - `UnWatch*` wird jetzt nur noch genutzt, wenn die Policy die Capability explizit freigibt
+      - unbekannte oder nicht verifizierte Exchanges fallen beim Unsubscribe auf harten Shard-Recycle mit Neuaufbau nur der verbleibenden `desired`-Streams zurueck
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar

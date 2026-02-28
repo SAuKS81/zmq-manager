@@ -11,13 +11,17 @@ import (
 // ExchangeConfig definiert das Lifecycle- und Sharding-Verhalten fuer einen
 // spezifischen Markt-Typ einer Boerse im CCXT-Adapter.
 type ExchangeConfig struct {
-	Enabled             bool
-	UseForSymbols       bool
-	BatchSize           int
-	SymbolsPerShard     int
-	SubscribePause      time.Duration
-	BatchSubscribePause time.Duration
-	NewShardPause       time.Duration
+	Enabled                       bool
+	UseForSymbols                 bool
+	BatchSize                     int
+	SymbolsPerShard               int
+	SubscribePause                time.Duration
+	BatchSubscribePause           time.Duration
+	NewShardPause                 time.Duration
+	SupportsTradeUnwatch          bool
+	SupportsTradeBatchUnwatch     bool
+	SupportsOrderBookUnwatch      bool
+	SupportsOrderBookBatchUnwatch bool
 }
 
 // ExchangePolicySet haelt die Konfiguration pro Markt-Typ.
@@ -59,58 +63,72 @@ var defaultExchangePolicy = ExchangePolicySet{
 var exchangePolicies = map[string]ExchangePolicySet{
 	"binance": {
 		Spot: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   true,
-			BatchSize:       200,
-			SymbolsPerShard: 200,
-			SubscribePause:  100 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:                       true,
+			UseForSymbols:                 true,
+			BatchSize:                     200,
+			SymbolsPerShard:               200,
+			SubscribePause:                100 * time.Millisecond,
+			NewShardPause:                 1100 * time.Millisecond,
+			SupportsTradeUnwatch:          true,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookUnwatch:      true,
+			SupportsOrderBookBatchUnwatch: true,
 		},
 		Swap: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   true,
-			BatchSize:       200,
-			SymbolsPerShard: 200,
-			SubscribePause:  250 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:                       true,
+			UseForSymbols:                 true,
+			BatchSize:                     200,
+			SymbolsPerShard:               200,
+			SubscribePause:                250 * time.Millisecond,
+			NewShardPause:                 1100 * time.Millisecond,
+			SupportsTradeUnwatch:          true,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookUnwatch:      true,
+			SupportsOrderBookBatchUnwatch: true,
 		},
 	},
 	"bitget": {
 		Spot: ExchangeConfig{
-			Enabled:             true,
-			UseForSymbols:       true,
-			BatchSize:           20,
-			SymbolsPerShard:     20,
-			SubscribePause:      500 * time.Millisecond,
-			BatchSubscribePause: 500 * time.Millisecond,
-			NewShardPause:       1100 * time.Millisecond,
+			Enabled:                   true,
+			UseForSymbols:             true,
+			BatchSize:                 20,
+			SymbolsPerShard:           20,
+			SubscribePause:            500 * time.Millisecond,
+			BatchSubscribePause:       500 * time.Millisecond,
+			NewShardPause:             1100 * time.Millisecond,
+			SupportsTradeBatchUnwatch: true,
 		},
 		Swap: ExchangeConfig{
-			Enabled:             true,
-			UseForSymbols:       true,
-			BatchSize:           20,
-			SymbolsPerShard:     20,
-			SubscribePause:      500 * time.Millisecond,
-			BatchSubscribePause: 500 * time.Millisecond,
-			NewShardPause:       1100 * time.Millisecond,
+			Enabled:                   true,
+			UseForSymbols:             true,
+			BatchSize:                 20,
+			SymbolsPerShard:           20,
+			SubscribePause:            500 * time.Millisecond,
+			BatchSubscribePause:       500 * time.Millisecond,
+			NewShardPause:             1100 * time.Millisecond,
+			SupportsTradeBatchUnwatch: true,
 		},
 	},
 	"bybit": {
 		Spot: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   true,
-			BatchSize:       10,
-			SymbolsPerShard: 40,
-			SubscribePause:  100 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:                       true,
+			UseForSymbols:                 true,
+			BatchSize:                     10,
+			SymbolsPerShard:               40,
+			SubscribePause:                100 * time.Millisecond,
+			NewShardPause:                 1100 * time.Millisecond,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookBatchUnwatch: true,
 		},
 		Swap: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   true,
-			BatchSize:       10,
-			SymbolsPerShard: 40,
-			SubscribePause:  100 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:                       true,
+			UseForSymbols:                 true,
+			BatchSize:                     10,
+			SymbolsPerShard:               40,
+			SubscribePause:                100 * time.Millisecond,
+			NewShardPause:                 1100 * time.Millisecond,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookBatchUnwatch: true,
 		},
 	},
 	"coinex": {
