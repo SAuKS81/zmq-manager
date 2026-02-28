@@ -53,7 +53,7 @@ func (e *BitgetExchange) HandleRequest(req *shared_types.ClientRequest) {
 	case "spot":
 		if e.spotMgr == nil {
 			log.Println("[BITGET-EXCHANGE] Erster Spot-Abonnent. Starte Spot Connection Manager.")
-			e.spotMgr = NewConnectionManager("spot", e.dataCh)
+			e.spotMgr = NewConnectionManager("spot", e.dataCh, e.statusCh)
 			go e.spotMgr.Run()
 		}
 		e.spotMgr.commandCh <- cmd
@@ -61,7 +61,7 @@ func (e *BitgetExchange) HandleRequest(req *shared_types.ClientRequest) {
 	case "swap":
 		if e.swapMgr == nil {
 			log.Println("[BITGET-EXCHANGE] Erster Swap-Abonnent. Starte Swap Connection Manager.")
-			e.swapMgr = NewConnectionManager("swap", e.dataCh)
+			e.swapMgr = NewConnectionManager("swap", e.dataCh, e.statusCh)
 			go e.swapMgr.Run()
 		}
 		e.swapMgr.commandCh <- cmd

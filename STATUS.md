@@ -157,10 +157,18 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - P7-3 Client-Signalierung bei Feed-Stoerungen
     - neue Broker-Status-Events fuer `stream_reconnecting`, `stream_restored`, `stream_unsubscribe_failed`, `stream_force_closed`
     - Clients muessen Feed-Unterbrechungen und Reconnects explizit sehen koennen
+    - erster Schnitt umgesetzt:
+      - Broker verteilt `StreamStatusEvent` gezielt an abonnierte Clients
+      - neuer schlanker `clients/smoke_client.go` loggt diese Status-Events sichtbar
+      - Bybit- und Bitget-Worker emitten diese Events bereits auf Reconnect/Restore/Unsubscribe-Fehlerpfaden
   - P7-4 Native Adapter nacheinander haerten
     - Bybit: Ack/Nack + Retry + forced recycle
     - Binance: Ack/Nack + Retry + forced recycle
     - Bitget: Ack/Nack + Retry + forced recycle
+    - Stand:
+      - Binance erster Schnitt verifiziert
+      - Bybit erster Schnitt verifiziert; Command-Chunking jetzt marktspezifisch (`spot=10`, `swap` bis Shard-Groesse)
+      - Bitget erster Schnitt umgesetzt: Ack/Timeout-Tracking ohne Request-ID, Retry und forced close auf Trade-Shards
   - P7-5 CCXT-Sonderpfad
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
