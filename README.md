@@ -3,6 +3,7 @@
 Core project documents:
 
 - [PROJECT.md](./PROJECT.md)
+- [USERGUIDE.md](./USERGUIDE.md)
 - [STATUS.md](./STATUS.md)
 - [TEAM.md](./TEAM.md)
 - [RUNBOOK.md](./RUNBOOK.md)
