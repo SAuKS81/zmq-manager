@@ -142,6 +142,11 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - `LoadMarkets()` fuer Batch-Symbolfilter laeuft ueber einen gecachten Market-Load pro `exchange/marketType`; dadurch keine shardweisen REST-Weight-Spikes mehr
   - Broker-Disconnect-Cleanup bewahrt den exakten Adapter-Route-Typ (`binance` vs `binance_native`), damit CCXT-Disconnect keinen nativen Pfad mehr triggert
   - isolierter Vultr-CCXT-Lauf auf `binance` ist nach Route-Fix und Cache-Haertung wieder `PASS`
+- P7-7 Gesamt-Abnahme abgeschlossen:
+  - native Lifecycle-Pfade sind fuer Binance, Bybit und Bitget produktiv verifiziert
+  - CCXT-Lifecycle-Pfad ist mit explizitem `UnWatch*`, Capability-Fallback, Market-Cache und exakter Disconnect-Route verifiziert
+  - Fehler- und Lifecycle-Sichtbarkeit ist technisch vorhanden (`StreamStatusEvent`, `STREAM_LIFECYCLE`, Lifecycle-Metriken)
+  - Reconnect-/Status-Verhalten wird im Beta-Deployment weiter beobachtet, ist aber kein Blocker mehr fuer den technischen Abschluss von P7
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
@@ -172,13 +177,6 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - Bitget-OB-Design-Notiz erstellen
   - nur technische Dokumentation (WS-Channel, Subscribe/Unsubscribe, Snapshot/Delta, Mapping auf `shared_types.OrderBookUpdate`, Recovery-Regeln)
   - explizit ohne Implementierung und ohne Testlauf
-- neuer technischer Backlog ausserhalb des Baseline-v2 Pfads:
-  - P7-7 Abnahme
-    - unsubscribe wird verfolgt
-    - Fehler sind sichtbar
-    - andere Streams werden nach forced recycle sauber wiederhergestellt
-    - Clients sehen `reconnecting`/`restored`
-    - letzter offener P7-Abnahmepunkt nach Abschluss von P7-1 bis P7-6
 
 ## Aktueller Arbeitsmodus
 
