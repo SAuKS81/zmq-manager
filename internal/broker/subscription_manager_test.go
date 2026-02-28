@@ -168,8 +168,8 @@ func TestDisconnectSendsUnsubscribeForLastSubscriber(t *testing.T) {
 		},
 		wildcardSubscribers: make(map[string]map[string]bool),
 		exchangeRegistry: map[string]exchanges.Exchange{
-			"binance_native": rec,
-			"ccxt_generic":   &testExchange{},
+			"binance_native": &testExchange{},
+			"ccxt_generic":   rec,
 		},
 	}
 
@@ -183,7 +183,7 @@ func TestDisconnectSendsUnsubscribeForLastSubscriber(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, req := range rec.reqs {
-		if req.Action != "unsubscribe" || req.Exchange != "binance_native" || req.MarketType != "spot" {
+		if req.Action != "unsubscribe" || req.Exchange != "binance" || req.MarketType != "spot" {
 			t.Fatalf("unexpected unsubscribe request: %+v", req)
 		}
 		seen[req.DataType+":"+req.Symbol] = true
@@ -193,5 +193,47 @@ func TestDisconnectSendsUnsubscribeForLastSubscriber(t *testing.T) {
 	}
 	if !seen["orderbooks:ETH/USDT"] {
 		t.Fatalf("missing orderbooks unsubscribe")
+	}
+}
+
+func TestDisconnectKeepsExactCCXTRoute(t *testing.T) {
+	clientID := []byte("client-a")
+	rec := &recordingExchange{}
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			"binance-spot-BTC/USDT": {string(clientID): true},
+		},
+		orderBookSubscriptions: map[string]map[string]bool{
+			"binance-spot-ETH/USDT": {string(clientID): true},
+		},
+		tradeSubscriptionRoutes: map[string]string{
+			getClientRouteKey(string(clientID), "binance-spot-BTC/USDT"): "binance",
+		},
+		orderBookSubscriptionRoutes: map[string]string{
+			getClientRouteKey(string(clientID), "binance-spot-ETH/USDT"): "binance",
+		},
+		wildcardSubscribers: make(map[string]map[string]bool),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": &testExchange{},
+			"ccxt_generic":   rec,
+		},
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID: clientID,
+		Action:   "disconnect",
+	})
+
+	if len(rec.reqs) != 2 {
+		t.Fatalf("expected 2 ccxt unsubscribe requests, got %d", len(rec.reqs))
+	}
+	for _, req := range rec.reqs {
+		if req.Exchange != "binance" {
+			t.Fatalf("expected exact ccxt exchange route, got %+v", req)
+		}
+		if req.Action != "unsubscribe" {
+			t.Fatalf("expected unsubscribe action, got %+v", req)
+		}
 	}
 }

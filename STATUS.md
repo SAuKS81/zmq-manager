@@ -186,6 +186,7 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
       - `UnWatch*` wird jetzt nur noch genutzt, wenn die Policy die Capability explizit freigibt
       - unbekannte oder nicht verifizierte Exchanges fallen beim Unsubscribe auf harten Shard-Recycle mit Neuaufbau nur der verbleibenden `desired`-Streams zurueck
       - `LoadMarkets()` fuer Batch-Symbolfilter laeuft jetzt ueber einen einmaligen, gecachten CCXT-Market-Load pro `exchange/marketType` statt shardweise; das vermeidet REST-Weight-Spikes und Binance-418-Bans
+      - Broker-Disconnect-Cleanup bewahrt jetzt den exakten Adapter-Route-Typ (`binance` vs `binance_native`) pro Client-Subscription; damit triggert ein CCXT-Disconnect keinen nativen Fallback mehr
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar

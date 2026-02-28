@@ -17,31 +17,37 @@ import (
 )
 
 type SubscriptionManager struct {
-	RequestCh              chan *shared_types.ClientRequest
-	StatusCh               chan *shared_types.StreamStatusEvent
-	DistributionCh         chan<- *DistributionMessage
-	TradeDataCh            chan *shared_types.TradeUpdate
-	OrderBookCh            chan *shared_types.OrderBookUpdate
-	tradeSubscriptions     map[string]map[string]bool
-	orderBookSubscriptions map[string]map[string]bool
-	exchangeRegistry       map[string]exchanges.Exchange
-	wildcardSubscribers    map[string]map[string]bool
-	incomingTradeCounter   atomic.Uint64
-	incomingOBCounter      atomic.Uint64
-	totalDataReceived      atomic.Uint64
+	RequestCh                   chan *shared_types.ClientRequest
+	StatusCh                    chan *shared_types.StreamStatusEvent
+	DistributionCh              chan<- *DistributionMessage
+	TradeDataCh                 chan *shared_types.TradeUpdate
+	OrderBookCh                 chan *shared_types.OrderBookUpdate
+	tradeSubscriptions          map[string]map[string]bool
+	orderBookSubscriptions      map[string]map[string]bool
+	tradeSubscriptionRoutes     map[string]string
+	orderBookSubscriptionRoutes map[string]string
+	exchangeRegistry            map[string]exchanges.Exchange
+	wildcardSubscribers         map[string]map[string]bool
+	wildcardRoutes              map[string]string
+	incomingTradeCounter        atomic.Uint64
+	incomingOBCounter           atomic.Uint64
+	totalDataReceived           atomic.Uint64
 }
 
 func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *SubscriptionManager {
 	sm := &SubscriptionManager{
-		RequestCh:              make(chan *shared_types.ClientRequest, 100),
-		StatusCh:               make(chan *shared_types.StreamStatusEvent, 1024),
-		DistributionCh:         distributionCh,
-		TradeDataCh:            make(chan *shared_types.TradeUpdate, 10000),
-		OrderBookCh:            make(chan *shared_types.OrderBookUpdate, 5000),
-		tradeSubscriptions:     make(map[string]map[string]bool),
-		orderBookSubscriptions: make(map[string]map[string]bool),
-		exchangeRegistry:       make(map[string]exchanges.Exchange),
-		wildcardSubscribers:    make(map[string]map[string]bool),
+		RequestCh:                   make(chan *shared_types.ClientRequest, 100),
+		StatusCh:                    make(chan *shared_types.StreamStatusEvent, 1024),
+		DistributionCh:              distributionCh,
+		TradeDataCh:                 make(chan *shared_types.TradeUpdate, 10000),
+		OrderBookCh:                 make(chan *shared_types.OrderBookUpdate, 5000),
+		tradeSubscriptions:          make(map[string]map[string]bool),
+		orderBookSubscriptions:      make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:     make(map[string]string),
+		orderBookSubscriptionRoutes: make(map[string]string),
+		exchangeRegistry:            make(map[string]exchanges.Exchange),
+		wildcardSubscribers:         make(map[string]map[string]bool),
+		wildcardRoutes:              make(map[string]string),
 	}
 	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
@@ -293,6 +299,15 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if req.DataType == "" {
 		req.DataType = "trades"
 	}
+	if sm.tradeSubscriptionRoutes == nil {
+		sm.tradeSubscriptionRoutes = make(map[string]string)
+	}
+	if sm.orderBookSubscriptionRoutes == nil {
+		sm.orderBookSubscriptionRoutes = make(map[string]string)
+	}
+	if sm.wildcardRoutes == nil {
+		sm.wildcardRoutes = make(map[string]string)
+	}
 	exchangeNameForSubID := strings.Split(req.Exchange, "_")[0]
 	if req.Action == "subscribe_all" && req.DataType == "trades" {
 		wildcardID := exchangeNameForSubID + "-" + req.MarketType + "-all"
@@ -300,6 +315,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			sm.wildcardSubscribers[wildcardID] = make(map[string]bool)
 		}
 		sm.wildcardSubscribers[wildcardID][string(req.ClientID)] = true
+		sm.wildcardRoutes[getClientRouteKey(string(req.ClientID), wildcardID)] = req.Exchange
 		log.Printf("[SUB-MANAGER] Client %s hat 'subscribe_all' für Trades auf %s aktiviert.", string(req.ClientID), wildcardID)
 	}
 
@@ -319,12 +335,24 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			subMap[subID] = make(map[string]bool)
 		}
 		subMap[subID][clientIDStr] = true
+		routeKey := getClientRouteKey(clientIDStr, subID)
+		if req.DataType == "orderbooks" {
+			sm.orderBookSubscriptionRoutes[routeKey] = req.Exchange
+		} else {
+			sm.tradeSubscriptionRoutes[routeKey] = req.Exchange
+		}
 	case "unsubscribe":
 		if clients, ok := subMap[subID]; ok {
 			delete(clients, clientIDStr)
 			if len(clients) == 0 {
 				delete(subMap, subID)
 			}
+		}
+		routeKey := getClientRouteKey(clientIDStr, subID)
+		if req.DataType == "orderbooks" {
+			delete(sm.orderBookSubscriptionRoutes, routeKey)
+		} else {
+			delete(sm.tradeSubscriptionRoutes, routeKey)
 		}
 	case "disconnect":
 		sm.cleanupClientSubscriptions(clientIDStr)
@@ -387,11 +415,17 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 
 	for subID, clients := range sm.tradeSubscriptions {
 		delete(clients, clientID)
+		routeKey := getClientRouteKey(clientID, subID)
+		exactExchange := sm.tradeSubscriptionRoutes[routeKey]
+		delete(sm.tradeSubscriptionRoutes, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {
+				if exactExchange == "" {
+					exactExchange = exchange
+				}
 				toUnsub = append(toUnsub, unsubReq{
-					exchange:   exchange,
+					exchange:   exactExchange,
 					marketType: marketType,
 					symbol:     symbol,
 					dataType:   "trades",
@@ -403,11 +437,17 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 
 	for subID, clients := range sm.orderBookSubscriptions {
 		delete(clients, clientID)
+		routeKey := getClientRouteKey(clientID, subID)
+		exactExchange := sm.orderBookSubscriptionRoutes[routeKey]
+		delete(sm.orderBookSubscriptionRoutes, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {
+				if exactExchange == "" {
+					exactExchange = exchange
+				}
 				toUnsub = append(toUnsub, unsubReq{
-					exchange:   exchange,
+					exchange:   exactExchange,
 					marketType: marketType,
 					symbol:     symbol,
 					dataType:   "orderbooks",
@@ -419,6 +459,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 
 	for wildcardID, clients := range sm.wildcardSubscribers {
 		delete(clients, clientID)
+		delete(sm.wildcardRoutes, getClientRouteKey(clientID, wildcardID))
 		if len(clients) == 0 {
 			delete(sm.wildcardSubscribers, wildcardID)
 		}
@@ -428,8 +469,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		if req.symbol == "" {
 			continue
 		}
-		handlerName := req.exchange + "_native"
-		handler, ok := sm.exchangeRegistry[handlerName]
+		handler, ok := sm.exchangeRegistry[req.exchange]
 		if !ok {
 			handler = sm.exchangeRegistry["ccxt_generic"]
 		}
@@ -438,7 +478,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		}
 		handler.HandleRequest(&shared_types.ClientRequest{
 			Action:     "unsubscribe",
-			Exchange:   handlerName,
+			Exchange:   req.exchange,
 			Symbol:     req.symbol,
 			MarketType: req.marketType,
 			DataType:   req.dataType,
@@ -452,4 +492,8 @@ func parseSubscriptionID(subID string) (exchange, marketType, symbol string, ok 
 		return "", "", "", false
 	}
 	return parts[0], parts[1], parts[2], true
+}
+
+func getClientRouteKey(clientID, subID string) string {
+	return clientID + "|" + subID
 }
