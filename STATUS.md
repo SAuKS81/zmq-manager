@@ -168,7 +168,7 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - Stand:
       - Binance erster Schnitt verifiziert
       - Bybit erster Schnitt verifiziert; Command-Chunking jetzt marktspezifisch (`spot=10`, `swap` bis Shard-Groesse)
-      - Bitget erster Schnitt umgesetzt: Ack/Timeout-Tracking ohne Request-ID, Retry und forced close auf Trade-Shards
+      - Bitget Ack/Timeout-Schnitt wieder zurueckgenommen; aktueller Stand ist bewusst ein strikt getakteter, serieller Batch-Sender mit Status-Events, weil die aggressivere Ack/Retry-Logik die stabile Sendetaktung gebrochen hat
   - P7-5 CCXT-Sonderpfad
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln

@@ -19,6 +19,11 @@ type ShardCommand struct {
 	Symbols []string
 }
 
+type bitgetOutboundCommand struct {
+	action  string
+	symbols []string
+}
+
 type ShardWorker struct {
 	wsURL          string
 	marketType     string
@@ -30,14 +35,12 @@ type ShardWorker struct {
 	mu             sync.Mutex
 	desiredSymbols map[string]bool
 	activeSymbols  map[string]bool
-	pending        map[string]bitgetPendingCommand
 }
 
 var (
 	bitgetPongNeedle         = []byte("pong")
 	bitgetActionUpdateNeedle = []byte(`"action":"update"`)
 	bitgetTradeNeedle        = []byte(`"channel":"trade"`)
-	bitgetEventNeedle        = []byte(`"event":"`)
 	bitgetReadBufPool        = sync.Pool{
 		New: func() any {
 			buf := &bytes.Buffer{}
@@ -58,7 +61,6 @@ func NewShardWorker(wsURL, marketType string, initialSymbols []string, stopCh <-
 		wg:             wg,
 		desiredSymbols: make(map[string]bool),
 		activeSymbols:  make(map[string]bool),
-		pending:        make(map[string]bitgetPendingCommand),
 	}
 	for _, s := range initialSymbols {
 		sw.desiredSymbols[s] = true
@@ -120,28 +122,60 @@ func (sw *ShardWorker) hasDesiredSymbols() bool {
 	return len(sw.desiredSymbols) > 0
 }
 
+func (sw *ShardWorker) writePump(conn *websocket.Conn, writeCh <-chan []byte, errCh chan<- error) {
+	defer conn.Close()
+	for {
+		select {
+		case message, ok := <-writeCh:
+			if !ok {
+				conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				errCh <- err
+				return
+			}
+		case <-sw.stopCh:
+			return
+		}
+	}
+}
+
+func (sw *ShardWorker) readPump(conn *websocket.Conn, msgCh chan<- []byte, errCh chan<- error) {
+	defer conn.Close()
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(readIdleSec * time.Second))
+		_, message, err := readBitgetMessagePooled(conn)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		msgCh <- message
+	}
+}
+
 func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	msgCh := make(chan []byte, 256)
 	errCh := make(chan error, 1)
 	writeCh := make(chan []byte, 32)
+	outboundCh := make(chan bitgetOutboundCommand, 32)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
-	retryTicker := time.NewTicker(250 * time.Millisecond)
 	defer pingTicker.Stop()
-	defer retryTicker.Stop()
+	defer close(outboundCh)
 
 	go sw.readPump(conn, msgCh, errCh)
 	go sw.writePump(conn, writeCh, errCh)
+	go sw.senderLoop(writeCh, outboundCh, errCh)
 
 	sw.mu.Lock()
-	sw.activeSymbols = make(map[string]bool, len(sw.desiredSymbols))
-	sw.pending = make(map[string]bitgetPendingCommand, len(sw.desiredSymbols))
 	initial := make([]string, 0, len(sw.desiredSymbols))
 	for s := range sw.desiredSymbols {
 		initial = append(initial, s)
 	}
 	sw.mu.Unlock()
-	if err := sw.issueCommand(writeCh, "subscribe", initial); err != nil {
-		return err
+	if len(initial) > 0 {
+		log.Printf("[BITGET-SHARD-INFO] (Re)Connect erfolgreich. Sende initiale Abos fuer %d Symbole.", len(initial))
+		outboundCh <- bitgetOutboundCommand{action: "subscribe", symbols: initial}
 	}
 
 	for {
@@ -150,13 +184,6 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
 			if bytes.Equal(msg, bitgetPongNeedle) {
-				continue
-			}
-
-			if bytes.Contains(msg, bitgetEventNeedle) {
-				if err := sw.handleEventResponse(msg, writeCh); err != nil {
-					return err
-				}
 				continue
 			}
 
@@ -179,51 +206,28 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 
 		case cmd := <-sw.commandCh:
 			log.Printf("[BITGET-SHARD] Erhalte Befehl: %s fuer %d Symbole", cmd.Action, len(cmd.Symbols))
-			if cmd.Action == "subscribe" {
-				sw.mu.Lock()
-				toSub := make([]string, 0, len(cmd.Symbols))
-				for _, symbol := range cmd.Symbols {
-					sw.desiredSymbols[symbol] = true
-					if sw.activeSymbols[symbol] {
+			sw.mu.Lock()
+			symbols := make([]string, 0, len(cmd.Symbols))
+			for _, s := range cmd.Symbols {
+				if cmd.Action == "subscribe" {
+					sw.desiredSymbols[s] = true
+					if sw.activeSymbols[s] {
 						continue
 					}
-					if pending, ok := sw.pending[symbol]; ok && pending.op == "subscribe" {
+					sw.activeSymbols[s] = true
+					symbols = append(symbols, s)
+				} else {
+					delete(sw.desiredSymbols, s)
+					if !sw.activeSymbols[s] {
 						continue
 					}
-					toSub = append(toSub, symbol)
-				}
-				sw.mu.Unlock()
-				if err := sw.issueCommand(writeCh, "subscribe", toSub); err != nil {
-					return err
-				}
-			} else {
-				sw.mu.Lock()
-				toUnsub := make([]string, 0, len(cmd.Symbols))
-				for _, symbol := range cmd.Symbols {
-					delete(sw.desiredSymbols, symbol)
-					if pending, ok := sw.pending[symbol]; ok {
-						if pending.op == "unsubscribe" {
-							continue
-						}
-						if pending.op == "subscribe" && !sw.activeSymbols[symbol] {
-							delete(sw.pending, symbol)
-							continue
-						}
-					}
-					if sw.activeSymbols[symbol] {
-						toUnsub = append(toUnsub, symbol)
-						continue
-					}
-				}
-				sw.mu.Unlock()
-				if err := sw.issueCommand(writeCh, "unsubscribe", toUnsub); err != nil {
-					return err
+					delete(sw.activeSymbols, s)
+					symbols = append(symbols, s)
 				}
 			}
-
-		case <-retryTicker.C:
-			if err := sw.retryPending(writeCh); err != nil {
-				return err
+			sw.mu.Unlock()
+			if len(symbols) > 0 {
+				outboundCh <- bitgetOutboundCommand{action: cmd.Action, symbols: symbols}
 			}
 
 		case <-pingTicker.C:
@@ -239,7 +243,35 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	}
 }
 
-func (sw *ShardWorker) issueCommand(writeCh chan<- []byte, op string, symbols []string) error {
+func (sw *ShardWorker) senderLoop(writeCh chan<- []byte, outboundCh <-chan bitgetOutboundCommand, errCh chan<- error) {
+	for cmd := range outboundCh {
+		if err := sw.sendSubscription(writeCh, cmd.action, cmd.symbols); err != nil {
+			errCh <- err
+			return
+		}
+	}
+}
+
+func readBitgetMessagePooled(conn *websocket.Conn) (int, []byte, error) {
+	msgType, r, err := conn.NextReader()
+	if err != nil {
+		return 0, nil, err
+	}
+
+	buf := bitgetReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(r)
+	if err != nil {
+		bitgetReadBufPool.Put(buf)
+		return 0, nil, err
+	}
+
+	msg := append([]byte(nil), buf.Bytes()...)
+	bitgetReadBufPool.Put(buf)
+	return msgType, msg, nil
+}
+
+func (sw *ShardWorker) sendSubscription(writeCh chan<- []byte, op string, symbols []string) error {
 	if len(symbols) == 0 {
 		return nil
 	}
@@ -247,7 +279,7 @@ func (sw *ShardWorker) issueCommand(writeCh chan<- []byte, op string, symbols []
 	instType, err := getInstType(sw.marketType)
 	if err != nil {
 		log.Printf("[BITGET-SHARD-ERROR] Ungueltiger Market-Type fuer Abo: %v", err)
-		return err
+		return nil
 	}
 
 	for i := 0; i < len(symbols); i += symbolsPerBatch {
@@ -268,125 +300,17 @@ func (sw *ShardWorker) issueCommand(writeCh chan<- []byte, op string, symbols []
 		payload, err := json.Marshal(req)
 		if err != nil {
 			log.Printf("[BITGET-SHARD-SEND-ERROR] Fehler beim Marshalling: %v", err)
-			return err
+			continue
 		}
 
-		sw.mu.Lock()
-		now := time.Now()
-		for _, symbol := range batch {
-			attempt := 1
-			if existing, ok := sw.pending[symbol]; ok && existing.op == op {
-				attempt = existing.attempt + 1
-			}
-			sw.pending[symbol] = bitgetPendingCommand{op: op, attempt: attempt, sentAt: now}
+		select {
+		case writeCh <- payload:
+		case <-sw.stopCh:
+			return nil
 		}
-		sw.mu.Unlock()
-
-		writeCh <- payload
 
 		if end < len(symbols) {
 			time.Sleep(delayPerBatchMs * time.Millisecond)
-		}
-	}
-	return nil
-}
-
-func (sw *ShardWorker) handleEventResponse(msg []byte, writeCh chan<- []byte) error {
-	var resp bitgetEventResponse
-	if err := json.Unmarshal(msg, &resp); err != nil {
-		return nil
-	}
-	args := parseBitgetResponseArgs(resp.Arg)
-	if len(args) == 0 {
-		return nil
-	}
-
-	switch resp.Event {
-	case "subscribe":
-		redundant := make([]string, 0, len(args))
-		sw.mu.Lock()
-		for _, arg := range args {
-			symbol := arg.InstID
-			delete(sw.pending, symbol)
-			sw.activeSymbols[symbol] = true
-			if !sw.desiredSymbols[symbol] {
-				redundant = append(redundant, symbol)
-			}
-		}
-		sw.mu.Unlock()
-		if len(redundant) > 0 {
-			return sw.issueCommand(writeCh, "unsubscribe", redundant)
-		}
-	case "unsubscribe":
-		sw.mu.Lock()
-		for _, arg := range args {
-			symbol := arg.InstID
-			delete(sw.pending, symbol)
-			delete(sw.activeSymbols, symbol)
-		}
-		sw.mu.Unlock()
-	case "error":
-		retrySymbols := make([]string, 0, len(args))
-		sw.mu.Lock()
-		for _, arg := range args {
-			symbol := arg.InstID
-			pending, ok := sw.pending[symbol]
-			if !ok {
-				continue
-			}
-			if pending.op == "unsubscribe" && pending.attempt >= 4 {
-				sw.mu.Unlock()
-				sw.emitStatusForSymbols("stream_unsubscribe_failed", []string{symbol}, "unsubscribe_nack", pending.attempt, resp.Msg)
-				sw.emitStatusForSymbols("stream_force_closed", []string{symbol}, "unsubscribe_nack", pending.attempt, resp.Msg)
-				return &websocket.CloseError{Code: websocket.CloseInternalServerErr, Text: "bitget unsubscribe nack"}
-			}
-			retrySymbols = append(retrySymbols, symbol)
-		}
-		sw.mu.Unlock()
-		if len(retrySymbols) == 0 {
-			return nil
-		}
-		op := "subscribe"
-		sw.mu.Lock()
-		if pending, ok := sw.pending[retrySymbols[0]]; ok {
-			op = pending.op
-		}
-		sw.mu.Unlock()
-		return sw.issueCommand(writeCh, op, retrySymbols)
-	}
-	return nil
-}
-
-func (sw *ShardWorker) retryPending(writeCh chan<- []byte) error {
-	now := time.Now()
-	toRetry := make([]struct {
-		symbol string
-		cmd    bitgetPendingCommand
-	}, 0, len(sw.pending))
-
-	sw.mu.Lock()
-	for symbol, cmd := range sw.pending {
-		if now.Sub(cmd.sentAt) < nextBitgetRetryDelay(cmd.attempt) {
-			continue
-		}
-		toRetry = append(toRetry, struct {
-			symbol string
-			cmd    bitgetPendingCommand
-		}{symbol: symbol, cmd: cmd})
-	}
-	sw.mu.Unlock()
-
-	for _, item := range toRetry {
-		if item.cmd.attempt >= 4 {
-			if item.cmd.op == "unsubscribe" {
-				sw.emitStatusForSymbols("stream_unsubscribe_failed", []string{item.symbol}, "unsubscribe_ack_timeout", item.cmd.attempt, "")
-				sw.emitStatusForSymbols("stream_force_closed", []string{item.symbol}, "unsubscribe_ack_timeout", item.cmd.attempt, "")
-			}
-			return &websocket.CloseError{Code: websocket.CloseNormalClosure, Text: "bitget command ack timeout"}
-		}
-		log.Printf("[BITGET-SHARD-ERROR] %s ack timeout fuer %s attempt=%d retrying", item.cmd.op, item.symbol, item.cmd.attempt)
-		if err := sw.issueCommand(writeCh, item.cmd.op, []string{item.symbol}); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -420,55 +344,4 @@ func (sw *ShardWorker) emitStatusForSymbols(eventType string, symbols []string, 
 			Timestamp:  time.Now().UnixMilli(),
 		}
 	}
-}
-
-func (sw *ShardWorker) writePump(conn *websocket.Conn, writeCh <-chan []byte, errCh chan<- error) {
-	defer conn.Close()
-	for {
-		select {
-		case message, ok := <-writeCh:
-			if !ok {
-				conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				errCh <- err
-				return
-			}
-		case <-sw.stopCh:
-			return
-		}
-	}
-}
-
-func (sw *ShardWorker) readPump(conn *websocket.Conn, msgCh chan<- []byte, errCh chan<- error) {
-	defer conn.Close()
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(readIdleSec * time.Second))
-		_, message, err := readBitgetMessagePooled(conn)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		msgCh <- message
-	}
-}
-
-func readBitgetMessagePooled(conn *websocket.Conn) (int, []byte, error) {
-	msgType, r, err := conn.NextReader()
-	if err != nil {
-		return 0, nil, err
-	}
-
-	buf := bitgetReadBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	_, err = buf.ReadFrom(r)
-	if err != nil {
-		bitgetReadBufPool.Put(buf)
-		return 0, nil, err
-	}
-
-	msg := append([]byte(nil), buf.Bytes()...)
-	bitgetReadBufPool.Put(buf)
-	return msgType, msg, nil
 }
