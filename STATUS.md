@@ -115,6 +115,11 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - Binance: verifizierter Ack/Nack + Retry + gezielter Recycle
   - Bybit: verifizierter Ack/Nack + Retry + gezielter Recycle; Command-Chunking marktspezifisch (`spot=10`, `swap` bis Shard-Groesse)
   - Bitget: verifizierter paced Pfad mit globaler Sendetaktung und Empty-Shard-Cleanup nach finalem Unsubscribe-Flush
+- P7-2 Selektiver Shard-Recycle abgeschlossen:
+  - native Reconnect-/Recycle-Pfade ziehen Resubscribe-Ziellisten jetzt explizit aus `desired*` statt implizit aus gemischtem Zustand
+  - damit werden nur noch gewuenschte Streams/Symbole/Themen nach einem Recycle wieder aufgebaut
+  - stale `active*`-Eintraege koennen entfernte Streams nicht mehr versehentlich zurueckbringen
+  - abgesichert durch Unit-Tests fuer Binance Trade/OB und Bybit Trade/OB Snapshot-Pfade
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
@@ -159,11 +164,6 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
         - Broker kann `stream_reconnecting` / `stream_restored` / `stream_unsubscribe_failed` / `stream_force_closed` verteilen
         - neuer schlanker `clients/smoke_client.go` loggt diese JSON-Status-Events
       - Vultr-Verifikation fuer `bybit_native` erfolgt; Lifecycle-Pfad laeuft stabil
-  - P7-2 Selektiver Shard-Recycle
-    - wenn ein Shard wegen fehlgeschlagenem unsubscribe hart geschlossen wird:
-      - nur noch gewuenschte Streams reconnecten
-      - entfernte Streams duerfen nicht wieder auftauchen
-    - noch offen als gezielt verifizierter Fehlerpfad
   - P7-5 CCXT-Sonderpfad
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
@@ -177,7 +177,7 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - Fehler sind sichtbar
     - andere Streams werden nach forced recycle sauber wiederhergestellt
     - Clients sehen `reconnecting`/`restored`
-    - noch offen bis `P7-2`, `P7-5`, `P7-6` abgeschlossen sind
+    - noch offen bis `P7-5`, `P7-6` abgeschlossen sind
 
 ## Aktueller Arbeitsmodus
 

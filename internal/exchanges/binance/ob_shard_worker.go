@@ -77,12 +77,7 @@ func (sw *OrderBookShardWorker) Run() {
 			continue
 		}
 
-		sw.mu.Lock()
-		streamsToResub := make([]string, 0, len(sw.desiredStreams))
-		for s := range sw.desiredStreams {
-			streamsToResub = append(streamsToResub, s)
-		}
-		sw.mu.Unlock()
+		streamsToResub := sw.desiredStreamsSnapshot()
 
 		if len(streamsToResub) > 0 {
 			if _, err := sw.batchAndSend(conn, "SUBSCRIBE", streamsToResub); err != nil {
@@ -114,6 +109,17 @@ func (sw *OrderBookShardWorker) hasDesiredStreams() bool {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	return len(sw.desiredStreams) > 0
+}
+
+func (sw *OrderBookShardWorker) desiredStreamsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	streams := make([]string, 0, len(sw.desiredStreams))
+	for stream := range sw.desiredStreams {
+		streams = append(streams, stream)
+	}
+	return streams
 }
 
 func getOBStreamName(symbol string, depth int) string {

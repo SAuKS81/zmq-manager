@@ -116,6 +116,17 @@ func (sw *ShardWorker) hasDesiredSymbols() bool {
 	return len(sw.desiredSymbols) > 0
 }
 
+func (sw *ShardWorker) desiredSymbolsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	symbols := make([]string, 0, len(sw.desiredSymbols))
+	for symbol := range sw.desiredSymbols {
+		symbols = append(symbols, symbol)
+	}
+	return symbols
+}
+
 func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 	msgCh := make(chan *bytes.Buffer, 256)
 	errCh := make(chan error, 1)
@@ -159,11 +170,9 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 	pendingUnsubs := make([]string, 0, 128)
 	inflight := make(map[string]bybitInflightCommand)
 
-	sw.mu.Lock()
-	for symbol := range sw.desiredSymbols {
+	for _, symbol := range sw.desiredSymbolsSnapshot() {
 		pendingSubs = queueUniqueTopic(pendingSubs, symbol)
 	}
-	sw.mu.Unlock()
 
 	flushCommands := func() error {
 		chunkSize := bybitCommandChunkSize(sw.marketType)

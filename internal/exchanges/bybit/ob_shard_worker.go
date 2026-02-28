@@ -133,6 +133,17 @@ func (sw *OrderBookShardWorker) hasDesiredSubscriptions() bool {
 	return len(sw.desiredSubscriptions) > 0
 }
 
+func (sw *OrderBookShardWorker) desiredTopicsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	topics := make([]string, 0, len(sw.desiredSubscriptions))
+	for topic := range sw.desiredSubscriptions {
+		topics = append(topics, topic)
+	}
+	return topics
+}
+
 func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 	msgCh := make(chan incomingOBMessage, 250)
 	errCh := make(chan error, 1)
@@ -176,11 +187,9 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 	pendingUnsubs := make([]string, 0, 128)
 	inflight := make(map[string]bybitInflightCommand)
 
-	sw.mu.Lock()
-	for topic := range sw.desiredSubscriptions {
+	for _, topic := range sw.desiredTopicsSnapshot() {
 		pendingSubs = queueUniqueTopic(pendingSubs, topic)
 	}
-	sw.mu.Unlock()
 
 	flushCommands := func() error {
 		chunkSize := bybitCommandChunkSize(sw.marketType)

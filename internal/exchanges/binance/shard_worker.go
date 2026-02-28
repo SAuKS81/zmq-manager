@@ -72,12 +72,7 @@ func (sw *ShardWorker) Run() {
 		done := make(chan struct{})
 		respCh := make(chan wsCommandResponse, 128)
 
-		sw.mu.Lock()
-		streamsToResub := make([]string, 0, len(sw.desiredStreams))
-		for s := range sw.desiredStreams {
-			streamsToResub = append(streamsToResub, s)
-		}
-		sw.mu.Unlock()
+		streamsToResub := sw.desiredStreamsSnapshot()
 		if len(streamsToResub) > 0 {
 			if _, err := sw.batchAndSend(conn, "SUBSCRIBE", streamsToResub); err != nil {
 				conn.Close()
@@ -101,6 +96,17 @@ func (sw *ShardWorker) hasDesiredStreams() bool {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	return len(sw.desiredStreams) > 0
+}
+
+func (sw *ShardWorker) desiredStreamsSnapshot() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	streams := make([]string, 0, len(sw.desiredStreams))
+	for stream := range sw.desiredStreams {
+		streams = append(streams, stream)
+	}
+	return streams
 }
 
 func (sw *ShardWorker) writePump(conn *websocket.Conn, done chan struct{}, respCh <-chan wsCommandResponse) {
