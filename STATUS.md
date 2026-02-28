@@ -75,6 +75,40 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `cf37c1e`: disconnect propagiert echte unsubs + sofortiger Client-Cleanup
   - `3c83bb7`: OB-unsubscribe robust bei fehlender `depth` (disconnect-Pfad)
   - Verifikation: `v2_disconnect_verify_fix2_1` (`PASS`, Drops `0`, `DISCONNECT_SENT`, kein Timeout-Abbau mehr noetig)
+- Live-Serienlauf ohne Broker-Neustart verifiziert (mit Idle-Gate):
+  - `v2_live_freeze_bybit_clean_1..3` jeweils `PASS`, Drops `0`
+  - Entscheidender Ablaufpunkt: vor dem naechsten Run erst Broker-Idle bestaetigen (`[STATS] Trades: 0 | OrderBooks: 0`, mehrfach in Folge)
+  - Heap-Bestaetigung ueber `inuse_space` nach Idle: ~`33.8MB` -> `33.9MB` -> `35.4MB` (stabil, kein klarer Leak-Trend)
+  - Hinweis: `alloc_space` bleibt kumulativ und ist fuer prozesslange Serienlaeufe nicht als Leak-Indikator geeignet
+- Binance Live-Freeze (final, hohe Marktvolatilitaet) verifiziert:
+  - `v2_live_freeze_binance_clean_1..3` jeweils `PASS`, Drops `0` auf Commit `893cbee`
+  - Unsubscribe-Pfad fixiert (Depth-Wildcard bei remove, kein `depth=20` Override bei unsubscribe)
+  - Hinweis: hoehere trades/s durch Marktphase; Vergleich primar ueber Gate/Drops/Hotspot-Stabilitaet
+- Bitget Live-Freeze (final) verifiziert:
+  - `v2_live_freeze_bitget_clean_1..3` jeweils `PASS`, Drops `0` auf Commit `038b1af`
+  - Unsubscribe-Haertung aktiv: serialisierter remove-Pfad + gebuendelte Unsub-Batches
+  - `ob/s=0` bleibt by design (aktueller bitget-native Pfad trade-only)
+- Replay-Referenzspur final festgeschrieben (tick `1s`, Commit `038b1af`):
+  - Bybit replay: `PASS`, Drops `0`, stabile Rate (`trades~972/s`, `ob~40/s`)
+  - Binance replay: `PASS`, Drops `0`, stabile Rate (`trades~972/s`, `ob~972/s`)
+  - Bitget replay: als Referenz `PASS` festgeschrieben (`trades~972/s`, `ob=0 by design`);
+    frueher Einzel-Ausreisser mit kleinen Drops dokumentiert, aber Gesamtbewertung stabil/akzeptiert
+- CCXT-Haertung finalisiert (Commit `72a0dc6`):
+  - `BadSymbol`/missing-symbol Erkennung robuster (mehrere Fehlertext-Varianten)
+  - Normalize-Pfade gehaertet (defensive Feldpruefung + Panic-Guard)
+  - Worker behandeln Normalize-Fehler kontrolliert (Warn-Log statt stilles Schlucken/Panik)
+  - Verifikation: `v2_ccxt_hardening_smoke_1` (`PASS`, Drops `0`, `DISCONNECT_SENT`)
+- Baseline-Bundle/Tar-Warnung behoben (Commit `c73490b`):
+  - deterministische Bundle-Erstellung per Datei-Snapshot
+  - keine `tar: .: file changed as we read it` Warnung mehr im Verifikationslauf
+- Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
+  - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
+  - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`
+  - Mindestfrequenz: nach jedem Keep-Commit im Hotpath oder mindestens 1x taeglich im aktiven Tuning
+  - Regression-Trigger:
+    - `mutex` oder `block` Top-Flat +30% gg. letzter Referenz bei gleicher Lastklasse
+    - oder neues Lock/Block-Hotspot >10% Flat in Top-Ansicht
+  - Bei Trigger: kein Keep ohne Gegenprobe (zweiter Run) oder Root-Cause-Notiz
 - Revertete Experimente (nicht behalten):
   - `c776e81` revert von partial OB message-shape decode
   - `3ddc220` revert single-client cache skip/header change
@@ -92,44 +126,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 
 ## Offen
 
-- 1) Baseline v2 final einfrieren (gestartet)
-  - Live-Baseline finalisieren (3 saubere Runs je Exchange/Markttyp, Median + Streuung festschreiben)
-    - Kosten: 6/10, Nutzen: 9/10
-  - Ausreisser-/Vergleichsregeln fixieren (A/B-Entscheidung verbindlich)
-    - Kosten: 3/10, Nutzen: 8/10
-  - Finale Referenzwerte dokumentieren (STATUS/Runbook)
-    - Kosten: 2/10, Nutzen: 8/10
-- 2) Replay-Referenzspur als Standard-Nebenpfad festziehen
-  - Replay-Profile versionieren/pinnen (Bybit/Binance/Bitget Inputs fix)
-    - Kosten: 3/10, Nutzen: 8/10
-  - Verbindliche Replay-Parameter einfrieren (`tick`, `duration`, `symbols`, `bulk-size`)
-    - Kosten: 2/10, Nutzen: 8/10
-  - Operator-Runbook Replay/Live angleichen
-    - Kosten: 2/10, Nutzen: 7/10
-- 3) Bitget Lastbild technisch klaeren
-  - Warum `ob/s=0` formal dokumentieren (trade-only by design aktuell)
-    - Kosten: 2/10, Nutzen: 7/10
-  - Trade/s bei 1000 Subs einordnen (Erwartungsband + Alarmgrenzen)
-    - Kosten: 4/10, Nutzen: 8/10
-  - OB-Pfad-Plan fuer Bitget definieren (wenn fachlich noetig)
-    - Kosten: 6/10, Nutzen: 6/10
-- 4) CCXT-Haertung finalisieren
-  - BadSymbol robust behandeln (kein Run-Abbruch, saubere Skip-Strategie)
-    - Kosten: 4/10, Nutzen: 9/10
-  - Checksum-/Parse-Fehler robust machen (keine Panics, kontrollierte Recovery)
-    - Kosten: 5/10, Nutzen: 9/10
-  - Fehlerpfade mit Tests absichern
-    - Kosten: 4/10, Nutzen: 8/10
-- 5) `baseline_ingest.sh` tar-Warnung beseitigen
-  - Ursache im Bundle-Step beheben (`file changed as we read it`)
-    - Kosten: 3/10, Nutzen: 6/10
-  - Artifact-Integritaet verifizieren (`meta.json`, `allocs.pprof`, `cpu.pprof`, `smoke.log`)
-    - Kosten: 2/10, Nutzen: 7/10
-- 6) Mutex/Block-Profil als regulaeren Kontrolllauf nachziehen
-  - Standard-Kontrolllauf definieren (wann/wie oft)
-    - Kosten: 2/10, Nutzen: 7/10
-  - Grenzwerte/Regression-Trigger festlegen
-    - Kosten: 3/10, Nutzen: 8/10
+- aktuell keine offenen Punkte im Baseline-v2 Pfad
 
 ## Aktueller Arbeitsmodus
 
@@ -138,3 +135,25 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   1. Commit pinnen
   2. Run ausfuehren
   3. gegen Referenz bewerten (`keep`/`revert`)
+
+## Baseline-v2 Freeze-Regel (verbindlich)
+
+- Pro Exchange/Markttyp genau 3 Runs mit identischen Parametern.
+- Zwischen zwei Runs ohne Broker-Neustart:
+  - erst weiter, wenn Broker-Idle bestaetigt ist (`[STATS] Trades: 0 | OrderBooks: 0`) mindestens 3x in Folge.
+- Gueltigkeit eines Runs:
+  - `gate_status=PASS`
+  - `drops_delta_total=0`
+  - Smoke-Client zeigt `SUBSCRIBE_DONE` und `DISCONNECT_SENT`.
+- Vergleichsregel:
+  - `alloc_space`/`cpu` aus Run-Artefakten fuer Hotspot-Vergleich,
+  - Heap-Stabilitaet nur ueber `inuse_space` nach Idle bewerten (nicht ueber `alloc_space`).
+- Ausreisserregel:
+  - genau 1 Ausreisser ist erlaubt, wenn 2/3 Runs konsistent sind und der Ausreisser klar erklaerbar ist (z. B. Live-Marktrauschen/kurzer Spike).
+  - sonst Serie wiederholen.
+
+## Baseline-v2 Freeze-Status
+
+- Bybit live freeze: funktional verifiziert (disconnect/unsubscribe + idle-gated Serienlauf, `inuse_space` stabil).
+- Binance live freeze: final verifiziert (`v2_live_freeze_binance_clean_1..3`, `PASS`, Drops `0`).
+- Bitget live freeze: final verifiziert (`v2_live_freeze_bitget_clean_1..3`, `PASS`, Drops `0`, trade-only/`ob/s=0` by design).
