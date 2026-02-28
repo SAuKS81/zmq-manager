@@ -102,6 +102,10 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
 - Baseline-Bundle/Tar-Warnung behoben (Commit `c73490b`):
   - deterministische Bundle-Erstellung per Datei-Snapshot
   - keine `tar: .: file changed as we read it` Warnung mehr im Verifikationslauf
+- Legacy-`clients/`-Ordner entfernt:
+  - alte Go/Python-Testclients bewusst geloescht
+  - Repo-Build/Test damit wieder sauber
+  - `baseline_ingest.sh` meldet jetzt explizit, dass vor erneutem Einsatz ein neuer Smoke-Client benoetigt wird
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`

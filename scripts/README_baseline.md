@@ -1,13 +1,17 @@
 ﻿# Phase 1.5 Baseline Tooling
 
 Dieses Paket liefert reproduzierbare Ingest-Baseline-Runs mit:
-- `clients/smoke_client.go`
 - `scripts/baseline_ingest.sh`
 - `scripts/gen_symbols_binance_spot.sh`
 - `scripts/gen_symbols_bybit_spot.sh`
 - `scripts/gen_symbols_bybit_swap.sh`
 - `scripts/gen_symbols_bitget_spot.sh`
 - `scripts/gen_symbols_bitget_swap.sh`
+
+Hinweis:
+- der alte `clients/`-Ordner wurde bewusst entfernt
+- `baseline_ingest.sh` braucht vor dem naechsten produktiven Einsatz einen neuen Smoke-Client
+- bis dahin ist das Skript nur als Runbook/Artefakt-Workflow dokumentiert
 
 ## Prerequisite: Symbol List
 
