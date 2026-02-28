@@ -1,8 +1,8 @@
 # STATUS
 
-## Stand (2026-02-26)
+## Stand (2026-02-28)
 
-Aktiver Branch: `phase1.5-baseline-tooling`
+Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
 
 ## Abgehakt
 
@@ -132,6 +132,32 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - Bitget-OB-Design-Notiz erstellen
   - nur technische Dokumentation (WS-Channel, Subscribe/Unsubscribe, Snapshot/Delta, Mapping auf `shared_types.OrderBookUpdate`, Recovery-Regeln)
   - explizit ohne Implementierung und ohne Testlauf
+- neuer technischer Backlog ausserhalb des Baseline-v2 Pfads:
+  - P7-1 Unsubscribe-State-Machine fuer native Adapter
+    - Ziel: `unsubscribe` nicht nur senden, sondern pro Stream/Batch verfolgen (`pending`, `acked`, `retry`, `failed`, `removed`)
+    - inkl. Retry-Policy, Timeout und forced shard close als letzte Eskalation
+  - P7-2 Selektiver Shard-Recycle
+    - wenn ein Shard wegen fehlgeschlagenem unsubscribe hart geschlossen wird:
+      - nur noch gewuenschte Streams reconnecten
+      - entfernte Streams duerfen nicht wieder auftauchen
+  - P7-3 Client-Signalierung bei Feed-Stoerungen
+    - neue Broker-Status-Events fuer `stream_reconnecting`, `stream_restored`, `stream_unsubscribe_failed`, `stream_force_closed`
+    - Clients muessen Feed-Unterbrechungen und Reconnects explizit sehen koennen
+  - P7-4 Native Adapter nacheinander haerten
+    - Bybit: Ack/Nack + Retry + forced recycle
+    - Binance: Ack/Nack + Retry + forced recycle
+    - Bitget: Ack/Nack + Retry + forced recycle
+  - P7-5 CCXT-Sonderpfad
+    - eigene `unsubscribe`-Funktion fuer CCXT
+    - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
+  - P7-6 Metriken und Logs
+    - `unsubscribe_attempts_total`, `unsubscribe_failures_total`, `forced_shard_recycles_total`, `stream_reconnects_total`
+    - strukturierte Logs mit `exchange`, `shard`, `symbol`, `data_type`, `attempt`, `reason`
+  - P7-7 Abnahme
+    - unsubscribe wird verfolgt
+    - Fehler sind sichtbar
+    - andere Streams werden nach forced recycle sauber wiederhergestellt
+    - Clients sehen `reconnecting`/`restored`
 
 ## Aktueller Arbeitsmodus
 
