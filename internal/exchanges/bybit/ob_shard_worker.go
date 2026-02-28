@@ -184,32 +184,36 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 
 	flushCommands := func() error {
 		if len(pendingSubs) > 0 {
-			reqID, err := sw.sendSubscription("subscribe", pendingSubs)
-			if err != nil {
-				return err
+			for _, chunk := range chunkTopics(pendingSubs, bybitMaxArgsPerCommand) {
+				reqID, err := sw.sendSubscription("subscribe", chunk)
+				if err != nil {
+					return err
+				}
+				inflight[reqID] = bybitInflightCommand{op: "subscribe", topics: chunk, attempt: 1, sentAt: time.Now()}
 			}
-			inflight[reqID] = bybitInflightCommand{op: "subscribe", topics: append([]string(nil), pendingSubs...), attempt: 1, sentAt: time.Now()}
 			pendingSubs = pendingSubs[:0]
 		}
 		if len(pendingUnsubs) > 0 {
-			reqID, err := sw.sendSubscription("unsubscribe", pendingUnsubs)
-			if err != nil {
-				return err
-			}
-			attempt := 1
-			for _, topic := range pendingUnsubs {
-				for _, cmd := range inflight {
-					if cmd.op != "unsubscribe" {
-						continue
-					}
-					for _, existing := range cmd.topics {
-						if existing == topic && cmd.attempt >= attempt {
-							attempt = cmd.attempt + 1
+			for _, chunk := range chunkTopics(pendingUnsubs, bybitMaxArgsPerCommand) {
+				reqID, err := sw.sendSubscription("unsubscribe", chunk)
+				if err != nil {
+					return err
+				}
+				attempt := 1
+				for _, topic := range chunk {
+					for _, cmd := range inflight {
+						if cmd.op != "unsubscribe" {
+							continue
+						}
+						for _, existing := range cmd.topics {
+							if existing == topic && cmd.attempt >= attempt {
+								attempt = cmd.attempt + 1
+							}
 						}
 					}
 				}
+				inflight[reqID] = bybitInflightCommand{op: "unsubscribe", topics: chunk, attempt: attempt, sentAt: time.Now()}
 			}
-			inflight[reqID] = bybitInflightCommand{op: "unsubscribe", topics: append([]string(nil), pendingUnsubs...), attempt: attempt, sentAt: time.Now()}
 			pendingUnsubs = pendingUnsubs[:0]
 		}
 		return nil
