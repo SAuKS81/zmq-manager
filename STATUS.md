@@ -176,13 +176,16 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - P7-5 CCXT-Sonderpfad
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
-    - in Arbeit: ConnectionManager nutzt jetzt eigene lokale Unsubscribe-Helfer fuer Trade- und Orderbook-Shards
+    - in Arbeit:
+      - ConnectionManager nutzt jetzt eigene lokale Unsubscribe-Helfer fuer Trade- und Orderbook-Shards
+      - CCXT-Worker rufen jetzt explizit `UnWatchTrades`, `UnWatchOrderBook`, `UnWatchTradesForSymbols` und `UnWatchOrderBookForSymbols` auf
+      - die verwendeten CCXT-Go-Pro-Interfaces enthalten die `*ForSymbols`-Varianten weiterhin
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar
     - andere Streams werden nach forced recycle sauber wiederhergestellt
     - Clients sehen `reconnecting`/`restored`
-    - noch offen bis `P7-5`, `P7-6` abgeschlossen sind
+    - noch offen bis `P7-5` abgeschlossen ist
 
 ## Aktueller Arbeitsmodus
 

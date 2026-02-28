@@ -15,7 +15,7 @@ import (
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
-// BatchShardWorker verwaltet eine einzelne WebSocket-Verbindung für `watchTradesForSymbols`.
+// BatchShardWorker verwaltet eine einzelne WebSocket-Verbindung fuer watchTradesForSymbols.
 type BatchShardWorker struct {
 	exchangeName  string
 	marketType    string
@@ -34,7 +34,7 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 	options := makeExchangeOptions(exchangeName, marketType)
 	exchange := ccxtpro.CreateExchange(exchangeName, options)
 	if exchange == nil {
-		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange-Instanz für %s nicht erstellen", exchangeName)
+		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange-Instanz fuer %s nicht erstellen", exchangeName)
 		return nil
 	}
 	return &BatchShardWorker{
@@ -52,7 +52,7 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 
 func (sw *BatchShardWorker) Run() {
 	defer sw.wg.Done()
-	log.Printf("[CCXT-BATCH-SHARD] Starte Worker für %s (%s)", sw.exchangeName, sw.marketType)
+	log.Printf("[CCXT-BATCH-SHARD] Starte Worker fuer %s (%s)", sw.exchangeName, sw.marketType)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -60,7 +60,7 @@ func (sw *BatchShardWorker) Run() {
 		case <-ticker.C:
 			sw.processCommandQueue()
 		case <-sw.stopCh:
-			log.Printf("[CCXT-BATCH-SHARD] Stoppe Worker für %s (%s)", sw.exchangeName, sw.marketType)
+			log.Printf("[CCXT-BATCH-SHARD] Stoppe Worker fuer %s (%s)", sw.exchangeName, sw.marketType)
 			if sw.cancelWorkers != nil {
 				sw.cancelWorkers()
 			}
@@ -90,8 +90,8 @@ drain:
 
 	sw.mu.Lock()
 	listChanged := false
+	unsubscribeSymbols := make(map[string]bool)
 	for _, cmd := range commands {
-		// KORREKTUR HIER: Wir iterieren über die Schlüssel der Map.
 		for s := range cmd.Symbols {
 			if cmd.Action == "subscribe" && !sw.activeSymbols[s] {
 				sw.activeSymbols[s] = true
@@ -99,6 +99,7 @@ drain:
 			} else if cmd.Action == "unsubscribe" && sw.activeSymbols[s] {
 				delete(sw.activeSymbols, s)
 				listChanged = true
+				unsubscribeSymbols[s] = true
 			}
 		}
 	}
@@ -118,6 +119,16 @@ drain:
 	}
 	sw.mu.Unlock()
 
+	if len(unsubscribeSymbols) > 0 {
+		symbolsToUnwatch := make([]string, 0, len(unsubscribeSymbols))
+		for s := range unsubscribeSymbols {
+			symbolsToUnwatch = append(symbolsToUnwatch, s)
+		}
+		if _, err := sw.safeUnWatchTradesForSymbols(symbolsToUnwatch); err != nil {
+			log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+		}
+	}
+
 	symbolsToWatch = sw.filterSupportedSymbols(symbolsToWatch)
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
@@ -131,6 +142,8 @@ drain:
 			go sw.runWorkerBatch(ctx, batch)
 			time.Sleep(sw.config.SubscribePause)
 		}
+	} else {
+		sw.cancelWorkers = nil
 	}
 }
 
@@ -147,7 +160,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					return
 				}
 				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
-					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne ungültiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
+					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne ungueltiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
 					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
 					sw.mu.Lock()
 					delete(sw.activeSymbols, missingSymbol)
@@ -158,7 +171,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					}
 					continue
 				}
-				log.Printf("[CCXT-BATCH-SHARD-ERROR] `watchTradesForSymbols` fehlgeschlagen: %v. Warte 5s.", err)
+				log.Printf("[CCXT-BATCH-SHARD-ERROR] watchTradesForSymbols fehlgeschlagen: %v. Warte 5s.", err)
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -189,6 +202,15 @@ func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string) (tr
 		}
 	}()
 	return sw.exchange.WatchTradesForSymbols(symbolsBatch)
+}
+
+func (sw *BatchShardWorker) safeUnWatchTradesForSymbols(symbolsBatch []string) (_ interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in UnWatchTradesForSymbols: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	return sw.exchange.UnWatchTradesForSymbols(symbolsBatch)
 }
 
 func (sw *BatchShardWorker) filterSupportedSymbols(symbols []string) []string {

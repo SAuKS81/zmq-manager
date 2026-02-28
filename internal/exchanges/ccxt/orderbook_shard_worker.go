@@ -5,7 +5,9 @@ package ccxt
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -41,11 +43,11 @@ func NewOrderBookShardWorker(exchangeName, marketType string, config ExchangeCon
 
 func (sw *OrderBookShardWorker) Run() {
 	defer sw.wg.Done()
-	log.Printf("[CCXT-OB-SHARD] Starte Worker für %s", sw.exchangeName)
+	log.Printf("[CCXT-OB-SHARD] Starte Worker fuer %s", sw.exchangeName)
 	options := makeExchangeOptions(sw.exchangeName, sw.marketType)
 	sw.exchange = ccxtpro.CreateExchange(sw.exchangeName, options)
 	if sw.exchange == nil {
-		log.Printf("[CCXT-OB-SHARD] Instanz für %s konnte nicht erstellt werden.", sw.exchangeName)
+		log.Printf("[CCXT-OB-SHARD] Instanz fuer %s konnte nicht erstellt werden.", sw.exchangeName)
 		return
 	}
 	for {
@@ -53,7 +55,7 @@ func (sw *OrderBookShardWorker) Run() {
 		case cmd := <-sw.commandCh:
 			sw.handleCommand(cmd)
 		case <-sw.stopCh:
-			log.Printf("[CCXT-OB-SHARD] Stoppe Worker für %s. Beende alle %d Watcher...", sw.exchangeName, len(sw.activeWatchers))
+			log.Printf("[CCXT-OB-SHARD] Stoppe Worker fuer %s. Beende alle %d Watcher...", sw.exchangeName, len(sw.activeWatchers))
 			sw.mu.Lock()
 			for _, cancel := range sw.activeWatchers {
 				cancel()
@@ -70,46 +72,44 @@ func (sw *OrderBookShardWorker) getCommandChannel() chan<- ShardCommand {
 
 func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
 	for symbol, depth := range cmd.Symbols {
-		sw.mu.Lock()
-		if cmd.Action == "subscribe" {
+		switch cmd.Action {
+		case "subscribe":
+			sw.mu.Lock()
 			if _, exists := sw.activeWatchers[symbol]; exists {
 				sw.mu.Unlock()
 				continue
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			sw.activeWatchers[symbol] = cancel
-			// Der 'depth'-Parameter wird hier an runSingleWatch übergeben,
-			// damit die Logik erhalten bleibt, auch wenn wir sie im API-Call noch nicht nutzen können.
+			sw.mu.Unlock()
 			go sw.runSingleWatch(ctx, symbol, depth)
-		} else if cmd.Action == "unsubscribe" {
-			if cancel, exists := sw.activeWatchers[symbol]; exists {
-				cancel()
+			time.Sleep(sw.config.SubscribePause)
+		case "unsubscribe":
+			sw.mu.Lock()
+			cancel, exists := sw.activeWatchers[symbol]
+			if exists {
 				delete(sw.activeWatchers, symbol)
 			}
-		}
-		sw.mu.Unlock()
-		if cmd.Action == "subscribe" {
-			time.Sleep(sw.config.SubscribePause)
+			sw.mu.Unlock()
+			if !exists {
+				continue
+			}
+			if _, err := sw.safeUnWatchOrderBook(symbol); err != nil {
+				log.Printf("[CCXT-OB-SHARD-WARN] UnWatchOrderBook('%s') fehlgeschlagen: %v", symbol, err)
+			}
+			cancel()
 		}
 	}
 }
 
-// runSingleWatch ignoriert vorerst den 'depth' Parameter im Funktionsaufruf.
 func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol string, depth int) {
+	_ = depth
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			// ======================================================================
-			// FINALE KORREKTUR
-			// Da die Go-Bibliothek keine Parameter zur Steuerung der Tiefe
-			// unterstützt (siehe `// todo` im Quellcode), rufen wir die Funktion
-			// OHNE weitere Argumente auf. Sie wird die Standardtiefe der Börse liefern.
-			// Die 'depth'-Variable aus der Funktion-Signatur wird bewusst ignoriert.
-			// ======================================================================
 			orderbook, err := sw.exchange.WatchOrderBook(symbol)
-
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -129,4 +129,13 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 			}
 		}
 	}
+}
+
+func (sw *OrderBookShardWorker) safeUnWatchOrderBook(symbol string) (_ interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in UnWatchOrderBook: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	return sw.exchange.UnWatchOrderBook(symbol)
 }

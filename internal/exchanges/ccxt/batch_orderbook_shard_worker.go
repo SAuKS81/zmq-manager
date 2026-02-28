@@ -15,7 +15,7 @@ import (
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
-// BatchOrderBookShardWorker verwaltet eine einzelne WebSocket-Verbindung für `watchOrderBookForSymbols`.
+// BatchOrderBookShardWorker verwaltet eine einzelne WebSocket-Verbindung fuer watchOrderBookForSymbols.
 type BatchOrderBookShardWorker struct {
 	exchangeName  string
 	marketType    string
@@ -34,7 +34,7 @@ func NewBatchOrderBookShardWorker(exchangeName, marketType string, config Exchan
 	options := makeExchangeOptions(exchangeName, marketType)
 	exchange := ccxtpro.CreateExchange(exchangeName, options)
 	if exchange == nil {
-		log.Printf("[CCXT-BATCH-OB-FATAL] Konnte Exchange-Instanz für %s nicht erstellen", exchangeName)
+		log.Printf("[CCXT-BATCH-OB-FATAL] Konnte Exchange-Instanz fuer %s nicht erstellen", exchangeName)
 		return nil
 	}
 	return &BatchOrderBookShardWorker{
@@ -52,7 +52,7 @@ func NewBatchOrderBookShardWorker(exchangeName, marketType string, config Exchan
 
 func (sw *BatchOrderBookShardWorker) Run() {
 	defer sw.wg.Done()
-	log.Printf("[CCXT-BATCH-OB] Starte Worker für %s (%s)", sw.exchangeName, sw.marketType)
+	log.Printf("[CCXT-BATCH-OB] Starte Worker fuer %s (%s)", sw.exchangeName, sw.marketType)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -60,7 +60,7 @@ func (sw *BatchOrderBookShardWorker) Run() {
 		case <-ticker.C:
 			sw.processCommandQueue()
 		case <-sw.stopCh:
-			log.Printf("[CCXT-BATCH-OB] Stoppe Worker für %s (%s)", sw.exchangeName, sw.marketType)
+			log.Printf("[CCXT-BATCH-OB] Stoppe Worker fuer %s (%s)", sw.exchangeName, sw.marketType)
 			if sw.cancelWorkers != nil {
 				sw.cancelWorkers()
 			}
@@ -90,6 +90,7 @@ drain:
 
 	sw.mu.Lock()
 	listChanged := false
+	unsubscribeSymbols := make(map[string]bool)
 	for _, cmd := range commands {
 		for s, depth := range cmd.Symbols {
 			if cmd.Action == "subscribe" && sw.activeSymbols[s] == 0 {
@@ -98,6 +99,7 @@ drain:
 			} else if cmd.Action == "unsubscribe" && sw.activeSymbols[s] != 0 {
 				delete(sw.activeSymbols, s)
 				listChanged = true
+				unsubscribeSymbols[s] = true
 			}
 		}
 	}
@@ -117,31 +119,36 @@ drain:
 	}
 	sw.mu.Unlock()
 
+	if len(unsubscribeSymbols) > 0 {
+		symbolsToUnwatch := make([]string, 0, len(unsubscribeSymbols))
+		for s := range unsubscribeSymbols {
+			symbolsToUnwatch = append(symbolsToUnwatch, s)
+		}
+		if _, err := sw.safeUnWatchOrderBookForSymbols(symbolsToUnwatch); err != nil {
+			log.Printf("[CCXT-BATCH-OB-WARN] UnWatchOrderBookForSymbols(%d) fehlgeschlagen (%s/%s): %v", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+		}
+	}
+
 	symbolsToWatch = sw.filterSupportedSymbols(symbolsToWatch)
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
 		ctx, sw.cancelWorkers = context.WithCancel(context.Background())
-
-		// ======================================================================
-		// KORREKTUR HIER: Die Logik zum Aufteilen in Batches wurde hinzugefügt.
-		// ======================================================================
-		log.Printf("[CCXT-BATCH-OB] Symbol-Liste geändert. Starte Watcher für %d Symbole in Batches von %d...", len(symbolsToWatch), sw.config.BatchSize)
+		log.Printf("[CCXT-BATCH-OB] Symbol-Liste geaendert. Starte Watcher fuer %d Symbole in Batches von %d...", len(symbolsToWatch), sw.config.BatchSize)
 		for i := 0; i < len(symbolsToWatch); i += sw.config.BatchSize {
 			end := i + sw.config.BatchSize
 			if end > len(symbolsToWatch) {
 				end = len(symbolsToWatch)
 			}
 			batch := symbolsToWatch[i:end]
-			log.Printf("[CCXT-BATCH-OB] Starte Goroutine für Batch mit %d Symbolen.", len(batch))
+			log.Printf("[CCXT-BATCH-OB] Starte Goroutine fuer Batch mit %d Symbolen.", len(batch))
 			go sw.runWorkerBatch(ctx, batch)
-			// Kurze Pause zwischen den Batches, um Rate-Limits beim Verbindungsaufbau zu vermeiden
 			time.Sleep(sw.config.SubscribePause)
 		}
-		// ======================================================================
+	} else {
+		sw.cancelWorkers = nil
 	}
 }
 
-// Umbenannt zu runWorkerBatch, da die Funktion jetzt einen Batch verarbeitet.
 func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []string) {
 	currentBatch := append([]string(nil), symbolsBatch...)
 	for {
@@ -149,14 +156,13 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 		case <-ctx.Done():
 			return
 		default:
-			// Die Funktion verarbeitet jetzt den übergebenen Batch, nicht mehr die ganze Liste.
 			orderbook, err := sw.safeWatchOrderBookForSymbols(currentBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
-					log.Printf("[CCXT-BATCH-OB-WARN] Entferne ungültiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
+					log.Printf("[CCXT-BATCH-OB-WARN] Entferne ungueltiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
 					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
 					sw.mu.Lock()
 					delete(sw.activeSymbols, missingSymbol)
@@ -167,14 +173,13 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 					}
 					continue
 				}
-				log.Printf("[CCXT-BATCH-OB-ERROR] `watchOrderBookForSymbols` für Batch (%d Symbole) fehlgeschlagen: %v. Warte 5s.", len(currentBatch), err)
+				log.Printf("[CCXT-BATCH-OB-ERROR] watchOrderBookForSymbols fuer Batch (%d Symbole) fehlgeschlagen: %v. Warte 5s.", len(currentBatch), err)
 				time.Sleep(5 * time.Second)
 				continue
 			}
 
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
-
 			if orderbook.Symbol == nil {
 				continue
 			}
@@ -182,7 +187,6 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 			sw.mu.Lock()
 			requestedDepth := sw.activeSymbols[*orderbook.Symbol]
 			sw.mu.Unlock()
-
 			if requestedDepth > 0 {
 				if len(orderbook.Bids) > requestedDepth {
 					orderbook.Bids = orderbook.Bids[:requestedDepth]
@@ -211,6 +215,15 @@ func (sw *BatchOrderBookShardWorker) safeWatchOrderBookForSymbols(symbolsBatch [
 		}
 	}()
 	return sw.exchange.WatchOrderBookForSymbols(symbolsBatch)
+}
+
+func (sw *BatchOrderBookShardWorker) safeUnWatchOrderBookForSymbols(symbolsBatch []string) (_ interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in UnWatchOrderBookForSymbols: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	return sw.exchange.UnWatchOrderBookForSymbols(symbolsBatch)
 }
 
 func (sw *BatchOrderBookShardWorker) filterSupportedSymbols(symbols []string) []string {

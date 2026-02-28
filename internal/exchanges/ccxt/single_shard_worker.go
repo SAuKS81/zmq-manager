@@ -1,13 +1,13 @@
 //go:build ccxt
 // +build ccxt
 
-// --- START OF FILE internal/exchanges/ccxt/single_shard_worker.go.txt ---
-
 package ccxt
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -15,11 +15,10 @@ import (
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
-// SingleWatchShardWorker verwaltet eine einzelne Verbindung für mehrere Einzel-Symbol-Streams.
+// SingleWatchShardWorker verwaltet eine einzelne Verbindung fuer mehrere Einzel-Symbol-Streams.
 type SingleWatchShardWorker struct {
-	exchangeName string
-	marketType   string
-	// NEU: Der Worker benötigt die Konfiguration für die Pausen.
+	exchangeName   string
+	marketType     string
 	config         ExchangeConfig
 	commandCh      chan ShardCommand
 	stopCh         chan struct{}
@@ -30,12 +29,11 @@ type SingleWatchShardWorker struct {
 	activeWatchers map[string]context.CancelFunc
 }
 
-// ÄNDERUNG: Die Signatur des Konstruktors wird um 'config' erweitert.
 func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *SingleWatchShardWorker {
 	return &SingleWatchShardWorker{
 		exchangeName:   exchangeName,
 		marketType:     marketType,
-		config:         config, // NEU: Konfiguration speichern.
+		config:         config,
 		commandCh:      make(chan ShardCommand, 100),
 		stopCh:         stopCh,
 		dataCh:         dataCh,
@@ -46,11 +44,11 @@ func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeC
 
 func (sw *SingleWatchShardWorker) Run() {
 	defer sw.wg.Done()
-	log.Printf("[CCXT-SINGLE-SHARD] Starte Worker für %s", sw.exchangeName)
+	log.Printf("[CCXT-SINGLE-SHARD] Starte Worker fuer %s", sw.exchangeName)
 
 	sw.exchange = ccxtpro.CreateExchange(sw.exchangeName, nil)
 	if sw.exchange == nil {
-		log.Printf("[CCXT-SINGLE-SHARD] Instanz für %s konnte nicht erstellt werden.", sw.exchangeName)
+		log.Printf("[CCXT-SINGLE-SHARD] Instanz fuer %s konnte nicht erstellt werden.", sw.exchangeName)
 		return
 	}
 
@@ -59,7 +57,7 @@ func (sw *SingleWatchShardWorker) Run() {
 		case cmd := <-sw.commandCh:
 			sw.handleCommand(cmd)
 		case <-sw.stopCh:
-			log.Printf("[CCXT-SINGLE-SHARD] Stoppe Worker für %s. Beende alle %d Watcher...", sw.exchangeName, len(sw.activeWatchers))
+			log.Printf("[CCXT-SINGLE-SHARD] Stoppe Worker fuer %s. Beende alle %d Watcher...", sw.exchangeName, len(sw.activeWatchers))
 			sw.mu.Lock()
 			for _, cancel := range sw.activeWatchers {
 				cancel()
@@ -75,35 +73,39 @@ func (sw *SingleWatchShardWorker) getCommandChannel() chan<- ShardCommand {
 }
 
 func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
-	// KORREKTUR HIER: Wir iterieren über die Schlüssel der Map.
 	for symbol := range cmd.Symbols {
-		sw.mu.Lock()
-		if cmd.Action == "subscribe" {
+		switch cmd.Action {
+		case "subscribe":
+			sw.mu.Lock()
 			if _, exists := sw.activeWatchers[symbol]; exists {
 				sw.mu.Unlock()
 				continue
 			}
-			log.Printf("[CCXT-SINGLE-SHARD] Starte Watcher für %s auf existierender Verbindung.", symbol)
+			log.Printf("[CCXT-SINGLE-SHARD] Starte Watcher fuer %s auf existierender Verbindung.", symbol)
 			ctx, cancel := context.WithCancel(context.Background())
 			sw.activeWatchers[symbol] = cancel
+			sw.mu.Unlock()
 			go sw.runSingleWatch(ctx, symbol)
-		} else if cmd.Action == "unsubscribe" {
-			if cancel, exists := sw.activeWatchers[symbol]; exists {
-				log.Printf("[CCXT-SINGLE-SHARD] Stoppe Watcher für %s.", symbol)
-				cancel()
+			time.Sleep(sw.config.SubscribePause)
+		case "unsubscribe":
+			sw.mu.Lock()
+			cancel, exists := sw.activeWatchers[symbol]
+			if exists {
 				delete(sw.activeWatchers, symbol)
 			}
-		}
-		sw.mu.Unlock()
-
-		if cmd.Action == "subscribe" {
-			time.Sleep(sw.config.SubscribePause)
+			sw.mu.Unlock()
+			if !exists {
+				continue
+			}
+			log.Printf("[CCXT-SINGLE-SHARD] Stoppe Watcher fuer %s.", symbol)
+			if _, err := sw.safeUnWatchTrades(symbol); err != nil {
+				log.Printf("[CCXT-SINGLE-SHARD-WARN] UnWatchTrades('%s') fehlgeschlagen: %v", symbol, err)
+			}
+			cancel()
 		}
 	}
 }
 
-// Die runSingleWatch Funktion muss ebenfalls das nicht-blockierende Senden verwenden,
-// um gegen die fehlerhafte KuCoin-Bibliothek immun zu sein.
 func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol string) {
 	for {
 		select {
@@ -128,15 +130,9 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 			for _, trade := range trades {
 				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 				if normalized != nil {
-					// KORREKTUR: Auch hier muss nicht-blockierend gesendet werden,
-					// um einen Rückstau zu verhindern, falls kein Logger läuft.
 					select {
 					case sw.dataCh <- normalized:
-						// Erfolgreich
 					default:
-						// Verwerfen, um den Worker nicht zu blockieren.
-						// Ein globaler Zähler wäre hier besser, aber für den Moment
-						// ist das Verhindern des Absturzes wichtiger.
 					}
 				}
 			}
@@ -144,3 +140,11 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 	}
 }
 
+func (sw *SingleWatchShardWorker) safeUnWatchTrades(symbol string) (_ interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in UnWatchTrades: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	return sw.exchange.UnWatchTrades(symbol)
+}
