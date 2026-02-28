@@ -131,25 +131,34 @@ func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStat
 	}
 
 	targetClients := make(map[string]bool)
+	symbols := make([]string, 0, 1+len(event.Symbols))
 	if event.Symbol != "" {
-		subID := getSubscriptionID(event.Exchange, event.Symbol, event.MarketType)
+		symbols = append(symbols, event.Symbol)
+	}
+	symbols = append(symbols, event.Symbols...)
+
+	for _, symbol := range symbols {
+		if symbol == "" {
+			continue
+		}
+		subID := getSubscriptionID(event.Exchange, symbol, event.MarketType)
 		if event.DataType == "orderbooks" {
 			if clients, ok := sm.orderBookSubscriptions[subID]; ok {
 				for clientID := range clients {
 					targetClients[clientID] = true
 				}
 			}
-		} else {
-			if clients, ok := sm.tradeSubscriptions[subID]; ok {
-				for clientID := range clients {
-					targetClients[clientID] = true
-				}
+			continue
+		}
+		if clients, ok := sm.tradeSubscriptions[subID]; ok {
+			for clientID := range clients {
+				targetClients[clientID] = true
 			}
-			wildcardID := event.Exchange + "-" + event.MarketType + "-all"
-			if wildClients, ok := sm.wildcardSubscribers[wildcardID]; ok {
-				for clientID := range wildClients {
-					targetClients[clientID] = true
-				}
+		}
+		wildcardID := event.Exchange + "-" + event.MarketType + "-all"
+		if wildClients, ok := sm.wildcardSubscribers[wildcardID]; ok {
+			for clientID := range wildClients {
+				targetClients[clientID] = true
 			}
 		}
 	}

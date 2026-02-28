@@ -78,6 +78,37 @@ type statusEvent struct {
 	Timestamp  int64    `json:"ts,omitempty"`
 }
 
+type statusCounters struct {
+	reconnecting      int
+	restored          int
+	unsubscribeFailed int
+	forceClosed       int
+	other             int
+}
+
+func (c *statusCounters) add(eventType string) {
+	switch eventType {
+	case "stream_reconnecting":
+		c.reconnecting++
+	case "stream_restored":
+		c.restored++
+	case "stream_unsubscribe_failed":
+		c.unsubscribeFailed++
+	case "stream_force_closed":
+		c.forceClosed++
+	default:
+		c.other++
+	}
+}
+
+func (c *statusCounters) reset() {
+	c.reconnecting = 0
+	c.restored = 0
+	c.unsubscribeFailed = 0
+	c.forceClosed = 0
+	c.other = 0
+}
+
 func main() {
 	cfg := parseFlags()
 	if err := validateConfig(cfg); err != nil {
@@ -162,42 +193,54 @@ func consumeLoop(sigCtx context.Context, socket zmq4.Socket, cfg smokeConfig) {
 
 	var totalTrades, totalOB, windowTrades, windowOB int
 	var totalDecodeErrors, windowDecodeErrors int
-	statusEvents := 0
+	var totalStatus, windowStatus statusCounters
 
 	for {
 		select {
 		case <-deadline.C:
 			sendDisconnect(socket)
-			fmt.Printf("[SMOKE] done total_trades=%d total_ob=%d decode_errors=%d reconnects=%d\n", totalTrades, totalOB, totalDecodeErrors, statusEvents)
+			fmt.Printf("[SMOKE] done total_trades=%d total_ob=%d decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
+				totalTrades, totalOB, totalDecodeErrors,
+				totalStatus.reconnecting, totalStatus.restored, totalStatus.unsubscribeFailed, totalStatus.forceClosed, totalStatus.other,
+			)
 			return
 		case <-sigCtx.Done():
 			sendDisconnect(socket)
-			fmt.Printf("[SMOKE] interrupted total_trades=%d total_ob=%d decode_errors=%d reconnects=%d\n", totalTrades, totalOB, totalDecodeErrors, statusEvents)
+			fmt.Printf("[SMOKE] interrupted total_trades=%d total_ob=%d decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
+				totalTrades, totalOB, totalDecodeErrors,
+				totalStatus.reconnecting, totalStatus.restored, totalStatus.unsubscribeFailed, totalStatus.forceClosed, totalStatus.other,
+			)
 			return
 		case <-rateTicker.C:
 			secs := cfg.rateLog.Seconds()
-			fmt.Printf("[SMOKE] rate trades/s=%.2f ob/s=%.2f decode_errors=%d reconnects=%d\n",
+			fmt.Printf("[SMOKE] rate trades/s=%.2f ob/s=%.2f decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
 				float64(windowTrades)/secs,
 				float64(windowOB)/secs,
 				windowDecodeErrors,
-				statusEvents,
+				windowStatus.reconnecting,
+				windowStatus.restored,
+				windowStatus.unsubscribeFailed,
+				windowStatus.forceClosed,
+				windowStatus.other,
 			)
 			windowTrades = 0
 			windowOB = 0
 			windowDecodeErrors = 0
+			windowStatus.reset()
 		case err := <-errCh:
 			fmt.Fprintf(os.Stderr, "[SMOKE] recv failed: %v\n", err)
 			os.Exit(1)
 		case msg := <-msgCh:
-			trades, obs, decodeErr, sawStatus := decodeMessage(socket, msg)
+			trades, obs, decodeErr, statusType := decodeMessage(socket, msg)
 			totalTrades += trades
 			windowTrades += trades
 			totalOB += obs
 			windowOB += obs
 			totalDecodeErrors += decodeErr
 			windowDecodeErrors += decodeErr
-			if sawStatus {
-				statusEvents++
+			if statusType != "" {
+				totalStatus.add(statusType)
+				windowStatus.add(statusType)
 			}
 		}
 	}
@@ -212,9 +255,9 @@ func sendDisconnect(socket zmq4.Socket) {
 	fmt.Printf("[SMOKE] DISCONNECT_SENT\n")
 }
 
-func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, bool) {
+func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, string) {
 	if len(msg.Frames) == 0 {
-		return 0, 0, 0, false
+		return 0, 0, 0, ""
 	}
 
 	payload := msg.Frames[len(msg.Frames)-1]
@@ -228,21 +271,21 @@ func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, bool) {
 		case 'T':
 			var trades []*shared_types.TradeUpdate
 			if err := msgpack.Unmarshal(payload, &trades); err != nil {
-				return 0, 0, 1, false
+				return 0, 0, 1, ""
 			}
 			if len(trades) == 0 {
-				return 1, 0, 0, false
+				return 1, 0, 0, ""
 			}
-			return len(trades), 0, 0, false
+			return len(trades), 0, 0, ""
 		case 'O':
 			var obs []*shared_types.OrderBookUpdate
 			if err := msgpack.Unmarshal(payload, &obs); err != nil {
-				return 0, 0, 1, false
+				return 0, 0, 1, ""
 			}
 			if len(obs) == 0 {
-				return 0, 1, 0, false
+				return 0, 1, 0, ""
 			}
-			return 0, len(obs), 0, false
+			return 0, len(obs), 0, ""
 		}
 	}
 
@@ -250,14 +293,14 @@ func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, bool) {
 	if err := json.Unmarshal(payload, &ping); err == nil && ping["type"] == "ping" {
 		pong, _ := json.Marshal(map[string]string{"message": "pong"})
 		_ = socket.Send(zmq4.NewMsg(pong))
-		return 0, 0, 0, false
+		return 0, 0, 0, ""
 	}
 
 	var status statusEvent
 	if err := json.Unmarshal(payload, &status); err == nil && strings.HasPrefix(status.Type, "stream_") {
 		fmt.Printf("[SMOKE] status type=%s exchange=%s market_type=%s data_type=%s symbol=%s attempt=%d reason=%s\n",
 			status.Type, status.Exchange, status.MarketType, status.DataType, status.Symbol, status.Attempt, status.Reason)
-		return 0, 0, 0, true
+		return 0, 0, 0, status.Type
 	}
 
 	var arr []map[string]any
@@ -274,10 +317,10 @@ func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, bool) {
 				}
 			}
 		}
-		return trades, obs, 0, false
+		return trades, obs, 0, ""
 	}
 
-	return 0, 0, 1, false
+	return 0, 0, 1, ""
 }
 
 func parseFlags() smokeConfig {

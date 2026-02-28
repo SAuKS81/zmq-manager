@@ -149,18 +149,22 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
       - neue minimale Broker-Plumbing fuer `StreamStatusEvent` liegt:
         - Broker kann `stream_reconnecting` / `stream_restored` / `stream_unsubscribe_failed` / `stream_force_closed` verteilen
         - neuer schlanker `clients/smoke_client.go` loggt diese JSON-Status-Events
-      - Vultr-Verifikation fuer `bybit_native` und echte Client-Statussicht noch offen
+      - Vultr-Verifikation fuer `bybit_native` erfolgt; Lifecycle-Pfad laeuft stabil
   - P7-2 Selektiver Shard-Recycle
     - wenn ein Shard wegen fehlgeschlagenem unsubscribe hart geschlossen wird:
       - nur noch gewuenschte Streams reconnecten
       - entfernte Streams duerfen nicht wieder auftauchen
+    - noch offen als gezielt verifizierter Fehlerpfad
   - P7-3 Client-Signalierung bei Feed-Stoerungen
     - neue Broker-Status-Events fuer `stream_reconnecting`, `stream_restored`, `stream_unsubscribe_failed`, `stream_force_closed`
     - Clients muessen Feed-Unterbrechungen und Reconnects explizit sehen koennen
     - erster Schnitt umgesetzt:
       - Broker verteilt `StreamStatusEvent` gezielt an abonnierte Clients
+      - Broker kann jetzt auch Multi-Symbol-Status-Events (`symbol` oder `symbols`) gezielt an betroffene Clients routen
       - neuer schlanker `clients/smoke_client.go` loggt diese Status-Events sichtbar
+      - Smoke-Client wertet Status-Events jetzt getrennt nach `reconnecting`, `restored`, `unsubscribe_failed`, `force_closed` aus
       - Bybit- und Bitget-Worker emitten diese Events bereits auf Reconnect/Restore/Unsubscribe-Fehlerpfaden
+    - noch offen: gezielte Abnahme der Signalierung als eigener Testfall
   - P7-4 Native Adapter nacheinander haerten
     - Bybit: Ack/Nack + Retry + forced recycle
     - Binance: Ack/Nack + Retry + forced recycle
@@ -168,20 +172,23 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - Stand:
       - Binance erster Schnitt verifiziert
       - Bybit erster Schnitt verifiziert; Command-Chunking jetzt marktspezifisch (`spot=10`, `swap` bis Shard-Groesse)
-      - Bitget Ack/Timeout-Schnitt wieder zurueckgenommen; aktueller Stand ist bewusst ein strikt getakteter, serieller Batch-Sender mit Status-Events, weil die aggressivere Ack/Retry-Logik die stabile Sendetaktung gebrochen hat
-      - Bitget globale Sendetaktung ueber alle Shards eines Managers ist lokal umgesetzt; Vultr-Verifikation noch offen
-      - Bitget Empty-Shard-Cleanup ist lokal umgesetzt; Retirement erfolgt jetzt erst nach dem letzten Unsubscribe-Flush statt davor
+      - Bitget Ack/Timeout-Schnitt verworfen; verifizierter Stand ist bewusst ein strikt getakteter, serieller Batch-Sender mit Status-Events
+      - Bitget globale Sendetaktung ueber alle Shards eines Managers ist verifiziert
+      - Bitget Empty-Shard-Cleanup ist verifiziert; Retirement erfolgt erst nach dem letzten Unsubscribe-Flush
   - P7-5 CCXT-Sonderpfad
     - eigene `unsubscribe`-Funktion fuer CCXT
     - betroffene Worker/Batches lokal neu aufbauen statt native WS-Unsub-Logik zu spiegeln
+    - noch offen
   - P7-6 Metriken und Logs
     - `unsubscribe_attempts_total`, `unsubscribe_failures_total`, `forced_shard_recycles_total`, `stream_reconnects_total`
     - strukturierte Logs mit `exchange`, `shard`, `symbol`, `data_type`, `attempt`, `reason`
+    - noch offen
   - P7-7 Abnahme
     - unsubscribe wird verfolgt
     - Fehler sind sichtbar
     - andere Streams werden nach forced recycle sauber wiederhergestellt
     - Clients sehen `reconnecting`/`restored`
+    - noch offen bis `P7-2`, `P7-3`, `P7-5`, `P7-6` abgeschlossen sind
 
 ## Aktueller Arbeitsmodus
 
