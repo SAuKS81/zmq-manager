@@ -88,6 +88,7 @@ Aktiver Branch: `phase1.5-baseline-tooling`
   - `v2_live_freeze_bitget_clean_1..3` jeweils `PASS`, Drops `0` auf Commit `038b1af`
   - Unsubscribe-Haertung aktiv: serialisierter remove-Pfad + gebuendelte Unsub-Batches
   - `ob/s=0` bleibt by design (aktueller bitget-native Pfad trade-only)
+  - Bitget-Orderbooks sind bewusst nach hinten priorisiert; in absehbarer Zeit kein Implementierungsbedarf
 - Replay-Referenzspur final festgeschrieben (tick `1s`, Commit `038b1af`):
   - Bybit replay: `PASS`, Drops `0`, stabile Rate (`trades~972/s`, `ob~40/s`)
   - Binance replay: `PASS`, Drops `0`, stabile Rate (`trades~972/s`, `ob~972/s`)
@@ -127,6 +128,10 @@ Aktiver Branch: `phase1.5-baseline-tooling`
 ## Offen
 
 - aktuell keine offenen Punkte im Baseline-v2 Pfad
+- spaeterer Doku-Task ausserhalb des Baseline-v2 Pfads:
+  - Bitget-OB-Design-Notiz erstellen
+  - nur technische Dokumentation (WS-Channel, Subscribe/Unsubscribe, Snapshot/Delta, Mapping auf `shared_types.OrderBookUpdate`, Recovery-Regeln)
+  - explizit ohne Implementierung und ohne Testlauf
 
 ## Aktueller Arbeitsmodus
 
