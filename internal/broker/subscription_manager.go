@@ -140,7 +140,14 @@ func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStat
 	if event == nil {
 		return
 	}
-	sm.runtimeTracker.recordStatus(event)
+	for _, symbol := range runtimeSymbolAliases(event.Exchange, event.Symbol, event.MarketType) {
+		sm.runtimeTracker.recordStatusForSymbol(event, symbol)
+	}
+	for _, symbol := range event.Symbols {
+		for _, alias := range runtimeSymbolAliases(event.Exchange, symbol, event.MarketType) {
+			sm.runtimeTracker.recordStatusForSymbol(event, alias)
+		}
+	}
 	if sm.DistributionCh == nil {
 		return
 	}
@@ -156,24 +163,26 @@ func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStat
 		if symbol == "" {
 			continue
 		}
-		subID := getSubscriptionID(event.Exchange, symbol, event.MarketType)
-		if event.DataType == "orderbooks" {
-			if clients, ok := sm.orderBookSubscriptions[subID]; ok {
+		for _, alias := range runtimeSymbolAliases(event.Exchange, symbol, event.MarketType) {
+			subID := getSubscriptionID(event.Exchange, alias, event.MarketType)
+			if event.DataType == "orderbooks" {
+				if clients, ok := sm.orderBookSubscriptions[subID]; ok {
+					for clientID := range clients {
+						targetClients[clientID] = true
+					}
+				}
+				continue
+			}
+			if clients, ok := sm.tradeSubscriptions[subID]; ok {
 				for clientID := range clients {
 					targetClients[clientID] = true
 				}
 			}
-			continue
-		}
-		if clients, ok := sm.tradeSubscriptions[subID]; ok {
-			for clientID := range clients {
-				targetClients[clientID] = true
-			}
-		}
-		wildcardID := event.Exchange + "-" + event.MarketType + "-all"
-		if wildClients, ok := sm.wildcardSubscribers[wildcardID]; ok {
-			for clientID := range wildClients {
-				targetClients[clientID] = true
+			wildcardID := event.Exchange + "-" + event.MarketType + "-all"
+			if wildClients, ok := sm.wildcardSubscribers[wildcardID]; ok {
+				for clientID := range wildClients {
+					targetClients[clientID] = true
+				}
 			}
 		}
 	}
@@ -197,13 +206,14 @@ func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpda
 	clientBatches := make(map[string][]*shared_types.TradeUpdate)
 
 	for _, trade := range batch {
-		sm.runtimeTracker.recordTrade(trade)
-		subID := getSubscriptionID(trade.Exchange, trade.Symbol, trade.MarketType)
 		targetClients := make(map[string]bool)
-
-		if clients, ok := sm.tradeSubscriptions[subID]; ok {
-			for clientIDStr := range clients {
-				targetClients[clientIDStr] = true
+		for _, alias := range runtimeSymbolAliases(trade.Exchange, trade.Symbol, trade.MarketType) {
+			sm.runtimeTracker.recordTradeForSymbol(trade, alias)
+			subID := getSubscriptionID(trade.Exchange, alias, trade.MarketType)
+			if clients, ok := sm.tradeSubscriptions[subID]; ok {
+				for clientIDStr := range clients {
+					targetClients[clientIDStr] = true
+				}
 			}
 		}
 
@@ -259,11 +269,13 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 	clientBatches := make(map[string][]*shared_types.OrderBookUpdate)
 
 	for _, ob := range batch {
-		sm.runtimeTracker.recordOrderBook(ob)
-		subID := getSubscriptionID(ob.Exchange, ob.Symbol, ob.MarketType)
-		if clients, ok := sm.orderBookSubscriptions[subID]; ok {
-			for clientIDStr := range clients {
-				clientBatches[clientIDStr] = append(clientBatches[clientIDStr], ob)
+		for _, alias := range runtimeSymbolAliases(ob.Exchange, ob.Symbol, ob.MarketType) {
+			sm.runtimeTracker.recordOrderBookForSymbol(ob, alias)
+			subID := getSubscriptionID(ob.Exchange, alias, ob.MarketType)
+			if clients, ok := sm.orderBookSubscriptions[subID]; ok {
+				for clientIDStr := range clients {
+					clientBatches[clientIDStr] = append(clientBatches[clientIDStr], ob)
+				}
 			}
 		}
 	}
@@ -405,6 +417,48 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 
 func getSubscriptionID(exchange, symbol, marketType string) string {
 	return exchange + "-" + marketType + "-" + symbol
+}
+
+func runtimeSymbolAliases(exchange, symbol, marketType string) []string {
+	if symbol == "" {
+		return nil
+	}
+
+	aliases := []string{symbol}
+	add := func(candidate string) {
+		if candidate == "" {
+			return
+		}
+		for _, existing := range aliases {
+			if existing == candidate {
+				return
+			}
+		}
+		aliases = append(aliases, candidate)
+	}
+
+	switch exchange {
+	case "binance":
+		if strings.Contains(symbol, "/") {
+			add(strings.ToUpper(binance.TranslateSymbolToExchange(symbol)))
+		} else {
+			add(binance.TranslateSymbolFromExchange(symbol, marketType))
+		}
+	case "bybit":
+		if strings.Contains(symbol, "/") {
+			add(strings.ToUpper(bybit.TranslateSymbolToExchange(symbol)))
+		} else {
+			add(bybit.TranslateSymbolFromExchange(symbol, marketType))
+		}
+	case "bitget":
+		if strings.Contains(symbol, "/") {
+			add(strings.ToUpper(bitget.TranslateSymbolToExchange(symbol)))
+		} else {
+			add(bitget.TranslateSymbolFromExchange(symbol, marketType))
+		}
+	}
+
+	return aliases
 }
 
 func (sm *SubscriptionManager) logIncomingRate() {

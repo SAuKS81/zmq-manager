@@ -50,10 +50,17 @@ func (rt *runtimeTracker) recordTrade(trade *shared_types.TradeUpdate) {
 	if trade == nil {
 		return
 	}
+	rt.recordTradeForSymbol(trade, trade.Symbol)
+}
+
+func (rt *runtimeTracker) recordTradeForSymbol(trade *shared_types.TradeUpdate, symbol string) {
+	if trade == nil || symbol == "" {
+		return
+	}
 	rt.recordMessage(runtimeKey{
 		Exchange:   trade.Exchange,
 		MarketType: trade.MarketType,
-		Symbol:     trade.Symbol,
+		Symbol:     symbol,
 		DataType:   "trades",
 	}, trade.GoTimestamp, trade.IngestUnixNano)
 }
@@ -62,10 +69,17 @@ func (rt *runtimeTracker) recordOrderBook(ob *shared_types.OrderBookUpdate) {
 	if ob == nil {
 		return
 	}
+	rt.recordOrderBookForSymbol(ob, ob.Symbol)
+}
+
+func (rt *runtimeTracker) recordOrderBookForSymbol(ob *shared_types.OrderBookUpdate, symbol string) {
+	if ob == nil || symbol == "" {
+		return
+	}
 	rt.recordMessage(runtimeKey{
 		Exchange:   ob.Exchange,
 		MarketType: ob.MarketType,
-		Symbol:     ob.Symbol,
+		Symbol:     symbol,
 		DataType:   "orderbooks",
 	}, ob.GoTimestamp, ob.IngestUnixNano)
 }
@@ -105,41 +119,48 @@ func (rt *runtimeTracker) recordStatus(event *shared_types.StreamStatusEvent) {
 		symbols = append(symbols, "")
 	}
 
+	for _, symbol := range symbols {
+		rt.recordStatusForSymbol(event, symbol)
+	}
+}
+
+func (rt *runtimeTracker) recordStatusForSymbol(event *shared_types.StreamStatusEvent, symbol string) {
+	if event == nil {
+		return
+	}
 	nowMs := time.Now().UnixMilli()
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	for _, symbol := range symbols {
-		key := runtimeKey{
-			Exchange:   event.Exchange,
-			MarketType: event.MarketType,
-			Symbol:     symbol,
-			DataType:   event.DataType,
-		}
-		state := rt.getOrCreateLocked(key)
-		if event.Message != "" {
-			state.LastError = event.Message
-		} else if event.Reason != "" {
-			state.LastError = event.Reason
-		}
-		switch event.Type {
-		case runtimeStatusReconnecting, "stream_reconnecting":
-			state.Status = runtimeStatusReconnecting
-			state.reconnects1H = append(state.reconnects1H, nowMs)
-			state.reconnects24H = append(state.reconnects24H, nowMs)
-		case "stream_restored":
-			state.Status = runtimeStatusRunning
-			if event.Message == "" && event.Reason == "" {
-				state.LastError = ""
-			}
-		case "stream_unsubscribe_failed":
-			state.Status = runtimeStatusFailed
-		case "stream_force_closed":
-			state.Status = runtimeStatusStopped
-		}
-		rt.pruneReconnectsLocked(state, nowMs)
+	key := runtimeKey{
+		Exchange:   event.Exchange,
+		MarketType: event.MarketType,
+		Symbol:     symbol,
+		DataType:   event.DataType,
 	}
+	state := rt.getOrCreateLocked(key)
+	if event.Message != "" {
+		state.LastError = event.Message
+	} else if event.Reason != "" {
+		state.LastError = event.Reason
+	}
+	switch event.Type {
+	case runtimeStatusReconnecting, "stream_reconnecting":
+		state.Status = runtimeStatusReconnecting
+		state.reconnects1H = append(state.reconnects1H, nowMs)
+		state.reconnects24H = append(state.reconnects24H, nowMs)
+	case "stream_restored":
+		state.Status = runtimeStatusRunning
+		if event.Message == "" && event.Reason == "" {
+			state.LastError = ""
+		}
+	case "stream_unsubscribe_failed":
+		state.Status = runtimeStatusFailed
+	case "stream_force_closed":
+		state.Status = runtimeStatusStopped
+	}
+	rt.pruneReconnectsLocked(state, nowMs)
 }
 
 func (rt *runtimeTracker) snapshotHealth(subs []shared_types.RuntimeSubscriptionItem, now time.Time) ([]shared_types.SubscriptionHealthItem, shared_types.RuntimeSnapshotTotals) {
