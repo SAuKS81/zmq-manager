@@ -709,6 +709,8 @@ Wichtig:
   - [internal/shared_types/types.go](./internal/shared_types/types.go)
 - Smoke-Client:
   - [clients/smoke_client.go](./clients/smoke_client.go)
+- Einfacher Python-Rate-Client fuer native Trades:
+  - [clients/native_rate_client.py](./clients/native_rate_client.py)
 - Baseline:
   - [scripts/baseline_ingest.sh](./scripts/baseline_ingest.sh)
   - [scripts/README_baseline.md](./scripts/README_baseline.md)
@@ -723,3 +725,39 @@ Stand heute:
 - P7 Lifecycle-Hardening ist abgeschlossen
 - Beta-Deployment soll weiterhin Reconnect-/Status-Verhalten beobachten
 - Bitget-Orderbook bleibt bewusst ein spaeterer Doku-/Implementierungspfad
+
+## 21. Einfacher Python-Rate-Client
+
+Fuer einen schnellen manuellen Test der nativen Trade-Pfade gibt es einen kleinen Python-Client:
+
+- [clients/native_rate_client.py](./clients/native_rate_client.py)
+
+Voraussetzung:
+
+```bash
+pip install pyzmq
+```
+
+Standardaufruf fuer native Binance- und Bybit-Trades auf `BTCUSDT` und `ETHUSDT`:
+
+```bash
+python3 clients/native_rate_client.py
+```
+
+Der Client:
+
+- verbindet sich unter Linux standardmaessig mit `ipc:///tmp/feed_broker.ipc`
+- sendet `subscribe_bulk` fuer:
+  - `binance_native`
+  - `bybit_native`
+- abonniert `trades`
+- gibt fortlaufend `msg/s` und `trades/s` aus
+- sendet bei `Ctrl+C` ein `disconnect`
+
+Beispiele:
+
+```bash
+python3 clients/native_rate_client.py --market-type swap
+python3 clients/native_rate_client.py --symbols BTCUSDT,ETHUSDT,SOLUSDT
+python3 clients/native_rate_client.py --broker tcp://127.0.0.1:5555
+```
