@@ -2,6 +2,7 @@ package broker
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -181,7 +182,7 @@ func (rt *runtimeTracker) snapshotHealth(subs []shared_types.RuntimeSubscription
 			Symbol:     sub.Symbol,
 			DataType:   sub.DataType,
 		}
-		state := rt.states[key]
+		state := rt.lookupStateLocked(key)
 
 		item := shared_types.SubscriptionHealthItem{
 			Exchange:   sub.Exchange,
@@ -229,11 +230,24 @@ func (rt *runtimeTracker) isRunning(key runtimeKey) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
-	state := rt.states[key]
+	state := rt.lookupStateLocked(key)
 	if state == nil {
 		return true
 	}
 	return state.Status != runtimeStatusFailed && state.Status != runtimeStatusStopped
+}
+
+func (rt *runtimeTracker) lookupStateLocked(key runtimeKey) *runtimeHealthState {
+	if state := rt.states[key]; state != nil {
+		return state
+	}
+	if strings.HasSuffix(key.Exchange, "_native") {
+		key.Exchange = strings.TrimSuffix(key.Exchange, "_native")
+		if state := rt.states[key]; state != nil {
+			return state
+		}
+	}
+	return nil
 }
 
 func (rt *runtimeTracker) getOrCreateLocked(key runtimeKey) *runtimeHealthState {

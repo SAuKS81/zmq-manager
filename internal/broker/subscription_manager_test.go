@@ -331,3 +331,41 @@ func TestBuildRuntimeSnapshotIncludesHealth(t *testing.T) {
 		t.Fatalf("expected reconnects_24h=1, got %+v", resp.Totals)
 	}
 }
+
+func TestBuildRuntimeSnapshotIncludesHealthForNativeRoute(t *testing.T) {
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			"binance-spot-BTCUSDT": {"client-a": true},
+		},
+		tradeSubscriptionRoutes:     map[string]string{getClientRouteKey("client-a", "binance-spot-BTCUSDT"): "binance_native"},
+		orderBookSubscriptions:      make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes: make(map[string]string),
+		orderBookSubscriptionDepths: make(map[string]int),
+		runtimeTracker:              newRuntimeTracker(),
+	}
+
+	sm.runtimeTracker.recordTrade(&shared_types.TradeUpdate{
+		Exchange:       "binance",
+		Symbol:         "BTCUSDT",
+		MarketType:     "spot",
+		GoTimestamp:    time.Now().UnixMilli(),
+		IngestUnixNano: time.Now().Add(-5 * time.Millisecond).UnixNano(),
+	})
+
+	resp := sm.buildRuntimeSnapshotResponse()
+	if len(resp.Subscriptions) != 1 {
+		t.Fatalf("expected 1 subscription item, got %d", len(resp.Subscriptions))
+	}
+	if len(resp.Health) != 1 {
+		t.Fatalf("expected 1 health item, got %d", len(resp.Health))
+	}
+	if resp.Health[0].Exchange != "binance_native" {
+		t.Fatalf("expected native route in health snapshot, got %+v", resp.Health[0])
+	}
+	if resp.Health[0].MessagesPerSec <= 0 {
+		t.Fatalf("expected messages_per_sec > 0, got %+v", resp.Health[0])
+	}
+	if resp.Health[0].Status != "running" {
+		t.Fatalf("expected running status, got %+v", resp.Health[0])
+	}
+}
