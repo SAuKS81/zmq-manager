@@ -295,6 +295,7 @@ func TestBuildRuntimeSnapshotIncludesHealth(t *testing.T) {
 		Exchange:       "binance",
 		Symbol:         "BTC/USDT",
 		MarketType:     "spot",
+		Timestamp:      time.Now().Add(-15 * time.Millisecond).UnixMilli(),
 		GoTimestamp:    time.Now().UnixMilli(),
 		IngestUnixNano: time.Now().Add(-5 * time.Millisecond).UnixNano(),
 	})
@@ -330,6 +331,12 @@ func TestBuildRuntimeSnapshotIncludesHealth(t *testing.T) {
 	if resp.Totals.Reconnects24H != 1 {
 		t.Fatalf("expected reconnects_24h=1, got %+v", resp.Totals)
 	}
+	if resp.Health[0].LatencyMS <= 0 {
+		t.Fatalf("expected exchange latency > 0, got %+v", resp.Health[0])
+	}
+	if resp.Health[0].BrokerLatencyMS <= 0 {
+		t.Fatalf("expected broker latency > 0, got %+v", resp.Health[0])
+	}
 }
 
 func TestBuildRuntimeSnapshotIncludesHealthForNativeRoute(t *testing.T) {
@@ -348,6 +355,7 @@ func TestBuildRuntimeSnapshotIncludesHealthForNativeRoute(t *testing.T) {
 		Exchange:       "binance",
 		Symbol:         "BTCUSDT",
 		MarketType:     "spot",
+		Timestamp:      time.Now().Add(-15 * time.Millisecond).UnixMilli(),
 		GoTimestamp:    time.Now().UnixMilli(),
 		IngestUnixNano: time.Now().Add(-5 * time.Millisecond).UnixNano(),
 	})
@@ -367,5 +375,11 @@ func TestBuildRuntimeSnapshotIncludesHealthForNativeRoute(t *testing.T) {
 	}
 	if resp.Health[0].Status != "running" {
 		t.Fatalf("expected running status, got %+v", resp.Health[0])
+	}
+	if resp.Health[0].LatencyMS <= 0 {
+		t.Fatalf("expected exchange latency > 0, got %+v", resp.Health[0])
+	}
+	if resp.Health[0].BrokerLatencyMS <= 0 {
+		t.Fatalf("expected broker latency > 0, got %+v", resp.Health[0])
 	}
 }

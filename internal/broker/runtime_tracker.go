@@ -25,15 +25,17 @@ type runtimeKey struct {
 }
 
 type runtimeHealthState struct {
-	LastMessageTS int64
-	LastLatencyMS float64
-	Status        string
-	LastError     string
+	LastMessageTS         int64
+	LastExchangeTS        int64
+	LastExchangeLatencyMS float64
+	LastBrokerLatencyMS   float64
+	Status                string
+	LastError             string
 
-	buckets        [60]int
-	bucketUnixSec  int64
-	reconnects1H   []int64
-	reconnects24H  []int64
+	buckets       [60]int
+	bucketUnixSec int64
+	reconnects1H  []int64
+	reconnects24H []int64
 }
 
 type runtimeTracker struct {
@@ -63,7 +65,7 @@ func (rt *runtimeTracker) recordTradeForSymbol(trade *shared_types.TradeUpdate, 
 		MarketType: trade.MarketType,
 		Symbol:     symbol,
 		DataType:   "trades",
-	}, trade.GoTimestamp, trade.IngestUnixNano)
+	}, trade.Timestamp, trade.IngestUnixNano)
 }
 
 func (rt *runtimeTracker) recordOrderBook(ob *shared_types.OrderBookUpdate) {
@@ -82,7 +84,7 @@ func (rt *runtimeTracker) recordOrderBookForSymbol(ob *shared_types.OrderBookUpd
 		MarketType: ob.MarketType,
 		Symbol:     symbol,
 		DataType:   "orderbooks",
-	}, ob.GoTimestamp, ob.IngestUnixNano)
+	}, ob.Timestamp, ob.IngestUnixNano)
 }
 
 func (rt *runtimeTracker) recordMessage(key runtimeKey, eventTS int64, ingestUnixNano int64) {
@@ -94,9 +96,25 @@ func (rt *runtimeTracker) recordMessage(key runtimeKey, eventTS int64, ingestUni
 	defer rt.mu.Unlock()
 
 	state := rt.getOrCreateLocked(key)
-	state.LastMessageTS = maxInt64(eventTS, nowMs)
+	state.LastMessageTS = nowMs
 	if ingestUnixNano > 0 {
-		state.LastLatencyMS = float64(now.UnixNano()-ingestUnixNano) / 1_000_000.0
+		ingestMs := ingestUnixNano / int64(time.Millisecond)
+		if ingestMs > 0 {
+			state.LastMessageTS = ingestMs
+			state.LastBrokerLatencyMS = float64(now.UnixNano()-ingestUnixNano) / 1_000_000.0
+			if state.LastBrokerLatencyMS < 0 {
+				state.LastBrokerLatencyMS = 0
+			}
+			if eventTS > 0 {
+				state.LastExchangeTS = eventTS
+				state.LastExchangeLatencyMS = float64(ingestMs - eventTS)
+				if state.LastExchangeLatencyMS < 0 {
+					state.LastExchangeLatencyMS = 0
+				}
+			}
+		}
+	} else if eventTS > 0 {
+		state.LastExchangeTS = eventTS
 	}
 	state.LastError = ""
 	if state.Status != runtimeStatusReconnecting {
@@ -211,7 +229,8 @@ func (rt *runtimeTracker) snapshotHealth(subs []shared_types.RuntimeSubscription
 		}
 		item.Reconnects1H = len(state.reconnects1H)
 		item.MessagesPerSec = rt.messagesPerSecondLocked(state)
-		item.LatencyMS = state.LastLatencyMS
+		item.LatencyMS = state.LastExchangeLatencyMS
+		item.BrokerLatencyMS = state.LastBrokerLatencyMS
 		item.LastError = state.LastError
 		item.Status = rt.normalizeStatusLocked(state, sub.Running, item.LastMessageAgeMS)
 

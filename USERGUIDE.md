@@ -281,6 +281,7 @@ Antwort:
       "reconnects_1h": 0,
       "messages_per_sec": 45.2,
       "latency_ms": 12.0,
+      "broker_latency_ms": 1.0,
       "last_error": ""
     }
   ]
@@ -294,6 +295,19 @@ Normierte Statuswerte:
 - `reconnecting`
 - `failed`
 - `stopped`
+
+Latenz-Semantik:
+
+- `latency_ms`:
+  - echte Exchange-Latenz
+  - Zeit vom Exchange-Timestamp des Trades/Orderbooks bis zum Eintreffen im Broker
+- `broker_latency_ms`:
+  - interne Broker-Latenz
+  - Zeit vom Broker-Ingest bis zum Snapshot-/Dispatch-Pfad
+- `last_message_ts`:
+  - Broker-Eingangszeit der letzten Nachricht
+- `last_message_age_ms`:
+  - Alter bezogen auf diese Broker-Eingangszeit
 
 ### 5.8 Kombinierter Runtime-Snapshot
 
@@ -623,6 +637,8 @@ Das bedeutet:
 - die Read-API ist ein echter Laufzeit-Istzustand auf Broker-Ebene
 - es wird keine neue Dedupe-Logik eingefuehrt
 - die bestehende Subscribe-/Unsubscribe-Logik bleibt unveraendert
+- Health und `STATS` verwenden fuer die Nachrichtenerkennung dieselbe Broker-Eingangsseite
+- die Exchange-Latenz wird getrennt von der Broker-internen Latenz ausgewiesen
 
 ## 16. pprof und Diagnose
 

@@ -93,6 +93,7 @@ type SubscriptionHealthItem struct {
 	Reconnects1H     int     `json:"reconnects_1h"`
 	MessagesPerSec   float64 `json:"messages_per_sec"`
 	LatencyMS        float64 `json:"latency_ms,omitempty"`
+	BrokerLatencyMS  float64 `json:"broker_latency_ms,omitempty"`
 	LastError        string  `json:"last_error,omitempty"`
 }
 
@@ -116,9 +117,9 @@ type SubscriptionHealthSnapshotResponse struct {
 }
 
 type RuntimeSnapshotResponse struct {
-	Type          string                   `json:"type"`
-	TS            int64                    `json:"ts"`
+	Type          string                    `json:"type"`
+	TS            int64                     `json:"ts"`
 	Subscriptions []RuntimeSubscriptionItem `json:"subscriptions"`
-	Health        []SubscriptionHealthItem `json:"health"`
-	Totals        RuntimeSnapshotTotals    `json:"totals"`
+	Health        []SubscriptionHealthItem  `json:"health"`
+	Totals        RuntimeSnapshotTotals     `json:"totals"`
 }
