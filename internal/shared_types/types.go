@@ -39,6 +39,7 @@ type TradeUpdate struct {
 type ClientRequest struct {
 	ClientID       []byte `json:"-" msgpack:"-"` // Wird nicht gesendet
 	Action         string `json:"action"`
+	Scope          string `json:"scope,omitempty"`
 	Exchange       string `json:"exchange"`
 	Symbol         string `json:"symbol"`
 	MarketType     string `json:"market_type"`
@@ -67,4 +68,57 @@ type StreamStatusEvent struct {
 	Attempt    int      `json:"attempt,omitempty"`
 	Message    string   `json:"message,omitempty"`
 	Timestamp  int64    `json:"ts,omitempty"`
+}
+
+type RuntimeSubscriptionItem struct {
+	Exchange   string `json:"exchange"`
+	MarketType string `json:"market_type"`
+	Symbol     string `json:"symbol"`
+	DataType   string `json:"data_type"`
+	Adapter    string `json:"adapter"`
+	Depth      int    `json:"depth,omitempty"`
+	Running    bool   `json:"running"`
+	Owners     int    `json:"owners"`
+	Clients    int    `json:"clients"`
+}
+
+type SubscriptionHealthItem struct {
+	Exchange         string  `json:"exchange"`
+	MarketType       string  `json:"market_type"`
+	Symbol           string  `json:"symbol"`
+	DataType         string  `json:"data_type"`
+	Status           string  `json:"status"`
+	LastMessageAgeMS int64   `json:"last_message_age_ms"`
+	LastMessageTS    int64   `json:"last_message_ts,omitempty"`
+	Reconnects1H     int     `json:"reconnects_1h"`
+	MessagesPerSec   float64 `json:"messages_per_sec"`
+	LatencyMS        float64 `json:"latency_ms,omitempty"`
+	LastError        string  `json:"last_error,omitempty"`
+}
+
+type RuntimeSnapshotTotals struct {
+	ActiveSubscriptions int     `json:"active_subscriptions"`
+	MessagesPerSec      float64 `json:"messages_per_sec"`
+	Reconnects24H       int     `json:"reconnects_24h"`
+}
+
+type SubscriptionsSnapshotResponse struct {
+	Type  string                    `json:"type"`
+	Scope string                    `json:"scope"`
+	TS    int64                     `json:"ts"`
+	Items []RuntimeSubscriptionItem `json:"items"`
+}
+
+type SubscriptionHealthSnapshotResponse struct {
+	Type  string                   `json:"type"`
+	TS    int64                    `json:"ts"`
+	Items []SubscriptionHealthItem `json:"items"`
+}
+
+type RuntimeSnapshotResponse struct {
+	Type          string                   `json:"type"`
+	TS            int64                    `json:"ts"`
+	Subscriptions []RuntimeSubscriptionItem `json:"subscriptions"`
+	Health        []SubscriptionHealthItem `json:"health"`
+	Totals        RuntimeSnapshotTotals    `json:"totals"`
 }

@@ -147,6 +147,12 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - CCXT-Lifecycle-Pfad ist mit explizitem `UnWatch*`, Capability-Fallback, Market-Cache und exakter Disconnect-Route verifiziert
   - Fehler- und Lifecycle-Sichtbarkeit ist technisch vorhanden (`StreamStatusEvent`, `STREAM_LIFECYCLE`, Lifecycle-Metriken)
   - Reconnect-/Status-Verhalten wird im Beta-Deployment weiter beobachtet, ist aber kein Blocker mehr fuer den technischen Abschluss von P7
+- Runtime-Read-API fuer UI/Command-Bridge abgeschlossen:
+  - neue Read-Actions: `list_subscriptions`, `subscription_health_snapshot`, `get_runtime_snapshot`
+  - broker liefert joinbare JSON-Snapshots ueber `exchange`, `market_type`, `symbol`, `data_type`
+  - Subscription-Snapshot zeigt aktiven deduplizierten Istzustand inkl. `adapter`, `running`, `owners`, `clients`, optional `depth`
+  - Health-Snapshot liefert normierte Statuswerte (`running`, `degraded`, `reconnecting`, `failed`, `stopped`) sowie `last_message_age_ms`, `last_message_ts`, `reconnects_1h`, `messages_per_sec`, `latency_ms`, `last_error`
+  - kombinierter `runtime_snapshot` liefert zusaetzlich `totals`
 - Mutex/Block-Kontrolllauf standardisiert (abgeschlossen):
   - Broker-Start fuer Kontrolllauf immer mit `--pprof-block-rate 1 --pprof-mutex-fraction 5`
   - Kontrollprofil je Referenzpfad: `profile?seconds=30`, `mutex`, `block`

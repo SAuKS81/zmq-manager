@@ -100,6 +100,9 @@ Unterstuetzte Request-Aktionen:
 - `subscribe_bulk`
 - `subscribe_all`
 - `disconnect`
+- `list_subscriptions`
+- `subscription_health_snapshot`
+- `get_runtime_snapshot`
 
 Optional kann ein Client sein Ziel-Encoding setzen:
 
@@ -197,6 +200,128 @@ Wichtig:
   - `binance` bleibt `binance`
   - `binance_native` bleibt `binance_native`
 
+### 5.6 Liste aktiver physischer Subscriptions
+
+```json
+{
+  "action": "list_subscriptions"
+}
+```
+
+Optional ist bereits ein `scope`-Feld vorgesehen, die erste produktive Version antwortet aber global:
+
+```json
+{
+  "action": "list_subscriptions",
+  "scope": "global"
+}
+```
+
+Antwort:
+
+```json
+{
+  "type": "subscriptions_snapshot",
+  "scope": "global",
+  "ts": 1772300000000,
+  "items": [
+    {
+      "exchange": "bybit",
+      "market_type": "spot",
+      "symbol": "BTC/USDT",
+      "data_type": "trades",
+      "adapter": "ccxt",
+      "running": true,
+      "owners": 3,
+      "clients": 3
+    }
+  ]
+}
+```
+
+Semantik:
+
+- ein Eintrag pro aktiver physischer Subscription auf Broker-Ebene
+- `adapter` ist explizit `ccxt` oder `native`
+- `depth` wird nur bei Orderbooks gesetzt
+- `owners` und `clients` sind in der aktuellen Version identisch und entsprechen der Anzahl abonnierter Clients auf diesen Join-Key
+
+### 5.7 Health-Snapshot pro Subscription
+
+```json
+{
+  "action": "subscription_health_snapshot"
+}
+```
+
+Antwort:
+
+```json
+{
+  "type": "subscription_health_snapshot",
+  "ts": 1772300000000,
+  "items": [
+    {
+      "exchange": "bybit",
+      "market_type": "spot",
+      "symbol": "BTC/USDT",
+      "data_type": "trades",
+      "status": "running",
+      "last_message_age_ms": 120,
+      "last_message_ts": 1772299999880,
+      "reconnects_1h": 0,
+      "messages_per_sec": 45.2,
+      "latency_ms": 12.0,
+      "last_error": ""
+    }
+  ]
+}
+```
+
+Normierte Statuswerte:
+
+- `running`
+- `degraded`
+- `reconnecting`
+- `failed`
+- `stopped`
+
+### 5.8 Kombinierter Runtime-Snapshot
+
+Das ist der empfohlene UI-Endpunkt fuer eine Command Bridge:
+
+```json
+{
+  "action": "get_runtime_snapshot"
+}
+```
+
+Antwort:
+
+```json
+{
+  "type": "runtime_snapshot",
+  "ts": 1772300000000,
+  "subscriptions": [],
+  "health": [],
+  "totals": {
+    "active_subscriptions": 1045,
+    "messages_per_sec": 14200,
+    "reconnects_24h": 42
+  }
+}
+```
+
+Warum dieser Endpunkt bevorzugt werden sollte:
+
+- beide Snapshots kommen aus demselben Broker-Zeitpunkt
+- das UI muss keine zwei getrennten Requests koordinieren
+- `subscriptions` und `health` sind ueber denselben Join-Key kombinierbar:
+  - `exchange`
+  - `market_type`
+  - `symbol`
+  - `data_type`
+
 ## 6. Symbolformat
 
 Es gibt zwei wichtige Faelle:
@@ -233,6 +358,7 @@ Zusatz:
 
 - Ping/Pong fuer Client-Liveness
 - Fehler-JSON bei ungueltigen Requests
+- Runtime-Snapshots als JSON-Control-Responses
 
 ## 8. Datenformate des Brokers
 
@@ -275,6 +401,16 @@ Typische Fehlercodes:
 - `missing_action`
 - `invalid_request`
 - `unknown_action`
+
+### 8.4 Runtime-Snapshot-Antworten
+
+Die Runtime-Snapshot-Endpunkte werden immer als JSON-Control-Payload gesendet.
+
+Wichtig:
+
+- sie sind bewusst lesbare Read-API-Antworten
+- sie umgehen kein bestehendes Subscribe-/Unsubscribe-Verhalten
+- sie dienen nur dazu, dem UI einen belastbaren Istzustand zu geben
 
 ## 9. Normalisierte Datenmodelle
 
@@ -463,6 +599,20 @@ Wichtige Betriebsmetriken:
 - Drops
 - Queue-Samples
 - Processing-Histogramme
+
+## 15.1 Health-Snapshot-Herkunft
+
+Der Runtime-Health-Snapshot wird broker-seitig aus drei Quellen aufgebaut:
+
+- aktuelle deduplizierte aktive Subscription-Maps
+- beobachtete eingehende Trade-/Orderbook-Nachrichten
+- Lifecycle-Events wie `stream_reconnecting` und `stream_restored`
+
+Das bedeutet:
+
+- die Read-API ist ein echter Laufzeit-Istzustand auf Broker-Ebene
+- es wird keine neue Dedupe-Logik eingefuehrt
+- die bestehende Subscribe-/Unsubscribe-Logik bleibt unveraendert
 
 ## 16. pprof und Diagnose
 

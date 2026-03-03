@@ -102,6 +102,7 @@ type ClientManager struct {
 
 type incomingClientMessage struct {
 	Action         string   `json:"action"`
+	Scope          string   `json:"scope"`
 	Exchange       string   `json:"exchange"`
 	Symbol         string   `json:"symbol"`
 	Symbols        []string `json:"symbols"`
@@ -190,6 +191,12 @@ func (cm *ClientManager) distributionLoop() {
 			cm.distributeOrderBookBatch(msg.ClientIDs, payload)
 		case *shared_types.StreamStatusEvent:
 			cm.distributeStatusEvent(msg.ClientIDs, payload)
+		case *shared_types.SubscriptionsSnapshotResponse:
+			cm.distributeJSONPayload(msg.ClientIDs, payload)
+		case *shared_types.SubscriptionHealthSnapshotResponse:
+			cm.distributeJSONPayload(msg.ClientIDs, payload)
+		case *shared_types.RuntimeSnapshotResponse:
+			cm.distributeJSONPayload(msg.ClientIDs, payload)
 		default:
 			continue
 		}
@@ -614,6 +621,9 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 	}
 
 	switch req.Action {
+	case "list_subscriptions", "subscription_health_snapshot", "get_runtime_snapshot":
+		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope})
+		return
 	case "subscribe_bulk":
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
 			cm.sendClientError(clientID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
@@ -649,7 +659,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		return
 	}
 
-	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, OrderBookDepth: req.OrderBookDepth})
+	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, OrderBookDepth: req.OrderBookDepth})
 }
 
 func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {
@@ -744,7 +754,14 @@ func (cm *ClientManager) distributeStatusEvent(clientIDs [][]byte, event *shared
 	if event == nil || len(clientIDs) == 0 {
 		return
 	}
-	payload, err := json.Marshal(event)
+	cm.distributeJSONPayload(clientIDs, event)
+}
+
+func (cm *ClientManager) distributeJSONPayload(clientIDs [][]byte, payloadValue any) {
+	if payloadValue == nil || len(clientIDs) == 0 {
+		return
+	}
+	payload, err := json.Marshal(payloadValue)
 	if err != nil {
 		metrics.RecordDropped(metrics.ReasonInternalErr, metrics.TypeTrade)
 		return

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"testing"
+	"time"
 
 	"bybit-watcher/internal/exchanges"
 	"bybit-watcher/internal/shared_types"
@@ -235,5 +236,98 @@ func TestDisconnectKeepsExactCCXTRoute(t *testing.T) {
 		if req.Action != "unsubscribe" {
 			t.Fatalf("expected unsubscribe action, got %+v", req)
 		}
+	}
+}
+
+func TestBuildSubscriptionsSnapshotGroupsByExactRoute(t *testing.T) {
+	clientNative := "client-native"
+	clientCCXT := "client-ccxt"
+	subID := "binance-spot-BTC/USDT"
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			subID: {clientNative: true, clientCCXT: true},
+		},
+		tradeSubscriptionRoutes: map[string]string{
+			getClientRouteKey(clientNative, subID): "binance_native",
+			getClientRouteKey(clientCCXT, subID):   "binance",
+		},
+		orderBookSubscriptions:      make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes: make(map[string]string),
+		orderBookSubscriptionDepths: make(map[string]int),
+		runtimeTracker:              newRuntimeTracker(),
+	}
+
+	resp := sm.buildSubscriptionsSnapshotResponse("global")
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 runtime subscription items, got %d", len(resp.Items))
+	}
+
+	seen := map[string]shared_types.RuntimeSubscriptionItem{}
+	for _, item := range resp.Items {
+		seen[item.Exchange] = item
+	}
+
+	if seen["binance"].Adapter != "ccxt" {
+		t.Fatalf("expected binance adapter ccxt, got %+v", seen["binance"])
+	}
+	if seen["binance_native"].Adapter != "native" {
+		t.Fatalf("expected binance_native adapter native, got %+v", seen["binance_native"])
+	}
+	if seen["binance"].Clients != 1 || seen["binance_native"].Clients != 1 {
+		t.Fatalf("expected client counts preserved, got %+v", seen)
+	}
+}
+
+func TestBuildRuntimeSnapshotIncludesHealth(t *testing.T) {
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			"binance-spot-BTC/USDT": {"client-a": true},
+		},
+		tradeSubscriptionRoutes:     map[string]string{getClientRouteKey("client-a", "binance-spot-BTC/USDT"): "binance"},
+		orderBookSubscriptions:      make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes: make(map[string]string),
+		orderBookSubscriptionDepths: make(map[string]int),
+		runtimeTracker:              newRuntimeTracker(),
+	}
+
+	sm.runtimeTracker.recordTrade(&shared_types.TradeUpdate{
+		Exchange:       "binance",
+		Symbol:         "BTC/USDT",
+		MarketType:     "spot",
+		GoTimestamp:    time.Now().UnixMilli(),
+		IngestUnixNano: time.Now().Add(-5 * time.Millisecond).UnixNano(),
+	})
+	sm.runtimeTracker.recordStatus(&shared_types.StreamStatusEvent{
+		Type:       "stream_reconnecting",
+		Exchange:   "binance",
+		MarketType: "spot",
+		Symbol:     "BTC/USDT",
+		DataType:   "trades",
+		Reason:     "test",
+	})
+	sm.runtimeTracker.recordStatus(&shared_types.StreamStatusEvent{
+		Type:       "stream_restored",
+		Exchange:   "binance",
+		MarketType: "spot",
+		Symbol:     "BTC/USDT",
+		DataType:   "trades",
+	})
+
+	resp := sm.buildRuntimeSnapshotResponse()
+	if len(resp.Subscriptions) != 1 {
+		t.Fatalf("expected 1 subscription item, got %d", len(resp.Subscriptions))
+	}
+	if len(resp.Health) != 1 {
+		t.Fatalf("expected 1 health item, got %d", len(resp.Health))
+	}
+	if resp.Health[0].Status != "running" {
+		t.Fatalf("expected running status, got %+v", resp.Health[0])
+	}
+	if resp.Totals.ActiveSubscriptions != 1 {
+		t.Fatalf("expected active_subscriptions=1, got %+v", resp.Totals)
+	}
+	if resp.Totals.Reconnects24H != 1 {
+		t.Fatalf("expected reconnects_24h=1, got %+v", resp.Totals)
 	}
 }

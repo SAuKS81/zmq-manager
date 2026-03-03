@@ -3,6 +3,7 @@ package broker
 import (
 	// "fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -26,12 +27,14 @@ type SubscriptionManager struct {
 	orderBookSubscriptions      map[string]map[string]bool
 	tradeSubscriptionRoutes     map[string]string
 	orderBookSubscriptionRoutes map[string]string
+	orderBookSubscriptionDepths map[string]int
 	exchangeRegistry            map[string]exchanges.Exchange
 	wildcardSubscribers         map[string]map[string]bool
 	wildcardRoutes              map[string]string
 	incomingTradeCounter        atomic.Uint64
 	incomingOBCounter           atomic.Uint64
 	totalDataReceived           atomic.Uint64
+	runtimeTracker              *runtimeTracker
 }
 
 func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *SubscriptionManager {
@@ -45,9 +48,11 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 		orderBookSubscriptions:      make(map[string]map[string]bool),
 		tradeSubscriptionRoutes:     make(map[string]string),
 		orderBookSubscriptionRoutes: make(map[string]string),
+		orderBookSubscriptionDepths: make(map[string]int),
 		exchangeRegistry:            make(map[string]exchanges.Exchange),
 		wildcardSubscribers:         make(map[string]map[string]bool),
 		wildcardRoutes:              make(map[string]string),
+		runtimeTracker:              newRuntimeTracker(),
 	}
 	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
@@ -132,7 +137,11 @@ func (sm *SubscriptionManager) Run() {
 }
 
 func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStatusEvent) {
-	if event == nil || sm.DistributionCh == nil {
+	if event == nil {
+		return
+	}
+	sm.runtimeTracker.recordStatus(event)
+	if sm.DistributionCh == nil {
 		return
 	}
 
@@ -188,6 +197,7 @@ func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpda
 	clientBatches := make(map[string][]*shared_types.TradeUpdate)
 
 	for _, trade := range batch {
+		sm.runtimeTracker.recordTrade(trade)
 		subID := getSubscriptionID(trade.Exchange, trade.Symbol, trade.MarketType)
 		targetClients := make(map[string]bool)
 
@@ -249,6 +259,7 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 	clientBatches := make(map[string][]*shared_types.OrderBookUpdate)
 
 	for _, ob := range batch {
+		sm.runtimeTracker.recordOrderBook(ob)
 		subID := getSubscriptionID(ob.Exchange, ob.Symbol, ob.MarketType)
 		if clients, ok := sm.orderBookSubscriptions[subID]; ok {
 			for clientIDStr := range clients {
@@ -305,8 +316,22 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if sm.orderBookSubscriptionRoutes == nil {
 		sm.orderBookSubscriptionRoutes = make(map[string]string)
 	}
+	if sm.orderBookSubscriptionDepths == nil {
+		sm.orderBookSubscriptionDepths = make(map[string]int)
+	}
 	if sm.wildcardRoutes == nil {
 		sm.wildcardRoutes = make(map[string]string)
+	}
+	switch req.Action {
+	case "list_subscriptions":
+		sm.sendJSONSnapshot(req.ClientID, sm.buildSubscriptionsSnapshotResponse(req.Scope))
+		return
+	case "subscription_health_snapshot":
+		sm.sendJSONSnapshot(req.ClientID, sm.buildSubscriptionHealthSnapshotResponse())
+		return
+	case "get_runtime_snapshot":
+		sm.sendJSONSnapshot(req.ClientID, sm.buildRuntimeSnapshotResponse())
+		return
 	}
 	exchangeNameForSubID := strings.Split(req.Exchange, "_")[0]
 	if req.Action == "subscribe_all" && req.DataType == "trades" {
@@ -338,6 +363,9 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		routeKey := getClientRouteKey(clientIDStr, subID)
 		if req.DataType == "orderbooks" {
 			sm.orderBookSubscriptionRoutes[routeKey] = req.Exchange
+			if req.OrderBookDepth > 0 {
+				sm.orderBookSubscriptionDepths[routeKey] = req.OrderBookDepth
+			}
 		} else {
 			sm.tradeSubscriptionRoutes[routeKey] = req.Exchange
 		}
@@ -351,6 +379,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		routeKey := getClientRouteKey(clientIDStr, subID)
 		if req.DataType == "orderbooks" {
 			delete(sm.orderBookSubscriptionRoutes, routeKey)
+			delete(sm.orderBookSubscriptionDepths, routeKey)
 		} else {
 			delete(sm.tradeSubscriptionRoutes, routeKey)
 		}
@@ -440,6 +469,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		routeKey := getClientRouteKey(clientID, subID)
 		exactExchange := sm.orderBookSubscriptionRoutes[routeKey]
 		delete(sm.orderBookSubscriptionRoutes, routeKey)
+		delete(sm.orderBookSubscriptionDepths, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {
@@ -496,4 +526,152 @@ func parseSubscriptionID(subID string) (exchange, marketType, symbol string, ok 
 
 func getClientRouteKey(clientID, subID string) string {
 	return clientID + "|" + subID
+}
+
+func (sm *SubscriptionManager) buildSubscriptionsSnapshotResponse(scope string) *shared_types.SubscriptionsSnapshotResponse {
+	if scope == "" {
+		scope = "global"
+	}
+	return &shared_types.SubscriptionsSnapshotResponse{
+		Type:  "subscriptions_snapshot",
+		Scope: scope,
+		TS:    time.Now().UnixMilli(),
+		Items: sm.buildRuntimeSubscriptionItems(),
+	}
+}
+
+func (sm *SubscriptionManager) buildSubscriptionHealthSnapshotResponse() *shared_types.SubscriptionHealthSnapshotResponse {
+	items := sm.buildRuntimeSubscriptionItems()
+	health, _ := sm.runtimeTracker.snapshotHealth(items, time.Now())
+	return &shared_types.SubscriptionHealthSnapshotResponse{
+		Type:  "subscription_health_snapshot",
+		TS:    time.Now().UnixMilli(),
+		Items: health,
+	}
+}
+
+func (sm *SubscriptionManager) buildRuntimeSnapshotResponse() *shared_types.RuntimeSnapshotResponse {
+	items := sm.buildRuntimeSubscriptionItems()
+	health, totals := sm.runtimeTracker.snapshotHealth(items, time.Now())
+	return &shared_types.RuntimeSnapshotResponse{
+		Type:          "runtime_snapshot",
+		TS:            time.Now().UnixMilli(),
+		Subscriptions: items,
+		Health:        health,
+		Totals:        totals,
+	}
+}
+
+func (sm *SubscriptionManager) buildRuntimeSubscriptionItems() []shared_types.RuntimeSubscriptionItem {
+	items := make([]shared_types.RuntimeSubscriptionItem, 0, len(sm.tradeSubscriptions)+len(sm.orderBookSubscriptions))
+	items = append(items, sm.aggregateRuntimeSubscriptions(sm.tradeSubscriptions, sm.tradeSubscriptionRoutes, nil, "trades")...)
+	items = append(items, sm.aggregateRuntimeSubscriptions(sm.orderBookSubscriptions, sm.orderBookSubscriptionRoutes, sm.orderBookSubscriptionDepths, "orderbooks")...)
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Exchange != items[j].Exchange {
+			return items[i].Exchange < items[j].Exchange
+		}
+		if items[i].MarketType != items[j].MarketType {
+			return items[i].MarketType < items[j].MarketType
+		}
+		if items[i].Symbol != items[j].Symbol {
+			return items[i].Symbol < items[j].Symbol
+		}
+		if items[i].DataType != items[j].DataType {
+			return items[i].DataType < items[j].DataType
+		}
+		return items[i].Depth < items[j].Depth
+	})
+	return items
+}
+
+func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
+	subscriptions map[string]map[string]bool,
+	routeMap map[string]string,
+	depthMap map[string]int,
+	defaultDataType string,
+) []shared_types.RuntimeSubscriptionItem {
+	type aggregate struct {
+		exchange   string
+		marketType string
+		symbol     string
+		dataType   string
+		adapter    string
+		depth      int
+		clients    map[string]bool
+	}
+
+	grouped := make(map[string]*aggregate)
+	for subID, clients := range subscriptions {
+		baseExchange, marketType, symbol, ok := parseSubscriptionID(subID)
+		if !ok {
+			continue
+		}
+		for clientID := range clients {
+			routeKey := getClientRouteKey(clientID, subID)
+			exactExchange := routeMap[routeKey]
+			if exactExchange == "" {
+				exactExchange = baseExchange
+			}
+
+			groupKey := strings.Join([]string{exactExchange, marketType, symbol, defaultDataType}, "|")
+			entry, exists := grouped[groupKey]
+			if !exists {
+				entry = &aggregate{
+					exchange:   exactExchange,
+					marketType: marketType,
+					symbol:     symbol,
+					dataType:   defaultDataType,
+					adapter:    adapterFromExchangeRoute(exactExchange),
+					clients:    make(map[string]bool),
+				}
+				grouped[groupKey] = entry
+			}
+			entry.clients[clientID] = true
+			if depthMap != nil {
+				if depth := depthMap[routeKey]; depth > entry.depth {
+					entry.depth = depth
+				}
+			}
+		}
+	}
+
+	items := make([]shared_types.RuntimeSubscriptionItem, 0, len(grouped))
+	for _, entry := range grouped {
+		clientCount := len(entry.clients)
+		items = append(items, shared_types.RuntimeSubscriptionItem{
+			Exchange:   entry.exchange,
+			MarketType: entry.marketType,
+			Symbol:     entry.symbol,
+			DataType:   entry.dataType,
+			Adapter:    entry.adapter,
+			Depth:      entry.depth,
+			Running: sm.runtimeTracker.isRunning(runtimeKey{
+				Exchange:   entry.exchange,
+				MarketType: entry.marketType,
+				Symbol:     entry.symbol,
+				DataType:   entry.dataType,
+			}),
+			Owners:  clientCount,
+			Clients: clientCount,
+		})
+	}
+	return items
+}
+
+func (sm *SubscriptionManager) sendJSONSnapshot(clientID []byte, payload any) {
+	if sm.DistributionCh == nil || len(clientID) == 0 || payload == nil {
+		return
+	}
+	sm.DistributionCh <- &DistributionMessage{
+		ClientIDs:  [][]byte{append([]byte(nil), clientID...)},
+		RawPayload: payload,
+	}
+}
+
+func adapterFromExchangeRoute(exchange string) string {
+	if strings.HasSuffix(exchange, "_native") {
+		return "native"
+	}
+	return "ccxt"
 }
