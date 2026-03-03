@@ -20,6 +20,17 @@ def send_json(sock: zmq.Socket, payload: dict) -> None:
     sock.send_json(payload)
 
 
+def detect_header(frames: list[bytes]) -> bytes:
+    if len(frames) < 2:
+        return b""
+    # ROUTER/DEALER interoperability can introduce an extra empty frame.
+    # Use the last one-byte non-empty frame before the payload as header.
+    for frame in reversed(frames[:-1]):
+        if len(frame) == 1 and frame in (b"T", b"O", b"J"):
+            return frame
+    return b""
+
+
 def build_requests(exchanges: list[str], symbols: list[str], market_type: str, encoding: str) -> list[dict]:
     requests = []
     for exchange in exchanges:
@@ -93,7 +104,7 @@ def main() -> int:
                     + str([frame[:80] for frame in frames])
                 )
 
-            header = frames[-2] if len(frames) >= 2 else b""
+            header = detect_header(frames)
             payload = frames[-1]
 
             if len(header) == 1 and header == b"T":
