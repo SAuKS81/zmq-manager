@@ -95,7 +95,7 @@ def main() -> int:
 
     while not stop:
         events = dict(poller.poll(timeout=250))
-        if sock in events and events[sock] == zmq.POLLIN:
+        if sock in events and (events[sock] & zmq.POLLIN):
             frames = sock.recv_multipart()
             if debug_frames_left > 0:
                 debug_frames_left -= 1
