@@ -6,6 +6,7 @@ import sys
 import time
 import uuid
 
+import msgpack
 import zmq
 
 
@@ -41,8 +42,9 @@ def main() -> int:
     parser.add_argument("--market-type", default="spot", choices=["spot", "swap"], help="Market type")
     parser.add_argument("--symbols", default="BTCUSDT,ETHUSDT", help="Comma-separated native symbols")
     parser.add_argument("--exchanges", default="binance_native,bybit_native", help="Comma-separated exchanges")
-    parser.add_argument("--encoding", default="json", choices=["json", "msgpack", "binary"], help="Requested broker encoding")
+    parser.add_argument("--encoding", default="msgpack", choices=["json", "msgpack", "binary"], help="Requested broker encoding")
     parser.add_argument("--rate-interval", type=float, default=1.0, help="Seconds between rate prints")
+    parser.add_argument("--debug-frames", type=int, default=5, help="Print first N received frames for debugging")
     args = parser.parse_args()
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -78,16 +80,41 @@ def main() -> int:
     interval_start = time.time()
     msg_count = 0
     trade_count = 0
+    debug_frames_left = max(args.debug_frames, 0)
 
     while not stop:
         events = dict(poller.poll(timeout=250))
         if sock in events and events[sock] == zmq.POLLIN:
             frames = sock.recv_multipart()
+            if debug_frames_left > 0:
+                debug_frames_left -= 1
+                print(
+                    "[CLIENT] debug frames="
+                    + str([frame[:80] for frame in frames])
+                )
+
+            header = frames[-2] if len(frames) >= 2 else b""
             payload = frames[-1]
+
+            if len(header) == 1 and header == b"T":
+                try:
+                    obj = msgpack.unpackb(payload, raw=False)
+                except Exception as exc:
+                    print(f"[CLIENT] msgpack trade decode failed: {exc}")
+                    continue
+                if isinstance(obj, list):
+                    msg_count += 1
+                    trade_count += len(obj)
+                continue
+
+            if len(header) == 1 and header == b"O":
+                # Ignore OB payloads for this trade-rate client.
+                continue
 
             try:
                 obj = json.loads(payload.decode("utf-8"))
-            except Exception:
+            except Exception as exc:
+                print(f"[CLIENT] json decode failed: {exc} header={header!r} payload_prefix={payload[:120]!r}")
                 continue
 
             if isinstance(obj, dict) and obj.get("type") == "ping":
@@ -108,6 +135,14 @@ def main() -> int:
             if isinstance(obj, list):
                 msg_count += 1
                 trade_count += len(obj)
+                continue
+
+            if isinstance(obj, dict) and obj.get("data_type") == "trades":
+                msg_count += 1
+                trade_count += 1
+                continue
+
+            print(f"[CLIENT] unhandled payload type={type(obj).__name__} header={header!r}")
 
         now = time.time()
         elapsed = now - interval_start
