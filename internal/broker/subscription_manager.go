@@ -65,10 +65,13 @@ func (sm *SubscriptionManager) Run() {
 	log.Println("[SUB-MANAGER] Startet (Low-Latency Mode)...")
 	go sm.logIncomingRate()
 
-	// Puffer für Batches wiederverwenden
-	const maxBatchSize = 250
-	tradeBatch := make([]*shared_types.TradeUpdate, 0, maxBatchSize)
-	obBatch := make([]*shared_types.OrderBookUpdate, 0, maxBatchSize)
+	const (
+		tradeBatchMaxSize = 32
+		tradeBatchWindow  = 10 * time.Millisecond
+		obBatchMaxSize    = 250
+	)
+	tradeBatch := make([]*shared_types.TradeUpdate, 0, tradeBatchMaxSize)
+	obBatch := make([]*shared_types.OrderBookUpdate, 0, obBatchMaxSize)
 
 	for {
 		select {
@@ -77,18 +80,16 @@ func (sm *SubscriptionManager) Run() {
 		case status := <-sm.StatusCh:
 			sm.processStatusEvent(status)
 
-		// --- TRADES ---
 		case firstTrade := <-sm.TradeDataCh:
-			// 1. Ersten Trade hinzufügen
 			sm.incomingTradeCounter.Add(1)
 			sm.totalDataReceived.Add(1)
 			firstTrade.DataType = "trades"
 			metrics.RecordIngest(firstTrade.Exchange, metrics.TypeTrade)
 			tradeBatch = append(tradeBatch, firstTrade)
 
-			// 2. "Greedy" Loop: Schau, ob noch mehr im Channel ist, bis Batch voll
+			deadline := time.NewTimer(tradeBatchWindow)
 		TradeLoop:
-			for len(tradeBatch) < maxBatchSize {
+			for len(tradeBatch) < tradeBatchMaxSize {
 				select {
 				case nextTrade := <-sm.TradeDataCh:
 					sm.incomingTradeCounter.Add(1)
@@ -96,19 +97,20 @@ func (sm *SubscriptionManager) Run() {
 					nextTrade.DataType = "trades"
 					metrics.RecordIngest(nextTrade.Exchange, metrics.TypeTrade)
 					tradeBatch = append(tradeBatch, nextTrade)
-				default:
-					// Channel leer? Sofort senden! Nicht warten!
+				case <-deadline.C:
 					break TradeLoop
 				}
 			}
+			if !deadline.Stop() {
+				select {
+				case <-deadline.C:
+				default:
+				}
+			}
 
-			// 3. Verarbeiten & Senden
 			sm.processTradeBatch(tradeBatch)
-
-			// 4. Batch leeren (Kapazität behalten)
 			tradeBatch = tradeBatch[:0]
 
-		// --- ORDERBOOKS ---
 		case firstOB := <-sm.OrderBookCh:
 			sm.incomingOBCounter.Add(1)
 			sm.totalDataReceived.Add(1)
@@ -117,7 +119,7 @@ func (sm *SubscriptionManager) Run() {
 			obBatch = append(obBatch, firstOB)
 
 		OBLoop:
-			for len(obBatch) < maxBatchSize {
+			for len(obBatch) < obBatchMaxSize {
 				select {
 				case nextOB := <-sm.OrderBookCh:
 					sm.incomingOBCounter.Add(1)

@@ -46,6 +46,15 @@ Wichtige Prioritaetsregel:
 - tiefere Orderbook-Updates laufen im degradierten Latest-Only-Pfad
 - Drops duerfen nie still passieren; sie werden explizit gezaehlt
 
+Wichtige Versandregel:
+
+- Trades werden nicht mehr unbounded greedy gebatcht
+- der Broker verwendet fuer Trades ein kleines Micro-Batch-Fenster:
+  - maximal `32` Trades
+  - oder maximal `10ms`
+  - was zuerst eintritt
+- Orderbooks bleiben davon unberuehrt
+
 ## 2. Wie der Broker gestartet wird
 
 Standardstart:
@@ -350,7 +359,7 @@ Wichtig:
 
 Der Broker sendet drei Hauptarten von Nutzdaten:
 
-- Trade-Batches
+- Trade-Micro-Batches
 - Orderbook-Batches
 - Lifecycle-/Status-Events
 
@@ -366,7 +375,8 @@ Zusatz:
 
 Bei `encoding=json` erhaelt der Client JSON-Payloads.
 
-Trades und Orderbooks kommen typischerweise als Arrays von normalisierten Objekten.
+Trades kommen im aktuellen Stand als kleine Arrays aus dem Trade-Micro-Batch-Fenster.
+Orderbooks kommen ebenfalls als Arrays von normalisierten Objekten.
 
 ### 8.2 Msgpack/Binary
 
@@ -644,6 +654,12 @@ Wichtige Regel:
 7. Broker verteilt Daten an abonnierte Clients
 8. Client sendet `disconnect`
 9. Broker raeumt Subscriptions auf und routed exaktes Unsubscribe
+
+Hinweis zur Trade-Latenz:
+
+- Trades werden mit einem begrenzten Micro-Batch-Fenster gesammelt
+- dadurch liegt die zusaetzliche Broker-Verzoegerung typischerweise bei hoechstens `10ms`
+- bei geringer Last koennen auch Einzeltrades als 1er-Array gesendet werden
 
 ## 18. Troubleshooting
 
