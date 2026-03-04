@@ -110,12 +110,25 @@ func (cm *ConnectionManager) processCommands(cmds []ManagerCommand) {
 		cm.processTradeCommands(tradeCmds)
 	}
 	if len(obCmds) > 0 {
-		if cm.config.UseForSymbols {
+		if cm.shouldUseBatchOrderBookMode() {
 			cm.processBatchOrderBookCommands(obCmds)
 		} else {
 			cm.processSingleOrderBookCommands(obCmds)
 		}
 	}
+}
+
+func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
+	if !cm.config.UseForSymbols {
+		return false
+	}
+	// Workaround for pinned CCXT-Pro build:
+	// bybit swap orderbooks may stall with WatchOrderBookForSymbols.
+	// Use single-symbol watchOrderBook path for swap until upstream behavior is stable.
+	if cm.exchangeName == "bybit" && cm.marketType == "swap" {
+		return false
+	}
+	return true
 }
 
 // processTradeCommands ist korrekt und bleibt unverändert
