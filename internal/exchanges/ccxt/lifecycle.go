@@ -13,6 +13,10 @@ type closeableExchange interface {
 	Close() []error
 }
 
+type describableExchange interface {
+	Describe() interface{}
+}
+
 func createCCXTExchange(exchangeName, marketType string) ccxtpro.IExchange {
 	return ccxtpro.CreateExchange(exchangeName, makeExchangeOptions(exchangeName, marketType))
 }
@@ -30,4 +34,39 @@ func closeCCXTExchange(exchangeName, marketType string, exchange ccxtpro.IExchan
 			}
 		}
 	}
+}
+
+func exchangeHasFeature(exchange ccxtpro.IExchange, feature string) bool {
+	if exchange == nil || feature == "" {
+		return false
+	}
+
+	describer, ok := exchange.(describableExchange)
+	if !ok {
+		return false
+	}
+
+	describe := describer.Describe()
+	describeMap, ok := describe.(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	hasRaw, ok := describeMap["has"]
+	if !ok {
+		return false
+	}
+
+	hasMap, ok := hasRaw.(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	flag, ok := hasMap[feature]
+	if !ok {
+		return false
+	}
+
+	boolFlag, ok := flag.(bool)
+	return ok && boolFlag
 }

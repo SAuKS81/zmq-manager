@@ -226,6 +226,9 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
     - `htx`/`huobi` Trades via `UnWatchTrades`
     - `woo` Trades via `UnWatchTrades`
   - `bitmart` und `coinex` bleiben vorerst konservativ, weil im aktuellen CCXT-Pro-Code kein klarer `UnWatchTrades`-Pfad sichtbar ist
+  - CCXT-Betriebsmodus jetzt generell geaendert:
+    - wenn `Describe().has["unWatch*"] == true`, nutzt der Broker den echten `UnWatch*`-Pfad
+    - Laufzeitfehler werden geloggt und fuehren automatisch zum bestehenden Shard-Recycle-Fallback
   - Grundlage:
     - Subscribe/Unsubscribe auf Vultr sauber acked
     - `stream_subscribe_active` kam fuer beide Symbole

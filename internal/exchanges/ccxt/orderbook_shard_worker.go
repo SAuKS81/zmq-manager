@@ -98,7 +98,7 @@ func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
 			if !exists {
 				continue
 			}
-			if sw.config.SupportsOrderBookUnwatch {
+			if sw.config.SupportsOrderBookUnwatch || exchangeHasFeature(sw.exchange, "unWatchOrderBook") {
 				if _, err := sw.safeUnWatchOrderBook(symbol); err != nil {
 					log.Printf("[CCXT-OB-SHARD-WARN] UnWatchOrderBook('%s') fehlgeschlagen: %v. Fallback auf Shard-Recycle.", symbol, err)
 					recycleNeeded = true

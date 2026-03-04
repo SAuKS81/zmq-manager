@@ -709,8 +709,8 @@ CCXT ist der generische Forschungs-/Abdeckungspfad fuer viele Exchanges.
 Wichtige Regeln:
 
 - fuer unbekannte Exchanges greift ein konservativer Slow-Default
-- `UnWatch*` wird nur genutzt, wenn die Exchange-Policy die Capability explizit erlaubt
-- sonst faellt der Pfad auf shard-scope Recycle mit Wiederaufbau nur der `desired`-Streams zurueck
+- wenn `Describe().has["unWatch*"] == true`, versucht der Broker den echten `UnWatch*`-Pfad zu nutzen
+- wenn `UnWatch*` zur Laufzeit fehlschlaegt, wird der Fehler geloggt und es folgt automatisch der shard-scope Fallback mit Wiederaufbau nur der `desired`-Streams
 - Market-Metadaten werden pro `exchange/marketType` gecacht, um REST-Weight-Spikes zu vermeiden
 
 ## 13. Exchange-spezifische Besonderheiten
@@ -736,10 +736,10 @@ Wichtige Regeln:
 ### CCXT generic
 
 - nicht jede Exchange hat dieselben `UnWatch*`-Faehigkeiten
-- deshalb bewusst Default-Policy + Capability-Gating
+- deshalb gilt jetzt: `Describe().has["unWatch*"] == true` aktiviert den Primaerpfad, Laufzeitfehler fallen auf Recycle zurueck
 - `mexc` ist aktuell ein expliziter Fall fuer `recycle-on-unsubscribe`, weil `UnWatchTrades` in der verwendeten CCXT-Pro-Version reproduzierbar fehlschlaegt
 - `kucoin` Spot-Trades verwenden echten Batch-Unwatch; Orderbook-Unwatch bleibt bis zu einem eigenen Verifikationslauf konservativ
-- `htx`/`huobi` Trades und `woo` Trades laufen im beschleunigten Trial auf echtem `UnWatchTrades`; bei Laufzeitfehlern werden sie wieder auf Fallback gesetzt
+- `htx`/`huobi` Trades und `woo` Trades laufen auf echtem `UnWatchTrades`; Laufzeitfehler werden abgefangen und fallen auf Fallback zurueck
 
 ## 14. Baseline- und Replay-Betrieb
 
