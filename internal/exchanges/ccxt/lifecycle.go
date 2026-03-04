@@ -5,6 +5,7 @@ package ccxt
 
 import (
 	"log"
+	"strings"
 
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
@@ -36,8 +37,11 @@ func closeCCXTExchange(exchangeName, marketType string, exchange ccxtpro.IExchan
 	}
 }
 
-func exchangeHasFeature(exchange ccxtpro.IExchange, feature string) bool {
+func exchangeHasFeature(exchangeName string, exchange ccxtpro.IExchange, feature string) bool {
 	if exchange == nil || feature == "" {
+		return false
+	}
+	if strings.EqualFold(exchangeName, "mexc") {
 		return false
 	}
 

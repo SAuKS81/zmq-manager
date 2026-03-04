@@ -229,6 +229,8 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - CCXT-Betriebsmodus jetzt generell geaendert:
     - wenn `Describe().has["unWatch*"] == true`, nutzt der Broker den echten `UnWatch*`-Pfad
     - Laufzeitfehler werden geloggt und fuehren automatisch zum bestehenden Shard-Recycle-Fallback
+    - bekannte harte Ausnahme:
+      - `mexc` bleibt trotz `has=true` explizit auf Fallback, weil der Upstream-Bug reproduzierbar ist
   - Grundlage:
     - Subscribe/Unsubscribe auf Vultr sauber acked
     - `stream_subscribe_active` kam fuer beide Symbole

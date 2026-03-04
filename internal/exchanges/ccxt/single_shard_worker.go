@@ -99,7 +99,7 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 				continue
 			}
 			log.Printf("[CCXT-SINGLE-SHARD] Stoppe Watcher fuer %s.", symbol)
-			if sw.config.SupportsTradeUnwatch || exchangeHasFeature(sw.exchange, "unWatchTrades") {
+			if sw.config.SupportsTradeUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTrades") {
 				if _, err := sw.safeUnWatchTrades(symbol); err != nil {
 					log.Printf("[CCXT-SINGLE-SHARD-WARN] UnWatchTrades('%s') fehlgeschlagen: %v. Fallback auf Shard-Recycle.", symbol, err)
 					recycleNeeded = true

@@ -710,6 +710,8 @@ Wichtige Regeln:
 
 - fuer unbekannte Exchanges greift ein konservativer Slow-Default
 - wenn `Describe().has["unWatch*"] == true`, versucht der Broker den echten `UnWatch*`-Pfad zu nutzen
+- bekannte harte Ausnahmen bleiben ausgenommen:
+  - `mexc`
 - wenn `UnWatch*` zur Laufzeit fehlschlaegt, wird der Fehler geloggt und es folgt automatisch der shard-scope Fallback mit Wiederaufbau nur der `desired`-Streams
 - Market-Metadaten werden pro `exchange/marketType` gecacht, um REST-Weight-Spikes zu vermeiden
 
@@ -737,6 +739,7 @@ Wichtige Regeln:
 
 - nicht jede Exchange hat dieselben `UnWatch*`-Faehigkeiten
 - deshalb gilt jetzt: `Describe().has["unWatch*"] == true` aktiviert den Primaerpfad, Laufzeitfehler fallen auf Recycle zurueck
+- bekannte Ausnahmen wie `mexc` bleiben trotz `has=true` auf `recycle-on-unsubscribe`
 - `mexc` ist aktuell ein expliziter Fall fuer `recycle-on-unsubscribe`, weil `UnWatchTrades` in der verwendeten CCXT-Pro-Version reproduzierbar fehlschlaegt
 - `kucoin` Spot-Trades verwenden echten Batch-Unwatch; Orderbook-Unwatch bleibt bis zu einem eigenen Verifikationslauf konservativ
 - `htx`/`huobi` Trades und `woo` Trades laufen auf echtem `UnWatchTrades`; Laufzeitfehler werden abgefangen und fallen auf Fallback zurueck
