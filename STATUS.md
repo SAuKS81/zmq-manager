@@ -218,7 +218,9 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - CCXT-Capabilities fuer `mexc`, `kucoin`, `huobi`/`htx` und `bitmart` sind brokerseitig jetzt explizit sichtbar
   - `huobi` wird policy-seitig auf `htx` aliasiert, damit UI und Runtime denselben Routenbegriff nutzen
   - `bitmart` hat einen ersten konservativen CCXT-Policy-Eintrag erhalten
-  - `mexc` war initial funktional nur auf `recycle-on-unsubscribe`; echter `TradeUnwatch` ist jetzt gezielt zur Verifikation freigeschaltet
+  - `mexc` ist getestet und bleibt vorerst bewusst auf `recycle-on-unsubscribe`
+  - Grund: `UnWatchTrades` scheitert in der verwendeten CCXT-Pro-Version reproduzierbar im MEXC-Adapter (`interface conversion: *ccxt.WSClient is not *ccxt.Client`)
+  - Folgerung: kein Policy-Keep fuer echten `TradeUnwatch`, bis der Upstream-/Adapter-Bug geklaert ist
 
 ## Aktueller Arbeitsmodus
 

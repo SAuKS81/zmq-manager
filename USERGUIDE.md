@@ -737,6 +737,7 @@ Wichtige Regeln:
 
 - nicht jede Exchange hat dieselben `UnWatch*`-Faehigkeiten
 - deshalb bewusst Default-Policy + Capability-Gating
+- `mexc` ist aktuell ein expliziter Fall fuer `recycle-on-unsubscribe`, weil `UnWatchTrades` in der verwendeten CCXT-Pro-Version reproduzierbar fehlschlaegt
 
 ## 14. Baseline- und Replay-Betrieb
 
