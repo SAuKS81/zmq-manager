@@ -178,12 +178,14 @@ var exchangePolicies = map[string]ExchangePolicySet{
 	},
 	"kucoin": {
 		Spot: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   true,
-			BatchSize:       100,
-			SymbolsPerShard: 200,
-			SubscribePause:  500 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:                   true,
+			UseForSymbols:             true,
+			BatchSize:                 100,
+			SymbolsPerShard:           200,
+			SubscribePause:            500 * time.Millisecond,
+			NewShardPause:             1100 * time.Millisecond,
+			SupportsTradeUnwatch:      true,
+			SupportsTradeBatchUnwatch: true,
 		},
 		Swap: ExchangeConfig{
 			Enabled:         false,

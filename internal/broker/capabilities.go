@@ -122,6 +122,8 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			MarketTypes:         []string{"spot"},
 			DataTypes:           []string{"trades", "orderbooks"},
 			UsesBatchSymbols:    true,
+			SupportsTradeUnwatch:      true,
+			SupportsTradeBatchUnwatch: true,
 			SupportsCacheN:      false,
 			SupportsRequestID:   true,
 			SupportsDeployQueue: true,
