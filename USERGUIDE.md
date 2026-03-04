@@ -739,6 +739,7 @@ Wichtige Regeln:
 - deshalb bewusst Default-Policy + Capability-Gating
 - `mexc` ist aktuell ein expliziter Fall fuer `recycle-on-unsubscribe`, weil `UnWatchTrades` in der verwendeten CCXT-Pro-Version reproduzierbar fehlschlaegt
 - `kucoin` Spot-Trades verwenden echten Batch-Unwatch; Orderbook-Unwatch bleibt bis zu einem eigenen Verifikationslauf konservativ
+- `htx`/`huobi` Trades und `woo` Trades laufen im beschleunigten Trial auf echtem `UnWatchTrades`; bei Laufzeitfehlern werden sie wieder auf Fallback gesetzt
 
 ## 14. Baseline- und Replay-Betrieb
 

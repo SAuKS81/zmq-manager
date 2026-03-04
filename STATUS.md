@@ -222,6 +222,10 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - Grund: `UnWatchTrades` scheitert in der verwendeten CCXT-Pro-Version reproduzierbar im MEXC-Adapter (`interface conversion: *ccxt.WSClient is not *ccxt.Client`)
   - Folgerung: kein Policy-Keep fuer echten `TradeUnwatch`, bis der Upstream-/Adapter-Bug geklaert ist
   - `kucoin` Spot-Trades sind nach Vultr-Test auf echten Batch-Unwatch angehoben
+  - beschleunigter Trial aktiviert:
+    - `htx`/`huobi` Trades via `UnWatchTrades`
+    - `woo` Trades via `UnWatchTrades`
+  - `bitmart` und `coinex` bleiben vorerst konservativ, weil im aktuellen CCXT-Pro-Code kein klarer `UnWatchTrades`-Pfad sichtbar ist
   - Grundlage:
     - Subscribe/Unsubscribe auf Vultr sauber acked
     - `stream_subscribe_active` kam fuer beide Symbole
