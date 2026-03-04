@@ -214,12 +214,13 @@ var exchangePolicies = map[string]ExchangePolicySet{
 	},
 	"mexc": {
 		Spot: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   false,
-			BatchSize:       1,
-			SymbolsPerShard: 30,
-			SubscribePause:  100 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:              true,
+			UseForSymbols:        false,
+			BatchSize:            1,
+			SymbolsPerShard:      30,
+			SubscribePause:       100 * time.Millisecond,
+			NewShardPause:        1100 * time.Millisecond,
+			SupportsTradeUnwatch: true,
 		},
 		Swap: ExchangeConfig{
 			Enabled:         false,
