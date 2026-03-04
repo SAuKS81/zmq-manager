@@ -30,14 +30,17 @@ func TestHandleMessageSubscribeBulk(t *testing.T) {
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
-	payload := []byte(`{"action":"subscribe_bulk","exchange":"binance_native","symbols":["BTC/USDT","ETH/USDT"],"market_type":"swap","depth":1}`)
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"binance_native","symbols":["BTC/USDT","ETH/USDT"],"market_type":"swap","depth":1}`)
 	cm.handleMessage([]byte("client-1"), payload)
 
 	reqs := drainRequests(reqCh)
-	if len(reqs) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(reqs))
+	if len(reqs) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(reqs))
 	}
-	for _, req := range reqs {
+	if reqs[0].Action != "deploy_batch_register" || reqs[0].RequestID != "deploy-123" || reqs[0].BatchSent != 2 {
+		t.Fatalf("expected deploy batch register request, got %+v", reqs[0])
+	}
+	for _, req := range reqs[1:] {
 		if req.Action != "subscribe" {
 			t.Fatalf("expected action subscribe, got %q", req.Action)
 		}
@@ -46,6 +49,9 @@ func TestHandleMessageSubscribeBulk(t *testing.T) {
 		}
 		if req.MarketType != "swap" || req.Exchange != "binance_native" {
 			t.Fatalf("unexpected routing fields: %+v", req)
+		}
+		if req.RequestID != "deploy-123" {
+			t.Fatalf("expected request_id to propagate, got %+v", req)
 		}
 	}
 }

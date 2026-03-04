@@ -15,6 +15,8 @@ const (
 	runtimeStatusReconnecting = "reconnecting"
 	runtimeStatusFailed       = "failed"
 	runtimeStatusStopped      = "stopped"
+	runtimeStaleThresholdMS   = int64(5000)
+	runtimeSampleWindowSec    = 60
 )
 
 type runtimeKey struct {
@@ -31,6 +33,8 @@ type runtimeHealthState struct {
 	LastBrokerLatencyMS   float64
 	Status                string
 	LastError             string
+	LastErrorTS           int64
+	LastReconnectTS       int64
 
 	buckets       [60]int
 	bucketUnixSec int64
@@ -161,18 +165,22 @@ func (rt *runtimeTracker) recordStatusForSymbol(event *shared_types.StreamStatus
 	state := rt.getOrCreateLocked(key)
 	if event.Message != "" {
 		state.LastError = event.Message
+		state.LastErrorTS = nowMs
 	} else if event.Reason != "" {
 		state.LastError = event.Reason
+		state.LastErrorTS = nowMs
 	}
 	switch event.Type {
 	case runtimeStatusReconnecting, "stream_reconnecting":
 		state.Status = runtimeStatusReconnecting
+		state.LastReconnectTS = nowMs
 		state.reconnects1H = append(state.reconnects1H, nowMs)
 		state.reconnects24H = append(state.reconnects24H, nowMs)
 	case "stream_restored":
 		state.Status = runtimeStatusRunning
 		if event.Message == "" && event.Reason == "" {
 			state.LastError = ""
+			state.LastErrorTS = 0
 		}
 	case "stream_unsubscribe_failed":
 		state.Status = runtimeStatusFailed
@@ -232,6 +240,10 @@ func (rt *runtimeTracker) snapshotHealth(subs []shared_types.RuntimeSubscription
 		item.LatencyMS = state.LastExchangeLatencyMS
 		item.BrokerLatencyMS = state.LastBrokerLatencyMS
 		item.LastError = state.LastError
+		item.LastErrorTS = state.LastErrorTS
+		item.LastReconnectTS = state.LastReconnectTS
+		item.StaleThresholdMS = runtimeStaleThresholdMS
+		item.SampleWindowSec = runtimeSampleWindowSec
 		item.Status = rt.normalizeStatusLocked(state, sub.Running, item.LastMessageAgeMS)
 
 		items = append(items, item)
@@ -254,6 +266,17 @@ func (rt *runtimeTracker) isRunning(key runtimeKey) bool {
 		return true
 	}
 	return state.Status != runtimeStatusFailed && state.Status != runtimeStatusStopped
+}
+
+func (rt *runtimeTracker) isActive(key runtimeKey) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+
+	state := rt.lookupStateLocked(key)
+	if state == nil {
+		return false
+	}
+	return state.LastMessageTS > 0 && state.Status != runtimeStatusFailed && state.Status != runtimeStatusStopped
 }
 
 func (rt *runtimeTracker) lookupStateLocked(key runtimeKey) *runtimeHealthState {
@@ -320,7 +343,7 @@ func (rt *runtimeTracker) messagesPerSecondLocked(state *runtimeHealthState) flo
 	for _, c := range state.buckets {
 		total += c
 	}
-	return float64(total) / 60.0
+	return float64(total) / float64(runtimeSampleWindowSec)
 }
 
 func (rt *runtimeTracker) normalizeStatusLocked(state *runtimeHealthState, running bool, ageMs int64) string {
@@ -338,7 +361,7 @@ func (rt *runtimeTracker) normalizeStatusLocked(state *runtimeHealthState, runni
 	if state.LastMessageTS == 0 {
 		return runtimeStatusDegraded
 	}
-	if ageMs > 5000 {
+	if ageMs > runtimeStaleThresholdMS {
 		return runtimeStatusDegraded
 	}
 	return runtimeStatusRunning

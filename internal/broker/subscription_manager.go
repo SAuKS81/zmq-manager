@@ -18,41 +18,51 @@ import (
 )
 
 type SubscriptionManager struct {
-	RequestCh                   chan *shared_types.ClientRequest
-	StatusCh                    chan *shared_types.StreamStatusEvent
-	DistributionCh              chan<- *DistributionMessage
-	TradeDataCh                 chan *shared_types.TradeUpdate
-	OrderBookCh                 chan *shared_types.OrderBookUpdate
-	tradeSubscriptions          map[string]map[string]bool
-	orderBookSubscriptions      map[string]map[string]bool
-	tradeSubscriptionRoutes     map[string]string
-	orderBookSubscriptionRoutes map[string]string
-	orderBookSubscriptionDepths map[string]int
-	exchangeRegistry            map[string]exchanges.Exchange
-	wildcardSubscribers         map[string]map[string]bool
-	wildcardRoutes              map[string]string
-	incomingTradeCounter        atomic.Uint64
-	incomingOBCounter           atomic.Uint64
-	totalDataReceived           atomic.Uint64
-	runtimeTracker              *runtimeTracker
+	RequestCh                      chan *shared_types.ClientRequest
+	StatusCh                       chan *shared_types.StreamStatusEvent
+	DistributionCh                 chan<- *DistributionMessage
+	TradeDataCh                    chan *shared_types.TradeUpdate
+	OrderBookCh                    chan *shared_types.OrderBookUpdate
+	tradeSubscriptions             map[string]map[string]bool
+	orderBookSubscriptions         map[string]map[string]bool
+	tradeSubscriptionRoutes        map[string]string
+	orderBookSubscriptionRoutes    map[string]string
+	orderBookSubscriptionDepths    map[string]int
+	tradeSubscriptionEncodings     map[string]string
+	orderBookSubscriptionEncodings map[string]string
+	exchangeRegistry               map[string]exchanges.Exchange
+	wildcardSubscribers            map[string]map[string]bool
+	wildcardRoutes                 map[string]string
+	incomingTradeCounter           atomic.Uint64
+	incomingOBCounter              atomic.Uint64
+	totalDataReceived              atomic.Uint64
+	runtimeTracker                 *runtimeTracker
+	pendingActivations             map[runtimeKey]pendingActivation
+	requestContexts                map[runtimeKey]requestOperationContext
+	deployBatches                  map[string]*deployBatchState
 }
 
 func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *SubscriptionManager {
 	sm := &SubscriptionManager{
-		RequestCh:                   make(chan *shared_types.ClientRequest, 100),
-		StatusCh:                    make(chan *shared_types.StreamStatusEvent, 1024),
-		DistributionCh:              distributionCh,
-		TradeDataCh:                 make(chan *shared_types.TradeUpdate, 10000),
-		OrderBookCh:                 make(chan *shared_types.OrderBookUpdate, 5000),
-		tradeSubscriptions:          make(map[string]map[string]bool),
-		orderBookSubscriptions:      make(map[string]map[string]bool),
-		tradeSubscriptionRoutes:     make(map[string]string),
-		orderBookSubscriptionRoutes: make(map[string]string),
-		orderBookSubscriptionDepths: make(map[string]int),
-		exchangeRegistry:            make(map[string]exchanges.Exchange),
-		wildcardSubscribers:         make(map[string]map[string]bool),
-		wildcardRoutes:              make(map[string]string),
-		runtimeTracker:              newRuntimeTracker(),
+		RequestCh:                      make(chan *shared_types.ClientRequest, 100),
+		StatusCh:                       make(chan *shared_types.StreamStatusEvent, 1024),
+		DistributionCh:                 distributionCh,
+		TradeDataCh:                    make(chan *shared_types.TradeUpdate, 10000),
+		OrderBookCh:                    make(chan *shared_types.OrderBookUpdate, 5000),
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry:               make(map[string]exchanges.Exchange),
+		wildcardSubscribers:            make(map[string]map[string]bool),
+		wildcardRoutes:                 make(map[string]string),
+		runtimeTracker:                 newRuntimeTracker(),
+		pendingActivations:             make(map[runtimeKey]pendingActivation),
+		requestContexts:                make(map[runtimeKey]requestOperationContext),
+		deployBatches:                  make(map[string]*deployBatchState),
 	}
 	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
@@ -64,6 +74,8 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 func (sm *SubscriptionManager) Run() {
 	log.Println("[SUB-MANAGER] Startet (Low-Latency Mode)...")
 	go sm.logIncomingRate()
+	runtimeTick := time.NewTicker(runtimeTotalsTickInterval)
+	defer runtimeTick.Stop()
 
 	const (
 		tradeBatchMaxSize = 32
@@ -79,6 +91,8 @@ func (sm *SubscriptionManager) Run() {
 			sm.handleRequest(req)
 		case status := <-sm.StatusCh:
 			sm.processStatusEvent(status)
+		case <-runtimeTick.C:
+			sm.broadcastRuntimeTotalsTick()
 
 		case firstTrade := <-sm.TradeDataCh:
 			sm.incomingTradeCounter.Add(1)
@@ -142,6 +156,7 @@ func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStat
 	if event == nil {
 		return
 	}
+	sm.enrichStatusEvent(event)
 	for _, symbol := range runtimeSymbolAliases(event.Exchange, event.Symbol, event.MarketType) {
 		sm.runtimeTracker.recordStatusForSymbol(event, symbol)
 	}
@@ -215,6 +230,17 @@ func (sm *SubscriptionManager) processTradeBatch(batch []*shared_types.TradeUpda
 			if clients, ok := sm.tradeSubscriptions[subID]; ok {
 				for clientIDStr := range clients {
 					targetClients[clientIDStr] = true
+					routeKey := getClientRouteKey(clientIDStr, subID)
+					exactExchange := sm.tradeSubscriptionRoutes[routeKey]
+					if exactExchange == "" {
+						exactExchange = trade.Exchange
+					}
+					sm.emitPendingActivation(runtimeKey{
+						Exchange:   exactExchange,
+						MarketType: trade.MarketType,
+						Symbol:     alias,
+						DataType:   "trades",
+					})
 				}
 			}
 		}
@@ -277,6 +303,17 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 			if clients, ok := sm.orderBookSubscriptions[subID]; ok {
 				for clientIDStr := range clients {
 					clientBatches[clientIDStr] = append(clientBatches[clientIDStr], ob)
+					routeKey := getClientRouteKey(clientIDStr, subID)
+					exactExchange := sm.orderBookSubscriptionRoutes[routeKey]
+					if exactExchange == "" {
+						exactExchange = ob.Exchange
+					}
+					sm.emitPendingActivation(runtimeKey{
+						Exchange:   exactExchange,
+						MarketType: ob.MarketType,
+						Symbol:     alias,
+						DataType:   "orderbooks",
+					})
 				}
 			}
 		}
@@ -324,11 +361,20 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if req.DataType == "" {
 		req.DataType = "trades"
 	}
+	if sm.runtimeTracker == nil {
+		sm.runtimeTracker = newRuntimeTracker()
+	}
 	if sm.tradeSubscriptionRoutes == nil {
 		sm.tradeSubscriptionRoutes = make(map[string]string)
 	}
 	if sm.orderBookSubscriptionRoutes == nil {
 		sm.orderBookSubscriptionRoutes = make(map[string]string)
+	}
+	if sm.tradeSubscriptionEncodings == nil {
+		sm.tradeSubscriptionEncodings = make(map[string]string)
+	}
+	if sm.orderBookSubscriptionEncodings == nil {
+		sm.orderBookSubscriptionEncodings = make(map[string]string)
 	}
 	if sm.orderBookSubscriptionDepths == nil {
 		sm.orderBookSubscriptionDepths = make(map[string]int)
@@ -338,13 +384,19 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	}
 	switch req.Action {
 	case "list_subscriptions":
-		sm.sendJSONSnapshot(req.ClientID, sm.buildSubscriptionsSnapshotResponse(req.Scope))
+		sm.sendJSONSnapshot(req.ClientID, sm.buildSubscriptionsSnapshotResponse(req.Scope, req.RequestID))
 		return
 	case "subscription_health_snapshot":
-		sm.sendJSONSnapshot(req.ClientID, sm.buildSubscriptionHealthSnapshotResponse())
+		sm.sendJSONSnapshot(req.ClientID, sm.buildSubscriptionHealthSnapshotResponse(req.RequestID))
 		return
 	case "get_runtime_snapshot":
-		sm.sendJSONSnapshot(req.ClientID, sm.buildRuntimeSnapshotResponse())
+		sm.sendJSONSnapshot(req.ClientID, sm.buildRuntimeSnapshotResponse(req.RequestID))
+		return
+	case "get_capabilities":
+		sm.sendJSONSnapshot(req.ClientID, buildCapabilitiesSnapshotResponse(req.RequestID))
+		return
+	case "deploy_batch_register":
+		sm.registerDeployBatch(req)
 		return
 	}
 	exchangeNameForSubID := strings.Split(req.Exchange, "_")[0]
@@ -362,19 +414,59 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	clientIDStr := string(req.ClientID)
 
 	var subMap map[string]map[string]bool
+	var encMap map[string]string
 	if req.DataType == "orderbooks" {
 		subMap = sm.orderBookSubscriptions
+		encMap = sm.orderBookSubscriptionEncodings
 	} else {
 		subMap = sm.tradeSubscriptions
+		encMap = sm.tradeSubscriptionEncodings
+	}
+
+	eventType := "stream_subscribe_acked"
+	failedEventType := "stream_subscribe_failed"
+	wasActive := false
+	routeKey := getClientRouteKey(clientIDStr, subID)
+	opKey := runtimeKey{
+		Exchange:   req.Exchange,
+		MarketType: req.MarketType,
+		Symbol:     req.Symbol,
+		DataType:   req.DataType,
+	}
+	if validationReason := sm.validateRequestSpec(req); validationReason != "" {
+		if req.Action == "subscribe" && req.DataType == "orderbooks" {
+			failedEventType = "stream_update_failed"
+		}
+		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+			Type:       failedEventType,
+			Exchange:   req.Exchange,
+			MarketType: req.MarketType,
+			Symbol:     req.Symbol,
+			DataType:   req.DataType,
+			Adapter:    adapterFromExchangeRoute(req.Exchange),
+			RequestID:  req.RequestID,
+			Status:     "failed",
+			Reason:     validationReason,
+			Timestamp:  time.Now().UnixMilli(),
+		})
+		sm.recordDeployBatchResult(req.RequestID, true)
+		return
 	}
 
 	switch req.Action {
 	case "subscribe":
+		if req.DataType == "orderbooks" {
+			if prevDepth, ok := sm.orderBookSubscriptionDepths[routeKey]; ok && prevDepth > 0 && req.OrderBookDepth > 0 && prevDepth != req.OrderBookDepth {
+				eventType = "stream_update_acked"
+			}
+		}
 		if _, ok := subMap[subID]; !ok {
 			subMap[subID] = make(map[string]bool)
 		}
 		subMap[subID][clientIDStr] = true
-		routeKey := getClientRouteKey(clientIDStr, subID)
+		if req.Encoding != "" {
+			encMap[routeKey] = req.Encoding
+		}
 		if req.DataType == "orderbooks" {
 			sm.orderBookSubscriptionRoutes[routeKey] = req.Exchange
 			if req.OrderBookDepth > 0 {
@@ -383,20 +475,73 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		} else {
 			sm.tradeSubscriptionRoutes[routeKey] = req.Exchange
 		}
+		wasActive = sm.runtimeTracker.isActive(opKey)
+		sm.noteRequestContext(opKey, req, "subscribe")
+		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+			Type:       eventType,
+			Exchange:   req.Exchange,
+			MarketType: req.MarketType,
+			Symbol:     req.Symbol,
+			DataType:   req.DataType,
+			Adapter:    adapterFromExchangeRoute(req.Exchange),
+			RequestID:  req.RequestID,
+			Status:     "acked",
+			Timestamp:  time.Now().UnixMilli(),
+		})
+		sm.recordDeployBatchResult(req.RequestID, false)
+		if wasActive {
+			sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+				Type:       "stream_subscribe_active",
+				Exchange:   req.Exchange,
+				MarketType: req.MarketType,
+				Symbol:     req.Symbol,
+				DataType:   req.DataType,
+				Adapter:    adapterFromExchangeRoute(req.Exchange),
+				RequestID:  req.RequestID,
+				Status:     runtimeStatusRunning,
+				Timestamp:  time.Now().UnixMilli(),
+			})
+		} else {
+			sm.queuePendingActivation(opKey, req, "stream_subscribe_active")
+		}
 	case "unsubscribe":
+		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+			Type:       "stream_stop_requested",
+			Exchange:   req.Exchange,
+			MarketType: req.MarketType,
+			Symbol:     req.Symbol,
+			DataType:   req.DataType,
+			Adapter:    adapterFromExchangeRoute(req.Exchange),
+			RequestID:  req.RequestID,
+			Status:     runtimeStatusStopped,
+			Timestamp:  time.Now().UnixMilli(),
+		})
 		if clients, ok := subMap[subID]; ok {
 			delete(clients, clientIDStr)
 			if len(clients) == 0 {
 				delete(subMap, subID)
 			}
 		}
-		routeKey := getClientRouteKey(clientIDStr, subID)
 		if req.DataType == "orderbooks" {
 			delete(sm.orderBookSubscriptionRoutes, routeKey)
 			delete(sm.orderBookSubscriptionDepths, routeKey)
 		} else {
 			delete(sm.tradeSubscriptionRoutes, routeKey)
 		}
+		delete(encMap, routeKey)
+		sm.noteRequestContext(opKey, req, "unsubscribe")
+		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+			Type:       "stream_unsubscribe_acked",
+			Exchange:   req.Exchange,
+			MarketType: req.MarketType,
+			Symbol:     req.Symbol,
+			DataType:   req.DataType,
+			Adapter:    adapterFromExchangeRoute(req.Exchange),
+			RequestID:  req.RequestID,
+			Status:     "acked",
+			Timestamp:  time.Now().UnixMilli(),
+		})
+		sm.recordDeployBatchResult(req.RequestID, false)
 	case "disconnect":
 		sm.cleanupClientSubscriptions(clientIDStr)
 		return
@@ -413,7 +558,20 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if handler != nil {
 		handler.HandleRequest(req)
 	} else {
-		log.Printf("[SUB-MANAGER] FATAL: Kein passender Handler für die Anfrage gefunden: Exchange=%s", req.Exchange)
+		log.Printf("[SUB-MANAGER] FATAL: Kein passender Handler fuer die Anfrage gefunden: Exchange=%s", req.Exchange)
+		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+			Type:       failedEventType,
+			Exchange:   req.Exchange,
+			MarketType: req.MarketType,
+			Symbol:     req.Symbol,
+			DataType:   req.DataType,
+			Adapter:    adapterFromExchangeRoute(req.Exchange),
+			RequestID:  req.RequestID,
+			Status:     runtimeStatusFailed,
+			Reason:     "no_handler",
+			Timestamp:  time.Now().UnixMilli(),
+		})
+		sm.recordDeployBatchResult(req.RequestID, true)
 	}
 }
 
@@ -503,6 +661,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		routeKey := getClientRouteKey(clientID, subID)
 		exactExchange := sm.tradeSubscriptionRoutes[routeKey]
 		delete(sm.tradeSubscriptionRoutes, routeKey)
+		delete(sm.tradeSubscriptionEncodings, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {
@@ -526,6 +685,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		exactExchange := sm.orderBookSubscriptionRoutes[routeKey]
 		delete(sm.orderBookSubscriptionRoutes, routeKey)
 		delete(sm.orderBookSubscriptionDepths, routeKey)
+		delete(sm.orderBookSubscriptionEncodings, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {
@@ -584,33 +744,42 @@ func getClientRouteKey(clientID, subID string) string {
 	return clientID + "|" + subID
 }
 
-func (sm *SubscriptionManager) buildSubscriptionsSnapshotResponse(scope string) *shared_types.SubscriptionsSnapshotResponse {
+func (sm *SubscriptionManager) buildSubscriptionsSnapshotResponse(scope, requestID string) *shared_types.SubscriptionsSnapshotResponse {
 	if scope == "" {
 		scope = "global"
 	}
 	return &shared_types.SubscriptionsSnapshotResponse{
-		Type:  "subscriptions_snapshot",
-		Scope: scope,
-		TS:    time.Now().UnixMilli(),
-		Items: sm.buildRuntimeSubscriptionItems(),
+		Type:      "subscriptions_snapshot",
+		Scope:     scope,
+		RequestID: requestID,
+		TS:        time.Now().UnixMilli(),
+		Items:     sm.buildRuntimeSubscriptionItems(),
 	}
 }
 
-func (sm *SubscriptionManager) buildSubscriptionHealthSnapshotResponse() *shared_types.SubscriptionHealthSnapshotResponse {
+func (sm *SubscriptionManager) buildSubscriptionHealthSnapshotResponse(requestID string) *shared_types.SubscriptionHealthSnapshotResponse {
+	if sm.runtimeTracker == nil {
+		sm.runtimeTracker = newRuntimeTracker()
+	}
 	items := sm.buildRuntimeSubscriptionItems()
 	health, _ := sm.runtimeTracker.snapshotHealth(items, time.Now())
 	return &shared_types.SubscriptionHealthSnapshotResponse{
-		Type:  "subscription_health_snapshot",
-		TS:    time.Now().UnixMilli(),
-		Items: health,
+		Type:      "subscription_health_snapshot",
+		RequestID: requestID,
+		TS:        time.Now().UnixMilli(),
+		Items:     health,
 	}
 }
 
-func (sm *SubscriptionManager) buildRuntimeSnapshotResponse() *shared_types.RuntimeSnapshotResponse {
+func (sm *SubscriptionManager) buildRuntimeSnapshotResponse(requestID string) *shared_types.RuntimeSnapshotResponse {
+	if sm.runtimeTracker == nil {
+		sm.runtimeTracker = newRuntimeTracker()
+	}
 	items := sm.buildRuntimeSubscriptionItems()
 	health, totals := sm.runtimeTracker.snapshotHealth(items, time.Now())
 	return &shared_types.RuntimeSnapshotResponse{
 		Type:          "runtime_snapshot",
+		RequestID:     requestID,
 		TS:            time.Now().UnixMilli(),
 		Subscriptions: items,
 		Health:        health,
@@ -620,8 +789,8 @@ func (sm *SubscriptionManager) buildRuntimeSnapshotResponse() *shared_types.Runt
 
 func (sm *SubscriptionManager) buildRuntimeSubscriptionItems() []shared_types.RuntimeSubscriptionItem {
 	items := make([]shared_types.RuntimeSubscriptionItem, 0, len(sm.tradeSubscriptions)+len(sm.orderBookSubscriptions))
-	items = append(items, sm.aggregateRuntimeSubscriptions(sm.tradeSubscriptions, sm.tradeSubscriptionRoutes, nil, "trades")...)
-	items = append(items, sm.aggregateRuntimeSubscriptions(sm.orderBookSubscriptions, sm.orderBookSubscriptionRoutes, sm.orderBookSubscriptionDepths, "orderbooks")...)
+	items = append(items, sm.aggregateRuntimeSubscriptions(sm.tradeSubscriptions, sm.tradeSubscriptionRoutes, sm.tradeSubscriptionEncodings, nil, "trades")...)
+	items = append(items, sm.aggregateRuntimeSubscriptions(sm.orderBookSubscriptions, sm.orderBookSubscriptionRoutes, sm.orderBookSubscriptionEncodings, sm.orderBookSubscriptionDepths, "orderbooks")...)
 
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Exchange != items[j].Exchange {
@@ -644,6 +813,7 @@ func (sm *SubscriptionManager) buildRuntimeSubscriptionItems() []shared_types.Ru
 func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 	subscriptions map[string]map[string]bool,
 	routeMap map[string]string,
+	encodingMap map[string]string,
 	depthMap map[string]int,
 	defaultDataType string,
 ) []shared_types.RuntimeSubscriptionItem {
@@ -655,6 +825,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 		adapter    string
 		depth      int
 		clients    map[string]bool
+		encodings  map[string]bool
 	}
 
 	grouped := make(map[string]*aggregate)
@@ -680,10 +851,16 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 					dataType:   defaultDataType,
 					adapter:    adapterFromExchangeRoute(exactExchange),
 					clients:    make(map[string]bool),
+					encodings:  make(map[string]bool),
 				}
 				grouped[groupKey] = entry
 			}
 			entry.clients[clientID] = true
+			if encodingMap != nil {
+				if encoding := encodingMap[routeKey]; encoding != "" {
+					entry.encodings[encoding] = true
+				}
+			}
 			if depthMap != nil {
 				if depth := depthMap[routeKey]; depth > entry.depth {
 					entry.depth = depth
@@ -701,6 +878,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 			Symbol:     entry.symbol,
 			DataType:   entry.dataType,
 			Adapter:    entry.adapter,
+			Encoding:   aggregateEncoding(entry.encodings),
 			Depth:      entry.depth,
 			Running: sm.runtimeTracker.isRunning(runtimeKey{
 				Exchange:   entry.exchange,
@@ -715,6 +893,18 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 	return items
 }
 
+func aggregateEncoding(encodings map[string]bool) string {
+	if len(encodings) == 0 {
+		return ""
+	}
+	if len(encodings) == 1 {
+		for encoding := range encodings {
+			return encoding
+		}
+	}
+	return "mixed"
+}
+
 func (sm *SubscriptionManager) sendJSONSnapshot(clientID []byte, payload any) {
 	if sm.DistributionCh == nil || len(clientID) == 0 || payload == nil {
 		return
@@ -722,6 +912,107 @@ func (sm *SubscriptionManager) sendJSONSnapshot(clientID []byte, payload any) {
 	sm.DistributionCh <- &DistributionMessage{
 		ClientIDs:  [][]byte{append([]byte(nil), clientID...)},
 		RawPayload: payload,
+	}
+}
+
+func (sm *SubscriptionManager) broadcastRuntimeTotalsTick() {
+	if sm.DistributionCh == nil {
+		return
+	}
+	items := sm.buildRuntimeSubscriptionItems()
+	_, totals := sm.runtimeTracker.snapshotHealth(items, time.Now())
+	sm.DistributionCh <- &DistributionMessage{
+		Broadcast: true,
+		RawPayload: &shared_types.RuntimeTotalsTickEvent{
+			Type:                "runtime_totals_tick",
+			TS:                  time.Now().UnixMilli(),
+			ActiveSubscriptions: totals.ActiveSubscriptions,
+			MessagesPerSec:      totals.MessagesPerSec,
+			Reconnects24H:       totals.Reconnects24H,
+		},
+	}
+}
+
+func (sm *SubscriptionManager) validateRequestSpec(req *shared_types.ClientRequest) string {
+	if req == nil || req.Action != "subscribe" || req.DataType != "orderbooks" {
+		return ""
+	}
+	capability, ok := capabilityForExchange(req.Exchange)
+	if !ok && !strings.HasSuffix(req.Exchange, "_native") {
+		capability, ok = capabilityForExchange("ccxt_default")
+	}
+	if !ok {
+		return ""
+	}
+	if len(capability.OrderBookDepths) == 0 {
+		return "orderbooks not supported"
+	}
+	if req.OrderBookDepth == 0 {
+		return ""
+	}
+	for _, depth := range capability.OrderBookDepths {
+		if depth == req.OrderBookDepth {
+			return ""
+		}
+	}
+	return "unsupported depth"
+}
+
+func (sm *SubscriptionManager) enrichStatusEvent(event *shared_types.StreamStatusEvent) {
+	if event == nil {
+		return
+	}
+	if event.Adapter == "" {
+		event.Adapter = adapterFromExchangeRoute(event.Exchange)
+	}
+	if event.Status == "" {
+		switch event.Type {
+		case "stream_reconnecting":
+			event.Status = runtimeStatusReconnecting
+		case "stream_restored", "stream_subscribe_active":
+			event.Status = runtimeStatusRunning
+		case "stream_force_closed":
+			event.Status = runtimeStatusStopped
+		case "stream_unsubscribe_failed", "stream_subscribe_failed", "stream_update_failed":
+			event.Status = runtimeStatusFailed
+		}
+	}
+	if event.RequestID != "" {
+		return
+	}
+
+	seen := make(map[string]bool)
+	candidateSymbols := make([]string, 0, 1+len(event.Symbols))
+	if event.Symbol != "" {
+		candidateSymbols = append(candidateSymbols, event.Symbol)
+	}
+	candidateSymbols = append(candidateSymbols, event.Symbols...)
+
+	var matchedRequestID string
+	for _, symbol := range candidateSymbols {
+		for _, alias := range runtimeSymbolAliases(event.Exchange, symbol, event.MarketType) {
+			key := runtimeKey{
+				Exchange:   event.Exchange,
+				MarketType: event.MarketType,
+				Symbol:     alias,
+				DataType:   event.DataType,
+			}
+			seenKey := key.Exchange + "|" + key.MarketType + "|" + key.Symbol + "|" + key.DataType
+			if seen[seenKey] {
+				continue
+			}
+			seen[seenKey] = true
+			ctx := sm.peekRequestContext(key)
+			if ctx.RequestID == "" {
+				continue
+			}
+			if matchedRequestID == "" {
+				matchedRequestID = ctx.RequestID
+				event.RequestID = ctx.RequestID
+			} else if matchedRequestID != ctx.RequestID {
+				return
+			}
+		}
 	}
 }
 

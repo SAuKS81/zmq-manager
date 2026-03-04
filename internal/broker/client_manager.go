@@ -103,6 +103,7 @@ type ClientManager struct {
 type incomingClientMessage struct {
 	Action         string   `json:"action"`
 	Scope          string   `json:"scope"`
+	RequestID      string   `json:"request_id"`
 	Exchange       string   `json:"exchange"`
 	Symbol         string   `json:"symbol"`
 	Symbols        []string `json:"symbols"`
@@ -184,19 +185,36 @@ func (cm *ClientManager) readLoop() {
 
 func (cm *ClientManager) distributionLoop() {
 	for msg := range cm.DistributionCh {
+		clientIDs := msg.ClientIDs
+		if msg.Broadcast {
+			clientIDs = cm.snapshotClientIDs()
+			if len(clientIDs) == 0 {
+				if msg.OnComplete != nil {
+					msg.OnComplete()
+				}
+				continue
+			}
+		}
+
 		switch payload := msg.RawPayload.(type) {
 		case []*shared_types.TradeUpdate:
-			cm.distributeTradeBatch(msg.ClientIDs, payload)
+			cm.distributeTradeBatch(clientIDs, payload)
 		case []*shared_types.OrderBookUpdate:
-			cm.distributeOrderBookBatch(msg.ClientIDs, payload)
+			cm.distributeOrderBookBatch(clientIDs, payload)
 		case *shared_types.StreamStatusEvent:
-			cm.distributeStatusEvent(msg.ClientIDs, payload)
+			cm.distributeStatusEvent(clientIDs, payload)
 		case *shared_types.SubscriptionsSnapshotResponse:
-			cm.distributeJSONPayload(msg.ClientIDs, payload)
+			cm.distributeJSONPayload(clientIDs, payload)
 		case *shared_types.SubscriptionHealthSnapshotResponse:
-			cm.distributeJSONPayload(msg.ClientIDs, payload)
+			cm.distributeJSONPayload(clientIDs, payload)
 		case *shared_types.RuntimeSnapshotResponse:
-			cm.distributeJSONPayload(msg.ClientIDs, payload)
+			cm.distributeJSONPayload(clientIDs, payload)
+		case *shared_types.CapabilitiesSnapshotResponse:
+			cm.distributeJSONPayload(clientIDs, payload)
+		case *shared_types.DeployBatchSummaryEvent:
+			cm.distributeJSONPayload(clientIDs, payload)
+		case *shared_types.RuntimeTotalsTickEvent:
+			cm.distributeJSONPayload(clientIDs, payload)
 		default:
 			continue
 		}
@@ -376,6 +394,17 @@ func (cm *ClientManager) clientEncoding(clientID string) (string, bool) {
 	}
 	cm.clientsMu.RUnlock()
 	return encoding, exists
+}
+
+func (cm *ClientManager) snapshotClientIDs() [][]byte {
+	cm.clientsMu.RLock()
+	defer cm.clientsMu.RUnlock()
+
+	clientIDs := make([][]byte, 0, len(cm.clients))
+	for _, client := range cm.clients {
+		clientIDs = append(clientIDs, append([]byte(nil), client.ID...))
+	}
+	return clientIDs
 }
 
 func (cm *ClientManager) encodePayloadForClient(
@@ -582,7 +611,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 	var req incomingClientMessage
 	if err := json.Unmarshal(payload, &req); err != nil {
 		metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
-		cm.sendClientError(clientID, "invalid_json", "payload must be valid JSON")
+		cm.sendClientError(clientID, "", "invalid_json", "payload must be valid JSON")
 		return
 	}
 
@@ -599,7 +628,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 	if req.Encoding != "" {
 		encoding, ok := normalizeClientEncoding(req.Encoding)
 		if !ok {
-			cm.sendClientError(clientID, "invalid_encoding", "encoding must be one of: json, msgpack, binary")
+			cm.sendClientError(clientID, req.RequestID, "invalid_encoding", "encoding must be one of: json, msgpack, binary")
 			return
 		}
 		cm.clientsMu.Lock()
@@ -612,7 +641,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 
 	if req.Action == "" {
 		if req.Encoding == "" {
-			cm.sendClientError(clientID, "missing_action", "action field is required")
+			cm.sendClientError(clientID, req.RequestID, "missing_action", "action field is required")
 		}
 		return
 	}
@@ -621,30 +650,45 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 	}
 
 	switch req.Action {
-	case "list_subscriptions", "subscription_health_snapshot", "get_runtime_snapshot":
-		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope})
+	case "list_subscriptions", "subscription_health_snapshot", "get_runtime_snapshot", "get_capabilities":
+		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID})
 		return
 	case "subscribe_bulk":
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
-			cm.sendClientError(clientID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
 			return
 		}
 		log.Printf("[CLIENT-MANAGER] 'subscribe_bulk': %d Symbole von %s", len(req.Symbols), clientIDStr)
+		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "deploy_batch_register", RequestID: req.RequestID, BatchSent: len(req.Symbols)})
 		for _, symbol := range req.Symbols {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, OrderBookDepth: req.OrderBookDepth})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+		}
+		return
+	case "unsubscribe_bulk":
+		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "unsubscribe_bulk requires exchange, market_type and symbols")
+			return
+		}
+		log.Printf("[CLIENT-MANAGER] 'unsubscribe_bulk': %d Symbole von %s", len(req.Symbols), clientIDStr)
+		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "deploy_batch_register", RequestID: req.RequestID, BatchSent: len(req.Symbols)})
+		for _, symbol := range req.Symbols {
+			if symbol == "" {
+				continue
+			}
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
 		}
 		return
 	case "subscribe_all":
 		if req.Exchange == "" || req.MarketType == "" {
-			cm.sendClientError(clientID, "invalid_request", "subscribe_all requires exchange and market_type")
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_all requires exchange and market_type")
 			return
 		}
 	case "subscribe", "unsubscribe":
 		if req.Exchange == "" || req.MarketType == "" || req.Symbol == "" {
-			cm.sendClientError(clientID, "invalid_request", "subscribe/unsubscribe requires exchange, symbol and market_type")
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe/unsubscribe requires exchange, symbol and market_type")
 			return
 		}
 	case "disconnect":
@@ -652,14 +696,14 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		delete(cm.clients, clientIDStr)
 		cm.clientsMu.Unlock()
 		cm.dropP2ForClient(clientIDStr)
-		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect"})
+		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect", RequestID: req.RequestID})
 		return
 	default:
-		cm.sendClientError(clientID, "unknown_action", "unsupported action")
+		cm.sendClientError(clientID, req.RequestID, "unknown_action", "unsupported action")
 		return
 	}
 
-	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, OrderBookDepth: req.OrderBookDepth})
+	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
 }
 
 func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {
@@ -669,13 +713,21 @@ func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {
 	cm.requestCh <- req
 }
 
-func (cm *ClientManager) sendClientError(clientID []byte, code, message string) {
-	payload, err := json.Marshal(map[string]string{"type": "error", "code": code, "message": message})
+func (cm *ClientManager) sendClientError(clientID []byte, requestID, code, message string) {
+	payload, err := json.Marshal(&shared_types.ErrorResponse{Type: "error", Code: code, Message: message, RequestID: requestID})
 	if err != nil {
 		metrics.RecordDropped(metrics.ReasonInternalErr, metrics.TypeTrade)
 		return
 	}
 	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom(clientID, payload), metricType: metrics.TypeTrade})
+}
+
+func currentClientEncoding(cm *ClientManager, clientID string) string {
+	encoding, ok := cm.clientEncoding(clientID)
+	if !ok {
+		return ""
+	}
+	return encoding
 }
 
 func normalizeClientEncoding(input string) (string, bool) {

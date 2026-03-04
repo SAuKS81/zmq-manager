@@ -258,7 +258,7 @@ func TestBuildSubscriptionsSnapshotGroupsByExactRoute(t *testing.T) {
 		runtimeTracker:              newRuntimeTracker(),
 	}
 
-	resp := sm.buildSubscriptionsSnapshotResponse("global")
+	resp := sm.buildSubscriptionsSnapshotResponse("global", "")
 	if len(resp.Items) != 2 {
 		t.Fatalf("expected 2 runtime subscription items, got %d", len(resp.Items))
 	}
@@ -315,7 +315,7 @@ func TestBuildRuntimeSnapshotIncludesHealth(t *testing.T) {
 		DataType:   "trades",
 	})
 
-	resp := sm.buildRuntimeSnapshotResponse()
+	resp := sm.buildRuntimeSnapshotResponse("")
 	if len(resp.Subscriptions) != 1 {
 		t.Fatalf("expected 1 subscription item, got %d", len(resp.Subscriptions))
 	}
@@ -360,7 +360,7 @@ func TestBuildRuntimeSnapshotIncludesHealthForNativeRoute(t *testing.T) {
 		IngestUnixNano: time.Now().Add(-5 * time.Millisecond).UnixNano(),
 	})
 
-	resp := sm.buildRuntimeSnapshotResponse()
+	resp := sm.buildRuntimeSnapshotResponse("")
 	if len(resp.Subscriptions) != 1 {
 		t.Fatalf("expected 1 subscription item, got %d", len(resp.Subscriptions))
 	}
@@ -381,5 +381,45 @@ func TestBuildRuntimeSnapshotIncludesHealthForNativeRoute(t *testing.T) {
 	}
 	if resp.Health[0].BrokerLatencyMS <= 0 {
 		t.Fatalf("expected broker latency > 0, got %+v", resp.Health[0])
+	}
+}
+
+func TestBuildCapabilitiesSnapshotResponseIncludesRequestID(t *testing.T) {
+	resp := buildCapabilitiesSnapshotResponse("req-1")
+	if resp.RequestID != "req-1" {
+		t.Fatalf("expected request_id to round-trip, got %+v", resp)
+	}
+	if len(resp.Items) == 0 {
+		t.Fatalf("expected capabilities items")
+	}
+}
+
+func TestRecordDeployBatchResultEmitsSummary(t *testing.T) {
+	distCh := make(chan *DistributionMessage, 1)
+	sm := &SubscriptionManager{
+		DistributionCh: distCh,
+		deployBatches:  make(map[string]*deployBatchState),
+	}
+
+	sm.registerDeployBatch(&shared_types.ClientRequest{
+		ClientID:  []byte("client-a"),
+		RequestID: "deploy-123",
+		BatchSent: 2,
+	})
+	sm.recordDeployBatchResult("deploy-123", false)
+	select {
+	case <-distCh:
+		t.Fatalf("did not expect summary before all results are recorded")
+	default:
+	}
+
+	sm.recordDeployBatchResult("deploy-123", true)
+	msg := <-distCh
+	summary, ok := msg.RawPayload.(*shared_types.DeployBatchSummaryEvent)
+	if !ok {
+		t.Fatalf("expected deploy batch summary payload, got %T", msg.RawPayload)
+	}
+	if summary.RequestID != "deploy-123" || summary.Sent != 2 || summary.Acked != 1 || summary.Failed != 1 {
+		t.Fatalf("unexpected summary payload: %+v", summary)
 	}
 }

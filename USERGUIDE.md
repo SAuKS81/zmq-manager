@@ -107,11 +107,20 @@ Unterstuetzte Request-Aktionen:
 - `subscribe`
 - `unsubscribe`
 - `subscribe_bulk`
+- `unsubscribe_bulk`
 - `subscribe_all`
 - `disconnect`
 - `list_subscriptions`
 - `subscription_health_snapshot`
 - `get_runtime_snapshot`
+- `get_capabilities`
+
+Optional kann ein Client pro Operator-Request eine `request_id` mitsenden.
+Der Broker fuehrt diese `request_id` in:
+
+- Control-Responses
+- Ack-/Apply-Events
+- Batch-Summary-Events
 
 Optional kann ein Client sein Ziel-Encoding setzen:
 
@@ -125,6 +134,28 @@ Hinweis:
 - Standard-Encoding fuer neue Clients ist `json`
 
 ## 5. Request-Formate
+
+### 5.0 Request-Korrelation
+
+Fuer Deploy- und Queue-Workflows sollte das UI konsequent eine `request_id` setzen:
+
+```json
+{
+  "action": "subscribe_bulk",
+  "request_id": "deploy-123",
+  "exchange": "bybit_native",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "market_type": "spot",
+  "data_type": "trades"
+}
+```
+
+Der Broker verwendet diese `request_id` fuer:
+
+- Control-Responses
+- `stream_*_acked`
+- `stream_*_failed`
+- `deploy_batch_summary`
 
 ### 5.1 Einzel-Subscribe
 
@@ -193,6 +224,19 @@ Aktuell nur fuer Trades sinnvoll.
 }
 ```
 
+### 5.4a Bulk-Unsubscribe
+
+```json
+{
+  "action": "unsubscribe_bulk",
+  "request_id": "deploy-124",
+  "exchange": "bybit_native",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "market_type": "spot",
+  "data_type": "trades"
+}
+```
+
 ### 5.5 Disconnect
 
 ```json
@@ -240,6 +284,7 @@ Antwort:
       "symbol": "BTC/USDT",
       "data_type": "trades",
       "adapter": "ccxt",
+      "encoding": "msgpack",
       "running": true,
       "owners": 3,
       "clients": 3
@@ -252,6 +297,10 @@ Semantik:
 
 - ein Eintrag pro aktiver physischer Subscription auf Broker-Ebene
 - `adapter` ist explizit `ccxt` oder `native`
+- `encoding` zeigt die effektiv aggregierte Client-Encoding-Sicht:
+  - leer = nicht gesetzt
+  - ein Wert = konsistent
+  - `mixed` = mehrere Clients mit unterschiedlichem Encoding
 - `depth` wird nur bei Orderbooks gesetzt
 - `owners` und `clients` sind in der aktuellen Version identisch und entsprechen der Anzahl abonnierter Clients auf diesen Join-Key
 
@@ -282,7 +331,11 @@ Antwort:
       "messages_per_sec": 45.2,
       "latency_ms": 12.0,
       "broker_latency_ms": 1.0,
-      "last_error": ""
+      "last_error": "",
+      "last_error_ts": 0,
+      "last_reconnect_ts": 1772299999000,
+      "stale_threshold_ms": 5000,
+      "sample_window_sec": 60
     }
   ]
 }
@@ -308,6 +361,10 @@ Latenz-Semantik:
   - Broker-Eingangszeit der letzten Nachricht
 - `last_message_age_ms`:
   - Alter bezogen auf diese Broker-Eingangszeit
+- `sample_window_sec`:
+  - Broker-seitiges Messfenster fuer `messages_per_sec`
+- `stale_threshold_ms`:
+  - Broker-seitiger Schwellwert, ab dem `running -> degraded` kippt
 
 ### 5.8 Kombinierter Runtime-Snapshot
 
@@ -324,6 +381,7 @@ Antwort:
 ```json
 {
   "type": "runtime_snapshot",
+  "request_id": "deploy-123",
   "ts": 1772300000000,
   "subscriptions": [],
   "health": [],
@@ -344,6 +402,58 @@ Warum dieser Endpunkt bevorzugt werden sollte:
   - `market_type`
   - `symbol`
   - `data_type`
+
+### 5.9 Capabilities-Snapshot
+
+```json
+{
+  "action": "get_capabilities",
+  "request_id": "caps-1"
+}
+```
+
+Antwort:
+
+```json
+{
+  "type": "capabilities_snapshot",
+  "request_id": "caps-1",
+  "ts": 1772300000000,
+  "items": [
+    {
+      "exchange": "bybit_native",
+      "adapter": "native",
+      "market_types": ["spot", "swap"],
+      "data_types": ["trades", "orderbooks"],
+      "orderbook_depths": [1, 50, 200, 500],
+      "supports_cache_n": false,
+      "supports_request_id": true,
+      "supports_deploy_queue": true
+    }
+  ]
+}
+```
+
+Der Endpunkt ist fuer das UI die Quelle fuer:
+
+- unterstuetzte `market_type`-/`data_type`-Kombinationen
+- erlaubte Orderbook-Tiefen
+- Deploy-/Correlation-Faehigkeiten pro Route
+
+### 5.10 Deploy-Batch-Summary
+
+Bulk-Operationen (`subscribe_bulk`, `unsubscribe_bulk`) erzeugen nach Abschluss ein Summary-Event:
+
+```json
+{
+  "type": "deploy_batch_summary",
+  "request_id": "deploy-123",
+  "ts": 1772300001000,
+  "sent": 17,
+  "acked": 15,
+  "failed": 2
+}
+```
 
 ## 6. Symbolformat
 
@@ -368,6 +478,9 @@ Wichtig:
 
 - bei CCXT sollte `--exchanges` oder `exchange` **ohne** `_native` verwendet werden
 - bei nativen Adaptern immer mit `_native`
+- Snapshot, Health und Lifecycle-Events verwenden dieselbe Symbolform wie der jeweilige Adapterpfad:
+  - native Requests/Events bleiben in nativer Symbolform
+  - CCXT Requests/Events bleiben in CCXT-Symbolform
 
 ## 7. Welche Antworten der Broker liefert
 
@@ -413,6 +526,7 @@ Fehler kommen als JSON:
 ```json
 {
   "type": "error",
+  "request_id": "deploy-123",
   "code": "invalid_request",
   "message": "subscribe/unsubscribe requires exchange, symbol and market_type"
 }
@@ -435,6 +549,7 @@ Wichtig:
 - sie sind bewusst lesbare Read-API-Antworten
 - sie umgehen kein bestehendes Subscribe-/Unsubscribe-Verhalten
 - sie dienen nur dazu, dem UI einen belastbaren Istzustand zu geben
+- wenn der Request eine `request_id` gesetzt hat, spiegelt der Broker diese in der Control-Response
 
 ## 9. Normalisierte Datenmodelle
 
@@ -476,6 +591,13 @@ Seit `P7` verteilt der Broker explizite Stream-Status-Events an betroffene Clien
 
 Typen:
 
+- `stream_subscribe_acked`
+- `stream_subscribe_active`
+- `stream_subscribe_failed`
+- `stream_unsubscribe_acked`
+- `stream_update_acked`
+- `stream_update_failed`
+- `stream_stop_requested`
 - `stream_reconnecting`
 - `stream_restored`
 - `stream_unsubscribe_failed`
@@ -485,13 +607,14 @@ Format:
 
 ```json
 {
-  "type": "stream_reconnecting",
+  "type": "stream_subscribe_acked",
   "exchange": "bybit_native",
   "market_type": "spot",
   "data_type": "trades",
   "symbol": "BTCUSDT",
-  "attempt": 2,
-  "reason": "websocket reconnect",
+  "adapter": "native",
+  "request_id": "deploy-123",
+  "status": "acked",
   "ts": 1772300000000
 }
 ```
@@ -499,6 +622,37 @@ Format:
 Wenn ein Event mehrere Symbole betrifft, kann statt `symbol` ein `symbols`-Array gesetzt sein.
 
 Der Smoke-Client loggt diese Events in lesbarer Form.
+
+Operatorisch wichtige Semantik:
+
+- `stream_subscribe_acked`:
+  - der Broker hat den Request angenommen und in den Adapterpfad ueberfuehrt
+- `stream_subscribe_active`:
+  - die Subscription hat echte Laufzeitdaten produziert
+- `stream_update_acked`:
+  - eine Spec-Aenderung, z. B. Orderbook-Depth, wurde brokerseitig akzeptiert
+- `stream_*_failed`:
+  - der Request wurde abgelehnt oder spaeter technisch als fehlgeschlagen markiert
+- `stream_stop_requested`:
+  - Operator/UI hat eine aktive Subscription explizit zum Stop markiert
+
+Zusatz fuer Dashboards:
+
+- `runtime_totals_tick`
+
+Beispiel:
+
+```json
+{
+  "type": "runtime_totals_tick",
+  "ts": 1772300000000,
+  "active_subscriptions": 1045,
+  "messages_per_sec": 14200,
+  "reconnects_24h": 42
+}
+```
+
+Der Tick wird periodisch brokerseitig broadcastet und eignet sich fuer UI-KPIs ohne permanenten Poll auf `get_runtime_snapshot`.
 
 ## 11. Ping/Pong und Client-Timeout
 

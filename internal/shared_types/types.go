@@ -40,20 +40,25 @@ type ClientRequest struct {
 	ClientID       []byte `json:"-" msgpack:"-"` // Wird nicht gesendet
 	Action         string `json:"action"`
 	Scope          string `json:"scope,omitempty"`
+	RequestID      string `json:"request_id,omitempty"`
 	Exchange       string `json:"exchange"`
 	Symbol         string `json:"symbol"`
 	MarketType     string `json:"market_type"`
 	DataType       string `json:"data_type"`
+	Encoding       string `json:"encoding,omitempty"`
 	OrderBookDepth int    `json:"depth,omitempty"`
+	BatchSent      int    `json:"-"`
 }
 
 // BulkClientRequest
 type BulkClientRequest struct {
 	Action         string   `json:"action"`
+	RequestID      string   `json:"request_id,omitempty"`
 	Exchange       string   `json:"exchange"`
 	Symbols        []string `json:"symbols"`
 	MarketType     string   `json:"market_type"`
 	DataType       string   `json:"data_type"`
+	Encoding       string   `json:"encoding,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 }
 
@@ -64,7 +69,10 @@ type StreamStatusEvent struct {
 	DataType   string   `json:"data_type,omitempty"`
 	Symbol     string   `json:"symbol,omitempty"`
 	Symbols    []string `json:"symbols,omitempty"`
+	Adapter    string   `json:"adapter,omitempty"`
 	Reason     string   `json:"reason,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	RequestID  string   `json:"request_id,omitempty"`
 	Attempt    int      `json:"attempt,omitempty"`
 	Message    string   `json:"message,omitempty"`
 	Timestamp  int64    `json:"ts,omitempty"`
@@ -76,6 +84,7 @@ type RuntimeSubscriptionItem struct {
 	Symbol     string `json:"symbol"`
 	DataType   string `json:"data_type"`
 	Adapter    string `json:"adapter"`
+	Encoding   string `json:"encoding,omitempty"`
 	Depth      int    `json:"depth,omitempty"`
 	Running    bool   `json:"running"`
 	Owners     int    `json:"owners"`
@@ -95,6 +104,10 @@ type SubscriptionHealthItem struct {
 	LatencyMS        float64 `json:"latency_ms,omitempty"`
 	BrokerLatencyMS  float64 `json:"broker_latency_ms,omitempty"`
 	LastError        string  `json:"last_error,omitempty"`
+	LastErrorTS      int64   `json:"last_error_ts,omitempty"`
+	LastReconnectTS  int64   `json:"last_reconnect_ts,omitempty"`
+	StaleThresholdMS int64   `json:"stale_threshold_ms"`
+	SampleWindowSec  int     `json:"sample_window_sec"`
 }
 
 type RuntimeSnapshotTotals struct {
@@ -104,22 +117,67 @@ type RuntimeSnapshotTotals struct {
 }
 
 type SubscriptionsSnapshotResponse struct {
-	Type  string                    `json:"type"`
-	Scope string                    `json:"scope"`
-	TS    int64                     `json:"ts"`
-	Items []RuntimeSubscriptionItem `json:"items"`
+	Type      string                    `json:"type"`
+	Scope     string                    `json:"scope"`
+	RequestID string                    `json:"request_id,omitempty"`
+	TS        int64                     `json:"ts"`
+	Items     []RuntimeSubscriptionItem `json:"items"`
 }
 
 type SubscriptionHealthSnapshotResponse struct {
-	Type  string                   `json:"type"`
-	TS    int64                    `json:"ts"`
-	Items []SubscriptionHealthItem `json:"items"`
+	Type      string                   `json:"type"`
+	RequestID string                   `json:"request_id,omitempty"`
+	TS        int64                    `json:"ts"`
+	Items     []SubscriptionHealthItem `json:"items"`
 }
 
 type RuntimeSnapshotResponse struct {
 	Type          string                    `json:"type"`
+	RequestID     string                    `json:"request_id,omitempty"`
 	TS            int64                     `json:"ts"`
 	Subscriptions []RuntimeSubscriptionItem `json:"subscriptions"`
 	Health        []SubscriptionHealthItem  `json:"health"`
 	Totals        RuntimeSnapshotTotals     `json:"totals"`
+}
+
+type CapabilitiesItem struct {
+	Exchange            string   `json:"exchange"`
+	Adapter             string   `json:"adapter"`
+	MarketTypes         []string `json:"market_types"`
+	DataTypes           []string `json:"data_types"`
+	OrderBookDepths     []int    `json:"orderbook_depths,omitempty"`
+	SupportsCacheN      bool     `json:"supports_cache_n"`
+	SupportsRequestID   bool     `json:"supports_request_id"`
+	SupportsDeployQueue bool     `json:"supports_deploy_queue"`
+}
+
+type CapabilitiesSnapshotResponse struct {
+	Type      string             `json:"type"`
+	RequestID string             `json:"request_id,omitempty"`
+	TS        int64              `json:"ts"`
+	Items     []CapabilitiesItem `json:"items"`
+}
+
+type DeployBatchSummaryEvent struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	TS        int64  `json:"ts"`
+	Sent      int    `json:"sent"`
+	Acked     int    `json:"acked"`
+	Failed    int    `json:"failed"`
+}
+
+type RuntimeTotalsTickEvent struct {
+	Type                string  `json:"type"`
+	TS                  int64   `json:"ts"`
+	ActiveSubscriptions int     `json:"active_subscriptions"`
+	MessagesPerSec      float64 `json:"messages_per_sec"`
+	Reconnects24H       int     `json:"reconnects_24h"`
+}
+
+type ErrorResponse struct {
+	Type      string `json:"type"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
 }
