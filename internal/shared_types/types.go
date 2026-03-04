@@ -141,14 +141,19 @@ type RuntimeSnapshotResponse struct {
 }
 
 type CapabilitiesItem struct {
-	Exchange            string   `json:"exchange"`
-	Adapter             string   `json:"adapter"`
-	MarketTypes         []string `json:"market_types"`
-	DataTypes           []string `json:"data_types"`
-	OrderBookDepths     []int    `json:"orderbook_depths,omitempty"`
-	SupportsCacheN      bool     `json:"supports_cache_n"`
-	SupportsRequestID   bool     `json:"supports_request_id"`
-	SupportsDeployQueue bool     `json:"supports_deploy_queue"`
+	Exchange                      string   `json:"exchange"`
+	Adapter                       string   `json:"adapter"`
+	MarketTypes                   []string `json:"market_types"`
+	DataTypes                     []string `json:"data_types"`
+	OrderBookDepths               []int    `json:"orderbook_depths,omitempty"`
+	UsesBatchSymbols              bool     `json:"uses_batch_symbols,omitempty"`
+	SupportsTradeUnwatch          bool     `json:"supports_trade_unwatch,omitempty"`
+	SupportsTradeBatchUnwatch     bool     `json:"supports_trade_batch_unwatch,omitempty"`
+	SupportsOrderBookUnwatch      bool     `json:"supports_orderbook_unwatch,omitempty"`
+	SupportsOrderBookBatchUnwatch bool     `json:"supports_orderbook_batch_unwatch,omitempty"`
+	SupportsCacheN                bool     `json:"supports_cache_n"`
+	SupportsRequestID             bool     `json:"supports_request_id"`
+	SupportsDeployQueue           bool     `json:"supports_deploy_queue"`
 }
 
 type CapabilitiesSnapshotResponse struct {

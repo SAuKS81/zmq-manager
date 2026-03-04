@@ -41,27 +41,102 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			SupportsDeployQueue: true,
 		},
 		{
-			Exchange:            "binance",
+			Exchange:                      "binance",
+			Adapter:                       "ccxt",
+			MarketTypes:                   []string{"spot", "swap"},
+			DataTypes:                     []string{"trades", "orderbooks"},
+			OrderBookDepths:               []int{5, 20},
+			UsesBatchSymbols:              true,
+			SupportsTradeUnwatch:          true,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookUnwatch:      true,
+			SupportsOrderBookBatchUnwatch: true,
+			SupportsCacheN:                false,
+			SupportsRequestID:             true,
+			SupportsDeployQueue:           true,
+		},
+		{
+			Exchange:                  "bitget",
+			Adapter:                   "ccxt",
+			MarketTypes:               []string{"spot", "swap"},
+			DataTypes:                 []string{"trades", "orderbooks"},
+			UsesBatchSymbols:          true,
+			SupportsTradeBatchUnwatch: true,
+			SupportsCacheN:            false,
+			SupportsRequestID:         true,
+			SupportsDeployQueue:       true,
+		},
+		{
+			Exchange:            "bitmart",
 			Adapter:             "ccxt",
-			MarketTypes:         []string{"spot", "swap"},
+			MarketTypes:         []string{"spot"},
 			DataTypes:           []string{"trades", "orderbooks"},
-			OrderBookDepths:     []int{5, 20},
 			SupportsCacheN:      false,
 			SupportsRequestID:   true,
 			SupportsDeployQueue: true,
 		},
 		{
-			Exchange:            "bybit",
+			Exchange:                      "bybit",
+			Adapter:                       "ccxt",
+			MarketTypes:                   []string{"spot", "swap"},
+			DataTypes:                     []string{"trades", "orderbooks"},
+			OrderBookDepths:               []int{1, 50, 200, 500},
+			UsesBatchSymbols:              true,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookBatchUnwatch: true,
+			SupportsCacheN:                false,
+			SupportsRequestID:             true,
+			SupportsDeployQueue:           true,
+		},
+		{
+			Exchange:            "coinex",
 			Adapter:             "ccxt",
-			MarketTypes:         []string{"spot", "swap"},
+			MarketTypes:         []string{"spot"},
 			DataTypes:           []string{"trades", "orderbooks"},
-			OrderBookDepths:     []int{1, 50, 200, 500},
+			UsesBatchSymbols:    true,
 			SupportsCacheN:      false,
 			SupportsRequestID:   true,
 			SupportsDeployQueue: true,
 		},
 		{
-			Exchange:            "bitget",
+			Exchange:            "htx",
+			Adapter:             "ccxt",
+			MarketTypes:         []string{"spot", "swap"},
+			DataTypes:           []string{"trades", "orderbooks"},
+			SupportsCacheN:      false,
+			SupportsRequestID:   true,
+			SupportsDeployQueue: true,
+		},
+		{
+			Exchange:            "huobi",
+			Adapter:             "ccxt",
+			MarketTypes:         []string{"spot", "swap"},
+			DataTypes:           []string{"trades", "orderbooks"},
+			SupportsCacheN:      false,
+			SupportsRequestID:   true,
+			SupportsDeployQueue: true,
+		},
+		{
+			Exchange:            "kucoin",
+			Adapter:             "ccxt",
+			MarketTypes:         []string{"spot"},
+			DataTypes:           []string{"trades", "orderbooks"},
+			UsesBatchSymbols:    true,
+			SupportsCacheN:      false,
+			SupportsRequestID:   true,
+			SupportsDeployQueue: true,
+		},
+		{
+			Exchange:            "mexc",
+			Adapter:             "ccxt",
+			MarketTypes:         []string{"spot"},
+			DataTypes:           []string{"trades", "orderbooks"},
+			SupportsCacheN:      false,
+			SupportsRequestID:   true,
+			SupportsDeployQueue: true,
+		},
+		{
+			Exchange:            "woo",
 			Adapter:             "ccxt",
 			MarketTypes:         []string{"spot", "swap"},
 			DataTypes:           []string{"trades", "orderbooks"},
@@ -81,7 +156,17 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 	}
 }
 
+func canonicalCapabilityExchange(exchange string) string {
+	switch exchange {
+	case "huobi":
+		return "htx"
+	default:
+		return exchange
+	}
+}
+
 func capabilityForExchange(exchange string) (shared_types.CapabilitiesItem, bool) {
+	exchange = canonicalCapabilityExchange(exchange)
 	for _, item := range capabilitiesCatalog() {
 		if item.Exchange == exchange {
 			return item, true

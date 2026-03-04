@@ -426,6 +426,11 @@ Antwort:
       "market_types": ["spot", "swap"],
       "data_types": ["trades", "orderbooks"],
       "orderbook_depths": [1, 50, 200, 500],
+      "uses_batch_symbols": false,
+      "supports_trade_unwatch": false,
+      "supports_trade_batch_unwatch": false,
+      "supports_orderbook_unwatch": false,
+      "supports_orderbook_batch_unwatch": false,
       "supports_cache_n": false,
       "supports_request_id": true,
       "supports_deploy_queue": true
@@ -439,6 +444,12 @@ Der Endpunkt ist fuer das UI die Quelle fuer:
 - unterstuetzte `market_type`-/`data_type`-Kombinationen
 - erlaubte Orderbook-Tiefen
 - Deploy-/Correlation-Faehigkeiten pro Route
+- konkrete CCXT-/Adapter-Capabilities fuer Lifecycle-Steuerung:
+  - `uses_batch_symbols`
+  - `supports_trade_unwatch`
+  - `supports_trade_batch_unwatch`
+  - `supports_orderbook_unwatch`
+  - `supports_orderbook_batch_unwatch`
 
 ### 5.10 Deploy-Batch-Summary
 

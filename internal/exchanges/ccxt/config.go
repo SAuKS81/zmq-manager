@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+func canonicalExchangeName(exchangeName string) string {
+	switch strings.ToLower(exchangeName) {
+	case "huobi":
+		return "htx"
+	default:
+		return strings.ToLower(exchangeName)
+	}
+}
+
 // ExchangeConfig definiert das Lifecycle- und Sharding-Verhalten fuer einen
 // spezifischen Markt-Typ einer Boerse im CCXT-Adapter.
 type ExchangeConfig struct {
@@ -185,6 +194,24 @@ var exchangePolicies = map[string]ExchangePolicySet{
 			NewShardPause:   1100 * time.Millisecond,
 		},
 	},
+	"bitmart": {
+		Spot: ExchangeConfig{
+			Enabled:         true,
+			UseForSymbols:   false,
+			BatchSize:       1,
+			SymbolsPerShard: 50,
+			SubscribePause:  200 * time.Millisecond,
+			NewShardPause:   1100 * time.Millisecond,
+		},
+		Swap: ExchangeConfig{
+			Enabled:         false,
+			UseForSymbols:   false,
+			BatchSize:       1,
+			SymbolsPerShard: 50,
+			SubscribePause:  200 * time.Millisecond,
+			NewShardPause:   1100 * time.Millisecond,
+		},
+	},
 	"mexc": {
 		Spot: ExchangeConfig{
 			Enabled:         true,
@@ -224,7 +251,7 @@ var exchangePolicies = map[string]ExchangePolicySet{
 }
 
 func getConfig(exchangeName, marketType string) ExchangeConfig {
-	exchangeName = strings.ToLower(exchangeName)
+	exchangeName = canonicalExchangeName(exchangeName)
 	marketType = strings.ToLower(marketType)
 
 	policy, ok := exchangePolicies[exchangeName]

@@ -44,3 +44,29 @@ func TestGetConfigUsesExchangeOverride(t *testing.T) {
 		t.Fatalf("expected bitget subscribe pause 500ms, got %s", cfg.SubscribePause)
 	}
 }
+
+func TestGetConfigSupportsHuobiAlias(t *testing.T) {
+	htxCfg := getConfig("htx", "spot")
+	huobiCfg := getConfig("huobi", "spot")
+
+	if htxCfg != huobiCfg {
+		t.Fatalf("expected huobi alias to resolve to htx policy, got %#v vs %#v", huobiCfg, htxCfg)
+	}
+}
+
+func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
+	cfg := getConfig("bitmart", "spot")
+
+	if !cfg.Enabled {
+		t.Fatal("expected bitmart spot config to be enabled")
+	}
+	if cfg.BatchSize != 1 {
+		t.Fatalf("expected bitmart batch size 1, got %d", cfg.BatchSize)
+	}
+	if cfg.SymbolsPerShard != 50 {
+		t.Fatalf("expected bitmart symbols per shard 50, got %d", cfg.SymbolsPerShard)
+	}
+	if cfg.SubscribePause != 200*time.Millisecond {
+		t.Fatalf("expected bitmart subscribe pause 200ms, got %s", cfg.SubscribePause)
+	}
+}

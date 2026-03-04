@@ -183,6 +183,41 @@ Aktiver Branch: `phase1.6-stream-lifecycle-hardening`
   - Bitget-OB-Design-Notiz erstellen
   - nur technische Dokumentation (WS-Channel, Subscribe/Unsubscribe, Snapshot/Delta, Mapping auf `shared_types.OrderBookUpdate`, Recovery-Regeln)
   - explizit ohne Implementierung und ohne Testlauf
+- Prioritaetsliste fuer naechste CCXT-Vertiefung / UI-relevante Exchange-Abdeckung:
+  - hohe Prioritaet 1:
+    - `mexc`
+    - `kucoin`
+    - `huobi`
+    - `bitmart`
+  - hohe Prioritaet 2:
+    - `bitget` ueber CCXT fuer `orderbooks`, solange kein nativer Bitget-OB-Pfad existiert
+  - mittlere Prioritaet:
+    - `coinex`
+  - nachrangig, aber relevant:
+    - `woo`
+- Operative Folgerung fuer diese CCXT-Prioritaeten:
+  - pro Exchange zuerst Capabilities/Policy pruefen (`UnWatch*`, Batch-Faehigkeiten, langsamer Default vs. Override)
+  - dann gezielt Runtime-/Deploy-Verhalten gegen UI-Anforderungen pruefen (`request_id`, Ack-/Apply-Events, Runtime-Snapshot, Capabilities-Snapshot)
+  - `mexc` ist bereits als wichtiger Kandidat fuer einen moeglichen Wechsel von hartem Shard-Recycle auf echten `UnWatch` markiert
+- Rollout-Plan fuer CCXT-Umstellung:
+  - Welle 1:
+    - `mexc`
+    - `kucoin`
+  - Welle 2:
+    - `huobi`
+    - `bitmart`
+  - Welle 3:
+    - `bitget` ueber CCXT fuer `orderbooks`
+    - `coinex`
+    - `woo`
+  - Pro Welle gilt:
+    - zuerst Capabilities/Policy festziehen
+    - danach gezielter Test auf echtes `UnWatch` vs. `recycle-on-unsubscribe`
+    - erst nach stabiler Verifikation auf die naechste Welle gehen
+- Welle-1 Start umgesetzt:
+  - CCXT-Capabilities fuer `mexc`, `kucoin`, `huobi`/`htx` und `bitmart` sind brokerseitig jetzt explizit sichtbar
+  - `huobi` wird policy-seitig auf `htx` aliasiert, damit UI und Runtime denselben Routenbegriff nutzen
+  - `bitmart` hat einen ersten konservativen CCXT-Policy-Eintrag erhalten
 
 ## Aktueller Arbeitsmodus
 
