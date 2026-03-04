@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bybit-watcher/internal/shared_types"
+	ccxt "github.com/ccxt/ccxt/go/v4"
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
@@ -116,13 +117,12 @@ func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
 }
 
 func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol string, depth int) {
-	_ = depth
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			orderbook, err := sw.exchange.WatchOrderBook(symbol)
+			orderbook, err := sw.safeWatchOrderBook(symbol, depth)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -133,7 +133,11 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 			}
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
-			normalized, _ := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
+			normalized, normErr := NormalizeOrderBook(orderbook, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
+			if normErr != nil {
+				log.Printf("[CCXT-OB-SHARD-WARN] normalize orderbook failed (%s/%s, symbol=%s): %v", sw.exchangeName, sw.marketType, symbol, normErr)
+				continue
+			}
 			if normalized != nil {
 				select {
 				case sw.dataCh <- normalized:
@@ -142,6 +146,18 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 			}
 		}
 	}
+}
+
+func (sw *OrderBookShardWorker) safeWatchOrderBook(symbol string, depth int) (orderbook ccxtpro.OrderBook, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in WatchOrderBook: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	if depth > 0 {
+		return sw.exchange.WatchOrderBook(symbol, ccxt.WithWatchOrderBookLimit(int64(depth)))
+	}
+	return sw.exchange.WatchOrderBook(symbol)
 }
 
 func (sw *OrderBookShardWorker) safeUnWatchOrderBook(symbol string) (_ interface{}, err error) {
