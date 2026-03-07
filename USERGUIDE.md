@@ -40,10 +40,11 @@ Unterstuetzte Adaptertypen:
 - CCXT-Pro Adapter:
   - z. B. `binance`, `bybit`, `bitget`
 
-Wichtige Prioritaetsregel:
+Wichtige Batch-Regel:
 
-- Trades und Top-of-Book/L1 laufen im priorisierten Pfad
-- tiefere Orderbook-Updates laufen im degradierten Latest-Only-Pfad
+- Trades und Orderbooks werden gleichberechtigt ueber denselben direkten Sendepfad verteilt
+- es gibt im aktuellen Stand keinen degradierten Latest-Only-Orderbook-Pfad mehr
+- wenn die Sendqueue eines Clients ueberlaeuft, wird der Client zuerst gewarnt und bei erneutem Ueberlauf getrennt
 - Drops duerfen nie still passieren; sie werden explizit gezaehlt
 
 Wichtige Versandregel:
@@ -528,6 +529,7 @@ Header:
 
 - `T` = Trade-Batch
 - `O` = Orderbook-Batch
+- `J` = JSON-Control-Payload, z. B. Errors, Snapshots, Lifecycle-Events
 
 Das wird in [internal/broker/client_manager.go](./internal/broker/client_manager.go) und [clients/smoke_client.go](./clients/smoke_client.go) sichtbar.
 
@@ -567,7 +569,9 @@ Wichtig:
 
 ### TradeUpdate
 
-Felder:
+Trades werden immer als Arrays gesendet, auch wenn nur ein einzelner Trade im Payload steckt.
+
+JSON-Felder:
 
 - `exchange`
 - `symbol`
@@ -580,11 +584,52 @@ Felder:
 - `trade_id`
 - `data_type`
 
+JSON-Beispiel:
+
+```json
+[
+  {
+    "exchange": "bybit",
+    "symbol": "BTC/USDT",
+    "market_type": "spot",
+    "timestamp": 1772300000123,
+    "go_timestamp": 1772300000124,
+    "price": 91234.5,
+    "amount": 0.001,
+    "side": "buy",
+    "trade_id": "1234567890",
+    "data_type": "trades"
+  }
+]
+```
+
+Msgpack-Key-Mapping:
+
+- `e` = `exchange`
+- `s` = `symbol`
+- `m` = `market_type`
+- `t` = `timestamp`
+- `gt` = `go_timestamp`
+- `p` = `price`
+- `a` = `amount`
+- `Si` = `side`
+- `ti` = `trade_id`
+- `dt` = `data_type`
+
+Hinweise:
+
+- `timestamp` ist der normalisierte Event-Timestamp vom Exchange-Feed
+- `go_timestamp` ist der Broker-Zeitstempel beim Ingest/Normalize
+- interne Felder wie `IngestUnixNano` werden nicht an Clients ausgeliefert
+- `data_type` ist fuer Trades immer `trades`
+
 Definition: [internal/shared_types/types.go](./internal/shared_types/types.go)
 
 ### OrderBookUpdate
 
-Felder:
+Orderbooks werden ebenfalls als Arrays gesendet.
+
+JSON-Felder:
 
 - `exchange`
 - `symbol`
@@ -596,6 +641,50 @@ Felder:
 - `data_type`
 
 `bids` und `asks` bestehen aus `price` und `amount`.
+
+JSON-Beispiel:
+
+```json
+[
+  {
+    "exchange": "bybit",
+    "symbol": "BTC/USDT",
+    "market_type": "spot",
+    "timestamp": 1772300000456,
+    "go_timestamp": 1772300000457,
+    "bids": [
+      { "price": 91234.4, "amount": 1.25 }
+    ],
+    "asks": [
+      { "price": 91234.5, "amount": 0.91 }
+    ],
+    "data_type": "orderbooks"
+  }
+]
+```
+
+Msgpack-Key-Mapping fuer `OrderBookUpdate`:
+
+- `e` = `exchange`
+- `s` = `symbol`
+- `m` = `market_type`
+- `t` = `timestamp`
+- `gt` = `go_timestamp`
+- `b` = `bids`
+- `a` = `asks`
+- `dt` = `data_type`
+
+Msgpack-Key-Mapping fuer jedes Level in `bids`/`asks`:
+
+- `p` = `price`
+- `a` = `amount`
+
+Hinweise:
+
+- `data_type` ist fuer Orderbooks immer `orderbooks`
+- `bids` und `asks` sind normalisierte Preis-Mengen-Listen
+- die effektive Tiefe haengt vom Adapter und der ausgehandelten `depth` ab
+- interne Felder wie `UpdateType` und `IngestUnixNano` werden nicht an Clients ausgeliefert
 
 ## 10. Lifecycle- und Status-Events
 
@@ -686,6 +775,12 @@ Wenn ein Client zu lange keinen Pong liefert:
 - wird er im `ClientManager` entfernt
 - der Broker triggert intern einen `disconnect`
 - Subscriptions werden aufgeraeumt
+
+Zusatz fuer langsame Clients:
+
+- wenn die Sendqueue eines Clients ueberlaeuft, schreibt der Broker zuerst eine Warnung
+- kommt innerhalb des Warnfensters erneut ein Queue-Ueberlauf vor, wird der Client getrennt
+- damit werden einzelne langsame Consumer nicht mehr durch stillen Rueckstau mitgezogen
 
 ## 12. Native vs. CCXT
 

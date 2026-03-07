@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"bytes"
+	"log"
 	"sync"
 	"testing"
 	"time"
@@ -174,12 +176,15 @@ func TestEnqueueSocketSendDoesNotBlockWhenChannelFull(t *testing.T) {
 	cm := &ClientManager{
 		sendChP1: make(chan outboundEnvelope, 1),
 		p2Latest: make(map[p2LatestKey]outboundEnvelope),
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"},
+		},
 	}
-	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsg([]byte("filled")), metricType: "trade", priority: priorityP1}
+	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
 
 	done := make(chan struct{})
 	go func() {
-		cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsg([]byte("drop-if-full")), metricType: "trade", priority: priorityP1})
+		cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-if-full")), metricType: "trade", priority: priorityP1})
 		close(done)
 	}()
 
@@ -187,5 +192,72 @@ func TestEnqueueSocketSendDoesNotBlockWhenChannelFull(t *testing.T) {
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("enqueueSocketSend blocked on full channel")
+	}
+}
+
+func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
+	cm := &ClientManager{
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"},
+		},
+		sendChP1: make(chan outboundEnvelope, 4),
+		p2Latest: make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	updates := []*shared_types.OrderBookUpdate{
+		{Exchange: "bybit", Symbol: "BTCUSDT", MarketType: "spot", Bids: []shared_types.OrderBookLevel{{Price: 1, Amount: 1}}, Asks: []shared_types.OrderBookLevel{{Price: 2, Amount: 1}}},
+		{Exchange: "bybit", Symbol: "ETHUSDT", MarketType: "spot", Bids: []shared_types.OrderBookLevel{{Price: 1, Amount: 1}, {Price: 0.9, Amount: 1}}, Asks: []shared_types.OrderBookLevel{{Price: 2, Amount: 1}}},
+	}
+
+	cm.distributeOrderBookBatch([][]byte{[]byte("client-1")}, updates)
+
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected a single direct queue message, got %d", got)
+	}
+	if gotP2 := len(cm.p2Latest); gotP2 != 0 {
+		t.Fatalf("expected no p2 backlog, got %d", gotP2)
+	}
+}
+
+func TestEnqueueSocketSendWarnsThenDisconnectsSlowClient(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 2)
+	cm := &ClientManager{
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 1),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"},
+		},
+	}
+	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
+
+	var logBuf bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	}()
+
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-1")), metricType: "trade", priority: priorityP1})
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-2")), metricType: "trade", priority: priorityP1})
+
+	if _, exists := cm.clients["client-1"]; exists {
+		t.Fatalf("expected slow client to be removed after repeated queue overflow")
+	}
+
+	reqs := drainRequests(reqCh)
+	if len(reqs) != 1 || reqs[0].Action != "disconnect" {
+		t.Fatalf("expected one disconnect request, got %+v", reqs)
+	}
+
+	got := logBuf.String()
+	if !bytes.Contains([]byte(got), []byte("verursacht Sendestau")) {
+		t.Fatalf("expected slow-client warning log, got %q", got)
+	}
+	if !bytes.Contains([]byte(got), []byte("wegen wiederholtem Sendestau getrennt")) {
+		t.Fatalf("expected slow-client disconnect log, got %q", got)
 	}
 }
