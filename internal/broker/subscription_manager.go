@@ -488,7 +488,6 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			Status:     "acked",
 			Timestamp:  time.Now().UnixMilli(),
 		})
-		sm.recordDeployBatchResult(req.RequestID, false)
 		if wasActive {
 			sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
 				Type:       "stream_subscribe_active",
@@ -541,7 +540,6 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			Status:     "acked",
 			Timestamp:  time.Now().UnixMilli(),
 		})
-		sm.recordDeployBatchResult(req.RequestID, false)
 	case "disconnect":
 		sm.cleanupClientSubscriptions(clientIDStr)
 		return
@@ -565,6 +563,9 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 
 	if handler != nil {
 		handler.HandleRequest(req)
+		if req.Action == "subscribe" || req.Action == "unsubscribe" {
+			sm.recordDeployBatchResult(req.RequestID, false)
+		}
 	} else {
 		log.Printf("[SUB-MANAGER] FATAL: Kein passender Handler fuer die Anfrage gefunden: Exchange=%s", req.Exchange)
 		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{

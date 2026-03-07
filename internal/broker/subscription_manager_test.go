@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"bytes"
+	"log"
 	"testing"
 	"time"
 
@@ -443,6 +445,64 @@ func TestShouldLogCCXTFallbackOnlyOncePerDeployBatch(t *testing.T) {
 	}
 	if !sm.shouldLogCCXTFallback(&shared_types.ClientRequest{RequestID: "single-req"}) {
 		t.Fatalf("expected non-batch fallback log to be allowed")
+	}
+}
+
+func TestHandleRequestCCXTFallbackLogsOnlyOnceAcrossWholeDeployBatch(t *testing.T) {
+	distCh := make(chan *DistributionMessage, 8)
+	sm := &SubscriptionManager{
+		DistributionCh:                 distCh,
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"ccxt_generic": &recordingExchange{},
+		},
+		runtimeTracker: newRuntimeTracker(),
+		deployBatches:  make(map[string]*deployBatchState),
+	}
+	sm.registerDeployBatch(&shared_types.ClientRequest{
+		ClientID:  []byte("client-a"),
+		RequestID: "deploy-123",
+		BatchSent: 2,
+	})
+
+	var logBuf bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	}()
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:    []byte("client-a"),
+		Action:      "subscribe",
+		RequestID:   "deploy-123",
+		Exchange:    "mexc",
+		Symbol:      "BTC/USDT",
+		MarketType:  "spot",
+		DataType:    "trades",
+	})
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:    []byte("client-a"),
+		Action:      "subscribe",
+		RequestID:   "deploy-123",
+		Exchange:    "mexc",
+		Symbol:      "ETH/USDT",
+		MarketType:  "spot",
+		DataType:    "trades",
+	})
+
+	want := "[SUB-MANAGER] Kein exakter Handler fuer exchange=mexc market_type=spot data_type=trades, fallback=ccxt_generic\n"
+	if got := logBuf.String(); got != want {
+		t.Fatalf("unexpected fallback log output:\n%s", got)
 	}
 }
 
