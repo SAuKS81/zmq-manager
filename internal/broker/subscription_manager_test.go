@@ -424,6 +424,28 @@ func TestRecordDeployBatchResultEmitsSummary(t *testing.T) {
 	}
 }
 
+func TestShouldLogCCXTFallbackOnlyOncePerDeployBatch(t *testing.T) {
+	sm := &SubscriptionManager{
+		deployBatches: make(map[string]*deployBatchState),
+	}
+	sm.registerDeployBatch(&shared_types.ClientRequest{
+		ClientID:  []byte("client-a"),
+		RequestID: "deploy-123",
+		BatchSent: 3,
+	})
+
+	req := &shared_types.ClientRequest{RequestID: "deploy-123"}
+	if !sm.shouldLogCCXTFallback(req) {
+		t.Fatalf("expected first fallback log attempt to be allowed")
+	}
+	if sm.shouldLogCCXTFallback(req) {
+		t.Fatalf("expected second fallback log attempt to be suppressed")
+	}
+	if !sm.shouldLogCCXTFallback(&shared_types.ClientRequest{RequestID: "single-req"}) {
+		t.Fatalf("expected non-batch fallback log to be allowed")
+	}
+}
+
 func TestHandleRequestNormalizesBybitOrderBookDepth(t *testing.T) {
 	rec := &recordingExchange{}
 	sm := &SubscriptionManager{

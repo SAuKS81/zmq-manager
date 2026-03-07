@@ -552,12 +552,14 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if ok {
 		handler = specificHandler
 	} else {
-		log.Printf(
-			"[SUB-MANAGER] Kein exakter Handler fuer exchange=%s market_type=%s data_type=%s, fallback=ccxt_generic",
-			req.Exchange,
-			req.MarketType,
-			req.DataType,
-		)
+		if sm.shouldLogCCXTFallback(req) {
+			log.Printf(
+				"[SUB-MANAGER] Kein exakter Handler fuer exchange=%s market_type=%s data_type=%s, fallback=ccxt_generic",
+				req.Exchange,
+				req.MarketType,
+				req.DataType,
+			)
+		}
 		handler = sm.exchangeRegistry["ccxt_generic"]
 	}
 
@@ -579,6 +581,21 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		})
 		sm.recordDeployBatchResult(req.RequestID, true)
 	}
+}
+
+func (sm *SubscriptionManager) shouldLogCCXTFallback(req *shared_types.ClientRequest) bool {
+	if req == nil || req.RequestID == "" || sm.deployBatches == nil {
+		return true
+	}
+	state := sm.deployBatches[req.RequestID]
+	if state == nil {
+		return true
+	}
+	if state.FallbackLogWritten {
+		return false
+	}
+	state.FallbackLogWritten = true
+	return true
 }
 
 func getSubscriptionID(exchange, symbol, marketType string) string {

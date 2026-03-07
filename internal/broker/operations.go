@@ -24,10 +24,11 @@ type requestOperationContext struct {
 }
 
 type deployBatchState struct {
-	ClientID []byte
-	Sent     int
-	Acked    int
-	Failed   int
+	ClientID           []byte
+	Sent               int
+	Acked              int
+	Failed             int
+	FallbackLogWritten bool
 }
 
 func (sm *SubscriptionManager) registerDeployBatch(req *shared_types.ClientRequest) {

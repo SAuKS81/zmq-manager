@@ -74,6 +74,7 @@ func (sw *SingleWatchShardWorker) getCommandChannel() chan<- ShardCommand {
 
 func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 	recycleNeeded := false
+	startedWatchers := 0
 	for symbol := range cmd.Symbols {
 		switch cmd.Action {
 		case "subscribe":
@@ -82,11 +83,11 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 				sw.mu.Unlock()
 				continue
 			}
-			log.Printf("[CCXT-SINGLE-SHARD] Starte Watcher fuer %s auf existierender Verbindung.", symbol)
 			ctx, cancel := context.WithCancel(context.Background())
 			sw.activeWatchers[symbol] = cancel
 			sw.mu.Unlock()
 			go sw.runSingleWatch(ctx, symbol)
+			startedWatchers++
 			time.Sleep(sw.config.SubscribePause)
 		case "unsubscribe":
 			sw.mu.Lock()
@@ -110,6 +111,14 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 			}
 			cancel()
 		}
+	}
+	if startedWatchers > 0 {
+		log.Printf(
+			"[CCXT-SINGLE-SHARD] %s/%s: %d Watcher auf existierender Verbindung gestartet.",
+			sw.exchangeName,
+			sw.marketType,
+			startedWatchers,
+		)
 	}
 	if recycleNeeded {
 		sw.recycleExchangeAndRestart()
