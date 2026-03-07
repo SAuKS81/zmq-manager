@@ -552,6 +552,12 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if ok {
 		handler = specificHandler
 	} else {
+		log.Printf(
+			"[SUB-MANAGER] Kein exakter Handler fuer exchange=%s market_type=%s data_type=%s, fallback=ccxt_generic",
+			req.Exchange,
+			req.MarketType,
+			req.DataType,
+		)
 		handler = sm.exchangeRegistry["ccxt_generic"]
 	}
 
@@ -947,11 +953,12 @@ func (sm *SubscriptionManager) validateRequestSpec(req *shared_types.ClientReque
 	if len(capability.OrderBookDepths) == 0 {
 		return "orderbooks not supported"
 	}
-	if req.OrderBookDepth == 0 {
+	if req.OrderBookDepth <= 0 {
 		return ""
 	}
 	for _, depth := range capability.OrderBookDepths {
-		if depth == req.OrderBookDepth {
+		if req.OrderBookDepth <= depth {
+			req.OrderBookDepth = depth
 			return ""
 		}
 	}

@@ -41,7 +41,7 @@ func exchangeHasFeature(exchangeName string, exchange ccxtpro.IExchange, feature
 	if exchange == nil || feature == "" {
 		return false
 	}
-	if strings.EqualFold(exchangeName, "mexc") {
+	if featureHardDisabled(exchangeName, feature) {
 		return false
 	}
 
@@ -73,4 +73,17 @@ func exchangeHasFeature(exchangeName string, exchange ccxtpro.IExchange, feature
 
 	boolFlag, ok := flag.(bool)
 	return ok && boolFlag
+}
+
+func featureHardDisabled(exchangeName, feature string) bool {
+	if strings.EqualFold(exchangeName, "mexc") {
+		return true
+	}
+	if strings.EqualFold(exchangeName, "bybit") {
+		switch feature {
+		case "unWatchOrderBook", "unWatchOrderBookForSymbols":
+			return true
+		}
+	}
+	return false
 }

@@ -25,6 +25,13 @@ chmod +x ./scripts/gen_symbols_binance_spot.sh ./scripts/baseline_ingest.sh
   --duration 60s
 ```
 
+Hinweis zur Orderbook-Tiefe:
+
+- `--ob-depth` wird pro Exchange auf die naechste dokumentierte native Stufe normalisiert
+- Beispiele:
+  - Binance native: `5/10/20`
+  - Bybit native: `1/50/200/1000`
+
 ## Mutex/Block Profiling (optional)
 
 Broker mit Profiling-Flags starten:

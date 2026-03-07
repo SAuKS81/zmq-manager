@@ -658,7 +658,14 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
 			return
 		}
-		log.Printf("[CLIENT-MANAGER] 'subscribe_bulk': %d Symbole von %s", len(req.Symbols), clientIDStr)
+		log.Printf(
+			"[CLIENT-MANAGER] 'subscribe_bulk': client=%s exchange=%s market_type=%s data_type=%s symbols=%d",
+			clientIDStr,
+			req.Exchange,
+			req.MarketType,
+			req.DataType,
+			len(req.Symbols),
+		)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "deploy_batch_register", RequestID: req.RequestID, BatchSent: len(req.Symbols)})
 		for _, symbol := range req.Symbols {
 			if symbol == "" {
@@ -672,7 +679,14 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "unsubscribe_bulk requires exchange, market_type and symbols")
 			return
 		}
-		log.Printf("[CLIENT-MANAGER] 'unsubscribe_bulk': %d Symbole von %s", len(req.Symbols), clientIDStr)
+		log.Printf(
+			"[CLIENT-MANAGER] 'unsubscribe_bulk': client=%s exchange=%s market_type=%s data_type=%s symbols=%d",
+			clientIDStr,
+			req.Exchange,
+			req.MarketType,
+			req.DataType,
+			len(req.Symbols),
+		)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "deploy_batch_register", RequestID: req.RequestID, BatchSent: len(req.Symbols)})
 		for _, symbol := range req.Symbols {
 			if symbol == "" {
@@ -682,10 +696,8 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		}
 		return
 	case "subscribe_all":
-		if req.Exchange == "" || req.MarketType == "" {
-			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_all requires exchange and market_type")
-			return
-		}
+		cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_all is not supported; use subscribe_bulk")
+		return
 	case "subscribe", "unsubscribe":
 		if req.Exchange == "" || req.MarketType == "" || req.Symbol == "" {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe/unsubscribe requires exchange, symbol and market_type")

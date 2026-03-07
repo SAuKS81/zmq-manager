@@ -123,7 +123,7 @@ drain:
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
 		}
-		if sw.config.SupportsOrderBookBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchOrderBookForSymbols") {
+		if sw.config.SupportsOrderBookBatchUnwatch {
 			if _, err := sw.safeUnWatchOrderBookForSymbols(symbolsToUnwatch); err != nil {
 				log.Printf("[CCXT-BATCH-OB-WARN] UnWatchOrderBookForSymbols(%d) fehlgeschlagen (%s/%s): %v. Fallback auf Shard-Recycle.", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
 				sw.recycleExchange()

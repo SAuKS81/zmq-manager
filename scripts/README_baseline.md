@@ -45,6 +45,12 @@ go run -tags ccxt ./cmd/broker/main.go --pprof-block-rate 1 --pprof-mutex-fracti
 
 Für CCXT-Baselines `--exchanges` ohne `_native` verwenden (z. B. `binance,bybit,bitget`), Symbolformat bleibt CCXT-style (`BTC/USDT`, `BTC/USDT:USDT`).
 
+Hinweis zur nativen Orderbook-Tiefe:
+
+- `--ob-depth` wird brokerseitig auf die naechste gueltige Exchange-Stufe normalisiert
+- Binance native: `5`, `10`, `20`
+- Bybit native: `1`, `50`, `200`, `1000`
+
 ## Run-Output
 
 Alle Runs werden unter folgendem Pfad abgelegt:

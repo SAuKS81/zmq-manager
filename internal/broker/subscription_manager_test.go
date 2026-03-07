@@ -423,3 +423,102 @@ func TestRecordDeployBatchResultEmitsSummary(t *testing.T) {
 		t.Fatalf("unexpected summary payload: %+v", summary)
 	}
 }
+
+func TestHandleRequestNormalizesBybitOrderBookDepth(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"bybit_native": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	req := &shared_types.ClientRequest{
+		ClientID:       []byte("client-a"),
+		Action:         "subscribe",
+		Exchange:       "bybit_native",
+		Symbol:         "BTCUSDT",
+		MarketType:     "spot",
+		DataType:       "orderbooks",
+		OrderBookDepth: 5,
+	}
+	sm.handleRequest(req)
+
+	if len(rec.reqs) != 1 {
+		t.Fatalf("expected one forwarded request, got %d", len(rec.reqs))
+	}
+	if rec.reqs[0].OrderBookDepth != 50 {
+		t.Fatalf("expected bybit depth to normalize to 50, got %+v", rec.reqs[0])
+	}
+	routeKey := getClientRouteKey("client-a", "bybit-spot-BTCUSDT")
+	if got := sm.orderBookSubscriptionDepths[routeKey]; got != 50 {
+		t.Fatalf("expected runtime depth 50, got %d", got)
+	}
+}
+
+func TestHandleRequestNormalizesBinanceOrderBookDepth(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	req := &shared_types.ClientRequest{
+		ClientID:       []byte("client-a"),
+		Action:         "subscribe",
+		Exchange:       "binance_native",
+		Symbol:         "BTCUSDT",
+		MarketType:     "spot",
+		DataType:       "orderbooks",
+		OrderBookDepth: 7,
+	}
+	sm.handleRequest(req)
+
+	if len(rec.reqs) != 1 {
+		t.Fatalf("expected one forwarded request, got %d", len(rec.reqs))
+	}
+	if rec.reqs[0].OrderBookDepth != 10 {
+		t.Fatalf("expected binance depth to normalize to 10, got %+v", rec.reqs[0])
+	}
+}
+
+func TestHandleRequestRejectsUnsupportedOrderBookDepth(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:       []byte("client-a"),
+		Action:         "subscribe",
+		Exchange:       "binance_native",
+		Symbol:         "BTCUSDT",
+		MarketType:     "spot",
+		DataType:       "orderbooks",
+		OrderBookDepth: 21,
+	})
+
+	if len(rec.reqs) != 0 {
+		t.Fatalf("expected unsupported depth to be rejected before exchange handler, got %+v", rec.reqs)
+	}
+}

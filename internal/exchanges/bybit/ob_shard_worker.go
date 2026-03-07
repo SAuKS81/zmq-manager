@@ -78,7 +78,7 @@ func getBybitDepth(requestedDepth int) int {
 	if requestedDepth <= 200 {
 		return 200
 	}
-	return 500
+	return 1000
 }
 
 func (sw *OrderBookShardWorker) Run() {

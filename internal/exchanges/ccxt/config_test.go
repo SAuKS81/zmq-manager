@@ -70,3 +70,15 @@ func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 		t.Fatalf("expected bitmart subscribe pause 200ms, got %s", cfg.SubscribePause)
 	}
 }
+
+func TestGetConfigDisablesBybitOrderBookUnwatch(t *testing.T) {
+	spotCfg := getConfig("bybit", "spot")
+	swapCfg := getConfig("bybit", "swap")
+
+	if spotCfg.SupportsOrderBookUnwatch || spotCfg.SupportsOrderBookBatchUnwatch {
+		t.Fatalf("expected bybit spot orderbook unwatch to stay disabled, got %#v", spotCfg)
+	}
+	if swapCfg.SupportsOrderBookUnwatch || swapCfg.SupportsOrderBookBatchUnwatch {
+		t.Fatalf("expected bybit swap orderbook unwatch to stay disabled, got %#v", swapCfg)
+	}
+}

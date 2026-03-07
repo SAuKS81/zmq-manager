@@ -34,10 +34,12 @@ IPC Endpoint:
 ## Daten-Prioritaet & Regeln
 
 - Prio 1: Trades und Orderbook ToB/L1 gleich priorisiert (Happy-Path drop-frei)
-- Prio 2: Orderbook Level >1 bis max 20 ist sekundär (darf deterministisch degradiert werden, immer gezählt)
+- Prio 2: tiefere Orderbook-Updates sind sekundaer (duerfen deterministisch degradiert werden, immer gezaehlt)
 - Trades: sofort senden, keine Aggregation
-- Orderbooks: Default Level 1-5
-- Orderbooks max depth: 20
+- native Orderbook-Stufen folgen der Exchange-Doku:
+  - Binance: `5`, `10`, `20`
+  - Bybit: `1`, `50`, `200`, `1000`
+- positive Zwischenwerte werden auf die naechste gueltige Exchange-Stufe angehoben; Werte oberhalb des jeweiligen Maximums werden abgelehnt
 - Drop nur explizit zaehlen, nie still
 
 ## Baseline-Vertrag (Team)

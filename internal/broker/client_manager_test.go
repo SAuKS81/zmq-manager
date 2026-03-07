@@ -87,6 +87,25 @@ func TestHandleMessageUnknownActionNoForward(t *testing.T) {
 	}
 }
 
+func TestHandleMessageSubscribeAllRejected(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	cm.handleMessage([]byte("client-1"), []byte(`{"action":"subscribe_all","exchange":"binance_native","market_type":"spot"}`))
+
+	if got := len(drainRequests(reqCh)); got != 0 {
+		t.Fatalf("expected subscribe_all to be rejected locally, got %d forwarded requests", got)
+	}
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected one error response, got %d", got)
+	}
+}
+
 func TestHandleMessageEncodingUpdate(t *testing.T) {
 	reqCh := make(chan *shared_types.ClientRequest, 10)
 	cm := &ClientManager{

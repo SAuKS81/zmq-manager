@@ -108,7 +108,6 @@ Unterstuetzte Request-Aktionen:
 - `unsubscribe`
 - `subscribe_bulk`
 - `unsubscribe_bulk`
-- `subscribe_all`
 - `disconnect`
 - `list_subscriptions`
 - `subscription_health_snapshot`
@@ -179,10 +178,19 @@ Mit Orderbook-Tiefe:
   "symbol": "BTCUSDT",
   "market_type": "swap",
   "data_type": "orderbooks",
-  "depth": 5,
+  "depth": 50,
   "encoding": "msgpack"
 }
 ```
+
+Wichtig fuer native Orderbooks:
+
+- Binance native verwendet die dokumentierten Stufen `5`, `10`, `20`
+- Bybit native verwendet die dokumentierten Stufen `1`, `50`, `200`, `1000`
+- positive Zwischenwerte werden brokerseitig auf die naechste gueltige Stufe angehoben:
+  - `binance_native depth=7 -> 10`
+  - `bybit_native depth=5 -> 50`
+- Werte oberhalb der maximalen dokumentierten Tiefe werden abgelehnt
 
 ### 5.2 Einzel-Unsubscribe
 
@@ -213,16 +221,9 @@ Mit Orderbook-Tiefe:
 
 ### 5.4 Subscribe-All
 
-Aktuell nur fuer Trades sinnvoll.
+`subscribe_all` ist aktuell nicht produktiv unterstuetzt.
 
-```json
-{
-  "action": "subscribe_all",
-  "exchange": "binance_native",
-  "market_type": "spot",
-  "data_type": "trades"
-}
-```
+Der Broker lehnt diesen Request explizit ab und erwartet stattdessen `subscribe_bulk`.
 
 ### 5.4a Bulk-Unsubscribe
 
@@ -425,7 +426,7 @@ Antwort:
       "adapter": "native",
       "market_types": ["spot", "swap"],
       "data_types": ["trades", "orderbooks"],
-      "orderbook_depths": [1, 50, 200, 500],
+      "orderbook_depths": [1, 50, 200, 1000],
       "uses_batch_symbols": false,
       "supports_trade_unwatch": false,
       "supports_trade_batch_unwatch": false,
@@ -712,6 +713,9 @@ Wichtige Regeln:
 - wenn `Describe().has["unWatch*"] == true`, versucht der Broker den echten `UnWatch*`-Pfad zu nutzen
 - bekannte harte Ausnahmen bleiben ausgenommen:
   - `mexc`
+- fuer Orderbooks ist der Broker inzwischen bewusst strenger:
+  - echter CCXT-Orderbook-Unwatch laeuft nur noch ueber explizit freigegebene Policies
+  - unbekannte oder nur implizit von `Describe().has` gemeldete Orderbook-Unwatch-Pfade fallen konservativ auf Recycle zurueck
 - wenn `UnWatch*` zur Laufzeit fehlschlaegt, wird der Fehler geloggt und es folgt automatisch der shard-scope Fallback mit Wiederaufbau nur der `desired`-Streams
 - Market-Metadaten werden pro `exchange/marketType` gecacht, um REST-Weight-Spikes zu vermeiden
 
@@ -721,11 +725,20 @@ Wichtige Regeln:
 
 - native Lifecycle-Haertung verifiziert
 - selektiver Recycle greift nur auf `desired`-Streams zurueck
+- native Orderbook-Stufen folgen der offiziellen Partial-Depth-Doku:
+  - `5`
+  - `10`
+  - `20`
 
 ### Bybit native
 
 - marktspezifisches Command-Chunking
 - Spot-Subscribe nach Doku limitiert
+- native Orderbook-Stufen folgen der offiziellen V5-Orderbook-Doku:
+  - `1`
+  - `50`
+  - `200`
+  - `1000`
 
 ### Bitget native
 
@@ -743,7 +756,8 @@ Wichtige Regeln:
 - `mexc` ist aktuell ein expliziter Fall fuer `recycle-on-unsubscribe`, weil `UnWatchTrades` in der verwendeten CCXT-Pro-Version reproduzierbar fehlschlaegt
 - `kucoin` Spot-Trades verwenden echten Batch-Unwatch; Orderbook-Unwatch bleibt bis zu einem eigenen Verifikationslauf konservativ
 - `htx`/`huobi` Trades und `woo` Trades laufen auf echtem `UnWatchTrades`; Laufzeitfehler werden abgefangen und fallen auf Fallback zurueck
-- `bybit` CCXT `swap`-Orderbooks laufen aktuell bewusst ueber den Single-Watcher-Pfad (`watchOrderBook`) statt `watchOrderBookForSymbols`, da der Batch-Pfad in der gepinnten CCXT-Pro-Version fuer `swap` stallen kann
+- `bybit` CCXT-Orderbooks laufen aktuell konservativ auf Recycle-on-Unsubscribe
+- `bybit` CCXT `swap`-Orderbooks laufen zudem bewusst ueber den Single-Watcher-Pfad (`watchOrderBook`) statt `watchOrderBookForSymbols`, da der Batch-Pfad in der gepinnten CCXT-Pro-Version fuer `swap` stallen kann
 
 ## 14. Baseline- und Replay-Betrieb
 
@@ -872,6 +886,10 @@ Pflichtfelder je Aktion pruefen:
   - `exchange`
   - `symbols`
   - `market_type`
+
+Sonderfall:
+
+- `subscribe_all` ist nicht unterstuetzt; stattdessen `subscribe_bulk` verwenden
 
 ### CCXT laeuft in REST-Limits
 

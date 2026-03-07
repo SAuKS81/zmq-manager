@@ -37,7 +37,7 @@ func main() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	log.Println("Starte Bybit-Daten-Broker...")
+	log.Println("Starte Marktdaten-Broker...")
 
 	var clientMgr *broker.ClientManager
 	subMgr := broker.NewSubscriptionManager(nil)

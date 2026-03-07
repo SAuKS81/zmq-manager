@@ -41,3 +41,33 @@ func TestCapabilitiesCatalogIncludesWaveOneExchanges(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilitiesCatalogIncludesUpdatedBybitDepths(t *testing.T) {
+	bybitNative, ok := capabilityForExchange("bybit_native")
+	if !ok {
+		t.Fatal("expected bybit_native capability entry")
+	}
+
+	want := []int{1, 50, 200, 1000}
+	if len(bybitNative.OrderBookDepths) != len(want) {
+		t.Fatalf("unexpected bybit depth count: %+v", bybitNative.OrderBookDepths)
+	}
+	for i, depth := range want {
+		if bybitNative.OrderBookDepths[i] != depth {
+			t.Fatalf("expected bybit depth %d at index %d, got %+v", depth, i, bybitNative.OrderBookDepths)
+		}
+	}
+}
+
+func TestCapabilitiesCatalogDisablesBybitCCXTOrderBookUnwatch(t *testing.T) {
+	bybit, ok := capabilityForExchange("bybit")
+	if !ok {
+		t.Fatal("expected bybit capability entry")
+	}
+	if bybit.SupportsOrderBookUnwatch {
+		t.Fatalf("expected bybit ccxt orderbook unwatch disabled, got %+v", bybit)
+	}
+	if bybit.SupportsOrderBookBatchUnwatch {
+		t.Fatalf("expected bybit ccxt batch orderbook unwatch disabled, got %+v", bybit)
+	}
+}
