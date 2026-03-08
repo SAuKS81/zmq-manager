@@ -114,6 +114,7 @@ type incomingClientMessage struct {
 	Scope          string   `json:"scope"`
 	RequestID      string   `json:"request_id"`
 	ClientRole     string   `json:"client_role"`
+	Sticky         bool     `json:"sticky"`
 	Exchange       string   `json:"exchange"`
 	Symbol         string   `json:"symbol"`
 	Symbols        []string `json:"symbols"`
@@ -609,8 +610,8 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID})
 		return
 	case "subscribe_bulk":
-		if cm.isControlClient(clientIDStr) {
-			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients cannot subscribe to market data")
+		if cm.isControlClient(clientIDStr) && !req.Sticky {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients can only subscribe to market data with sticky=true")
 			return
 		}
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
@@ -630,12 +631,12 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
 		}
 		return
 	case "unsubscribe_bulk":
-		if cm.isControlClient(clientIDStr) {
-			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients cannot unsubscribe market data because they do not own feed subscriptions")
+		if cm.isControlClient(clientIDStr) && !req.Sticky {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients can only unsubscribe market data with sticky=true")
 			return
 		}
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
@@ -655,15 +656,15 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
 		}
 		return
 	case "subscribe_all":
 		cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_all is not supported; use subscribe_bulk")
 		return
 	case "subscribe", "unsubscribe":
-		if cm.isControlClient(clientIDStr) {
-			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients cannot subscribe to market data")
+		if cm.isControlClient(clientIDStr) && !req.Sticky {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients can only manage market data with sticky=true")
 			return
 		}
 		if req.Exchange == "" || req.MarketType == "" || req.Symbol == "" {
@@ -681,7 +682,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		return
 	}
 
-	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
 }
 
 func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {

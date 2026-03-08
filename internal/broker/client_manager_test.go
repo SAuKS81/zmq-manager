@@ -178,6 +178,32 @@ func TestHandleMessageControlClientRejectsSubscribeBulk(t *testing.T) {
 	}
 }
 
+func TestHandleMessageControlClientAllowsStickySubscribeBulk(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleControl},
+		},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	payload := []byte(`{"client_role":"control","action":"subscribe_bulk","sticky":true,"request_id":"deploy-123","exchange":"bybit_native","symbols":["BTCUSDT"],"market_type":"spot","data_type":"orderbooks"}`)
+	cm.handleMessage([]byte("client-1"), payload)
+
+	reqs := drainRequests(reqCh)
+	if len(reqs) != 2 {
+		t.Fatalf("expected deploy register plus subscribe, got %+v", reqs)
+	}
+	if reqs[1].Action != "subscribe" || !reqs[1].Sticky {
+		t.Fatalf("expected sticky subscribe request, got %+v", reqs[1])
+	}
+	if got := len(cm.sendChP1); got != 0 {
+		t.Fatalf("expected no local error response, got %d", got)
+	}
+}
+
 func TestHandleMessageConcurrentClientStateAccess(t *testing.T) {
 	reqCh := make(chan *shared_types.ClientRequest, 10)
 	cm := &ClientManager{

@@ -30,6 +30,8 @@ type SubscriptionManager struct {
 	orderBookSubscriptionDepths    map[string]int
 	tradeSubscriptionEncodings     map[string]string
 	orderBookSubscriptionEncodings map[string]string
+	stickyTradeSubscriptions       map[string]bool
+	stickyOrderBookSubscriptions   map[string]bool
 	exchangeRegistry               map[string]exchanges.Exchange
 	wildcardSubscribers            map[string]map[string]bool
 	wildcardRoutes                 map[string]string
@@ -56,6 +58,8 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 		orderBookSubscriptionDepths:    make(map[string]int),
 		tradeSubscriptionEncodings:     make(map[string]string),
 		orderBookSubscriptionEncodings: make(map[string]string),
+		stickyTradeSubscriptions:       make(map[string]bool),
+		stickyOrderBookSubscriptions:   make(map[string]bool),
 		exchangeRegistry:               make(map[string]exchanges.Exchange),
 		wildcardSubscribers:            make(map[string]map[string]bool),
 		wildcardRoutes:                 make(map[string]string),
@@ -379,6 +383,12 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if sm.orderBookSubscriptionDepths == nil {
 		sm.orderBookSubscriptionDepths = make(map[string]int)
 	}
+	if sm.stickyTradeSubscriptions == nil {
+		sm.stickyTradeSubscriptions = make(map[string]bool)
+	}
+	if sm.stickyOrderBookSubscriptions == nil {
+		sm.stickyOrderBookSubscriptions = make(map[string]bool)
+	}
 	if sm.wildcardRoutes == nil {
 		sm.wildcardRoutes = make(map[string]string)
 	}
@@ -468,6 +478,19 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			encMap[routeKey] = req.Encoding
 		}
 		if req.DataType == "orderbooks" {
+			if req.Sticky {
+				sm.stickyOrderBookSubscriptions[routeKey] = true
+			} else {
+				delete(sm.stickyOrderBookSubscriptions, routeKey)
+			}
+		} else {
+			if req.Sticky {
+				sm.stickyTradeSubscriptions[routeKey] = true
+			} else {
+				delete(sm.stickyTradeSubscriptions, routeKey)
+			}
+		}
+		if req.DataType == "orderbooks" {
 			sm.orderBookSubscriptionRoutes[routeKey] = req.Exchange
 			if req.OrderBookDepth > 0 {
 				sm.orderBookSubscriptionDepths[routeKey] = req.OrderBookDepth
@@ -524,8 +547,10 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		if req.DataType == "orderbooks" {
 			delete(sm.orderBookSubscriptionRoutes, routeKey)
 			delete(sm.orderBookSubscriptionDepths, routeKey)
+			delete(sm.stickyOrderBookSubscriptions, routeKey)
 		} else {
 			delete(sm.tradeSubscriptionRoutes, routeKey)
+			delete(sm.stickyTradeSubscriptions, routeKey)
 		}
 		delete(encMap, routeKey)
 		sm.noteRequestContext(opKey, req, "unsubscribe")
@@ -681,11 +706,15 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 	toUnsub := make([]unsubReq, 0, 256)
 
 	for subID, clients := range sm.tradeSubscriptions {
-		delete(clients, clientID)
 		routeKey := getClientRouteKey(clientID, subID)
+		if sm.stickyTradeSubscriptions[routeKey] {
+			continue
+		}
+		delete(clients, clientID)
 		exactExchange := sm.tradeSubscriptionRoutes[routeKey]
 		delete(sm.tradeSubscriptionRoutes, routeKey)
 		delete(sm.tradeSubscriptionEncodings, routeKey)
+		delete(sm.stickyTradeSubscriptions, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {
@@ -704,12 +733,16 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 	}
 
 	for subID, clients := range sm.orderBookSubscriptions {
-		delete(clients, clientID)
 		routeKey := getClientRouteKey(clientID, subID)
+		if sm.stickyOrderBookSubscriptions[routeKey] {
+			continue
+		}
+		delete(clients, clientID)
 		exactExchange := sm.orderBookSubscriptionRoutes[routeKey]
 		delete(sm.orderBookSubscriptionRoutes, routeKey)
 		delete(sm.orderBookSubscriptionDepths, routeKey)
 		delete(sm.orderBookSubscriptionEncodings, routeKey)
+		delete(sm.stickyOrderBookSubscriptions, routeKey)
 		if len(clients) == 0 {
 			exchange, marketType, symbol, ok := parseSubscriptionID(subID)
 			if ok {

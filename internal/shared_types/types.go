@@ -41,6 +41,7 @@ type ClientRequest struct {
 	Action         string `json:"action"`
 	Scope          string `json:"scope,omitempty"`
 	RequestID      string `json:"request_id,omitempty"`
+	Sticky         bool   `json:"sticky,omitempty"`
 	Exchange       string `json:"exchange"`
 	Symbol         string `json:"symbol"`
 	MarketType     string `json:"market_type"`
@@ -54,6 +55,7 @@ type ClientRequest struct {
 type BulkClientRequest struct {
 	Action         string   `json:"action"`
 	RequestID      string   `json:"request_id,omitempty"`
+	Sticky         bool     `json:"sticky,omitempty"`
 	Exchange       string   `json:"exchange"`
 	Symbols        []string `json:"symbols"`
 	MarketType     string   `json:"market_type"`

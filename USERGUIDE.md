@@ -122,9 +122,10 @@ Optionale Client-Rolle:
   - darf Trades und Orderbooks subscriben
 - `client_role: "control"`:
   - fuer Web-/Admin-/Command-Bridge-Clients
-  - darf keine Market-Data subscriben
-  - erhaelt nur Control-/Snapshot-/Statusverkehr
-  - wenn ein bestehender Feed-Client auf `control` umgestellt wird, raeumt der Broker seine bisherigen Feed-Subscriptions automatisch auf
+  - erhaelt immer nur Control-/Snapshot-/Statusverkehr
+  - darf normale Market-Data nicht konsumieren
+  - darf Market-Data nur dann verwalten, wenn `sticky: true` gesetzt ist
+  - wenn ein bestehender Feed-Client auf `control` umgestellt wird, raeumt der Broker seine bisherigen nicht-sticky Feed-Subscriptions automatisch auf
 
 Optional kann ein Client pro Operator-Request eine `request_id` mitsenden.
 Der Broker fuehrt diese `request_id` in:
@@ -177,6 +178,30 @@ Beispiel fuer einen reinen Control-Client:
   "request_id": "ui-snapshot-1"
 }
 ```
+
+Beispiel fuer einen sticky/headless Control-Deploy:
+
+```json
+{
+  "client_role": "control",
+  "action": "subscribe_bulk",
+  "sticky": true,
+  "request_id": "deploy-123",
+  "exchange": "bybit_native",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "market_type": "swap",
+  "data_type": "orderbooks",
+  "depth": 1
+}
+```
+
+Bedeutung:
+
+- der Control-Client hinterlegt den gewuenschten Stream-Zustand im Broker
+- der Broker baut die Subscription intern auf
+- der anfordernde Control-Client bekommt trotzdem keine Trades/Orderbooks zugestellt
+- die Subscription bleibt auch ueber Disconnects dieses Control-Clients bestehen
+- entfernt wird sie nur per explizitem `unsubscribe` oder `unsubscribe_bulk` mit `sticky: true`
 
 ### 5.1 Einzel-Subscribe
 

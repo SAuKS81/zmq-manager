@@ -98,6 +98,56 @@ func TestDisconnectCleansAllSubscriptionMaps(t *testing.T) {
 	}
 }
 
+func TestDisconnectKeepsStickySubscriptions(t *testing.T) {
+	clientID := []byte("client-a")
+	rec := &recordingExchange{}
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		stickyTradeSubscriptions:       make(map[string]bool),
+		stickyOrderBookSubscriptions:   make(map[string]bool),
+		wildcardSubscribers:            make(map[string]map[string]bool),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": rec,
+			"ccxt_generic":   rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:   clientID,
+		Action:     "subscribe",
+		Sticky:     true,
+		Exchange:   "binance_native",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
+	})
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID: clientID,
+		Action:   "disconnect",
+	})
+
+	subID := "binance-spot-BTC/USDT"
+	if !sm.tradeSubscriptions[subID][string(clientID)] {
+		t.Fatalf("expected sticky trade subscription to survive disconnect")
+	}
+	routeKey := getClientRouteKey(string(clientID), subID)
+	if !sm.stickyTradeSubscriptions[routeKey] {
+		t.Fatalf("expected sticky route marker to survive disconnect")
+	}
+	if len(rec.reqs) != 1 {
+		t.Fatalf("expected no unsubscribe to exchange on disconnect, got %+v", rec.reqs)
+	}
+}
+
 func TestDisconnectCleanupFlappingLeavesNoGhostSubscribers(t *testing.T) {
 	sm := &SubscriptionManager{
 		tradeSubscriptions:     make(map[string]map[string]bool),
