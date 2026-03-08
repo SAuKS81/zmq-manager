@@ -27,6 +27,11 @@ const (
 	p2LatestMax    = 200000
 )
 
+const (
+	clientRoleFeed    = "feed"
+	clientRoleControl = "control"
+)
+
 var (
 	headerTradeBinFrame = []byte(HeaderTradeBin)
 	headerOBBinFrame    = []byte(HeaderOBBin)
@@ -52,6 +57,7 @@ type Client struct {
 	ID              []byte
 	LastPong        time.Time
 	Encoding        string
+	Role            string
 	SlowQueueDrops  int
 	LastQueueDropAt time.Time
 }
@@ -107,6 +113,7 @@ type incomingClientMessage struct {
 	Action         string   `json:"action"`
 	Scope          string   `json:"scope"`
 	RequestID      string   `json:"request_id"`
+	ClientRole     string   `json:"client_role"`
 	Exchange       string   `json:"exchange"`
 	Symbol         string   `json:"symbol"`
 	Symbols        []string `json:"symbols"`
@@ -178,7 +185,7 @@ func (cm *ClientManager) readLoop() {
 		cm.clientsMu.Lock()
 		if _, ok := cm.clients[clientIDStr]; !ok {
 			log.Printf("[CLIENT-MANAGER] Neuer Client verbunden: %s", clientIDStr)
-			cm.clients[clientIDStr] = &Client{ID: append([]byte(nil), clientID...), LastPong: time.Now(), Encoding: "json"}
+			cm.clients[clientIDStr] = &Client{ID: append([]byte(nil), clientID...), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed}
 		}
 		cm.clientsMu.Unlock()
 
@@ -245,7 +252,7 @@ func (cm *ClientManager) distributeTradeBatch(clientIDs [][]byte, trades []*shar
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
 		encoding, exists := cm.clientEncoding(clientIDStr)
-		if !exists {
+		if !exists || cm.isControlClient(clientIDStr) {
 			continue
 		}
 
@@ -279,7 +286,7 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
 		encoding, exists := cm.clientEncoding(clientIDStr)
-		if !exists {
+		if !exists || cm.isControlClient(clientIDStr) {
 			continue
 		}
 
@@ -550,6 +557,29 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		return
 	}
 
+	roleChangedToControl := false
+	if req.ClientRole != "" {
+		role, ok := normalizeClientRole(req.ClientRole)
+		if !ok {
+			cm.sendClientError(clientID, req.RequestID, "invalid_client_role", "client_role must be one of: feed, control")
+			return
+		}
+		cm.clientsMu.Lock()
+		if client, exists := cm.clients[clientIDStr]; exists {
+			prevRole := client.Role
+			if prevRole == "" {
+				prevRole = clientRoleFeed
+			}
+			client.Role = role
+			roleChangedToControl = prevRole != role && role == clientRoleControl
+		}
+		cm.clientsMu.Unlock()
+		log.Printf("[CLIENT-MANAGER] Client %s setzt Rolle auf: %s", clientIDStr, role)
+		if roleChangedToControl {
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect"})
+		}
+	}
+
 	if req.Encoding != "" {
 		encoding, ok := normalizeClientEncoding(req.Encoding)
 		if !ok {
@@ -579,6 +609,10 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID})
 		return
 	case "subscribe_bulk":
+		if cm.isControlClient(clientIDStr) {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients cannot subscribe to market data")
+			return
+		}
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
 			return
@@ -600,6 +634,10 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		}
 		return
 	case "unsubscribe_bulk":
+		if cm.isControlClient(clientIDStr) {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients cannot unsubscribe market data because they do not own feed subscriptions")
+			return
+		}
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "unsubscribe_bulk requires exchange, market_type and symbols")
 			return
@@ -624,6 +662,10 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_all is not supported; use subscribe_bulk")
 		return
 	case "subscribe", "unsubscribe":
+		if cm.isControlClient(clientIDStr) {
+			cm.sendClientError(clientID, req.RequestID, "invalid_request", "control clients cannot subscribe to market data")
+			return
+		}
 		if req.Exchange == "" || req.MarketType == "" || req.Symbol == "" {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe/unsubscribe requires exchange, symbol and market_type")
 			return
@@ -675,6 +717,25 @@ func normalizeClientEncoding(input string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func normalizeClientRole(input string) (string, bool) {
+	switch strings.ToLower(input) {
+	case clientRoleFeed:
+		return clientRoleFeed, true
+	case clientRoleControl, "control_only":
+		return clientRoleControl, true
+	default:
+		return "", false
+	}
+}
+
+func (cm *ClientManager) isControlClient(clientID string) bool {
+	cm.clientsMu.RLock()
+	client, exists := cm.clients[clientID]
+	isControl := exists && client != nil && client.Role == clientRoleControl
+	cm.clientsMu.RUnlock()
+	return isControl
 }
 
 func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) bool {

@@ -111,7 +111,7 @@ func TestHandleMessageSubscribeAllRejected(t *testing.T) {
 func TestHandleMessageEncodingUpdate(t *testing.T) {
 	reqCh := make(chan *shared_types.ClientRequest, 10)
 	cm := &ClientManager{
-		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
@@ -128,10 +128,60 @@ func TestHandleMessageEncodingUpdate(t *testing.T) {
 	}
 }
 
+func TestHandleMessageControlRolePersistsAndCleansUpSubscriptions(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed},
+		},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	cm.handleMessage([]byte("client-1"), []byte(`{"client_role":"control","action":"get_runtime_snapshot","request_id":"snap-1"}`))
+
+	reqs := drainRequests(reqCh)
+	if len(reqs) != 2 {
+		t.Fatalf("expected cleanup disconnect plus runtime snapshot, got %+v", reqs)
+	}
+	if reqs[0].Action != "disconnect" {
+		t.Fatalf("expected first request to cleanup subscriptions, got %+v", reqs[0])
+	}
+	if reqs[1].Action != "get_runtime_snapshot" || reqs[1].RequestID != "snap-1" {
+		t.Fatalf("expected runtime snapshot request, got %+v", reqs[1])
+	}
+	if role := cm.clients["client-1"].Role; role != clientRoleControl {
+		t.Fatalf("expected persisted control role, got %q", role)
+	}
+}
+
+func TestHandleMessageControlClientRejectsSubscribeBulk(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleControl},
+		},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"bybit_native","symbols":["BTCUSDT"],"market_type":"spot","data_type":"orderbooks"}`)
+	cm.handleMessage([]byte("client-1"), payload)
+
+	if got := len(drainRequests(reqCh)); got != 0 {
+		t.Fatalf("expected no forwarded requests for control client subscribe, got %d", got)
+	}
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected one error response, got %d", got)
+	}
+}
+
 func TestHandleMessageConcurrentClientStateAccess(t *testing.T) {
 	reqCh := make(chan *shared_types.ClientRequest, 10)
 	cm := &ClientManager{
-		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
@@ -198,7 +248,7 @@ func TestEnqueueSocketSendDoesNotBlockWhenChannelFull(t *testing.T) {
 func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
 	cm := &ClientManager{
 		clients: map[string]*Client{
-			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"},
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed},
 		},
 		sendChP1: make(chan outboundEnvelope, 4),
 		p2Latest: make(map[p2LatestKey]outboundEnvelope),
@@ -216,6 +266,27 @@ func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
 	}
 	if gotP2 := len(cm.p2Latest); gotP2 != 0 {
 		t.Fatalf("expected no p2 backlog, got %d", gotP2)
+	}
+}
+
+func TestDistributeTradeBatchSkipsControlClients(t *testing.T) {
+	cm := &ClientManager{
+		clients: map[string]*Client{
+			"feed-1":    {ID: []byte("feed-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed},
+			"control-1": {ID: []byte("control-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleControl},
+		},
+		sendChP1: make(chan outboundEnvelope, 4),
+		p2Latest: make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	trades := []*shared_types.TradeUpdate{
+		{Exchange: "bybit", Symbol: "BTCUSDT", MarketType: "spot", Price: 1, Amount: 1},
+	}
+
+	cm.distributeTradeBatch([][]byte{[]byte("feed-1"), []byte("control-1")}, trades)
+
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected only feed client to receive trade batch, got %d queue items", got)
 	}
 }
 

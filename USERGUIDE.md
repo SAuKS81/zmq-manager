@@ -115,6 +115,17 @@ Unterstuetzte Request-Aktionen:
 - `get_runtime_snapshot`
 - `get_capabilities`
 
+Optionale Client-Rolle:
+
+- `client_role: "feed"`:
+  - Default
+  - darf Trades und Orderbooks subscriben
+- `client_role: "control"`:
+  - fuer Web-/Admin-/Command-Bridge-Clients
+  - darf keine Market-Data subscriben
+  - erhaelt nur Control-/Snapshot-/Statusverkehr
+  - wenn ein bestehender Feed-Client auf `control` umgestellt wird, raeumt der Broker seine bisherigen Feed-Subscriptions automatisch auf
+
 Optional kann ein Client pro Operator-Request eine `request_id` mitsenden.
 Der Broker fuehrt diese `request_id` in:
 
@@ -156,6 +167,16 @@ Der Broker verwendet diese `request_id` fuer:
 - `stream_*_acked`
 - `stream_*_failed`
 - `deploy_batch_summary`
+
+Beispiel fuer einen reinen Control-Client:
+
+```json
+{
+  "client_role": "control",
+  "action": "get_runtime_snapshot",
+  "request_id": "ui-snapshot-1"
+}
+```
 
 ### 5.1 Einzel-Subscribe
 
