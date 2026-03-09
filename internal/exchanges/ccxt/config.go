@@ -24,6 +24,7 @@ type ExchangeConfig struct {
 	UseForSymbols                 bool
 	BatchSize                     int
 	SymbolsPerShard               int
+	OneTradeBatchPerShard         bool
 	SubscribePause                time.Duration
 	BatchSubscribePause           time.Duration
 	NewShardPause                 time.Duration
@@ -31,6 +32,7 @@ type ExchangeConfig struct {
 	SupportsTradeBatchUnwatch     bool
 	SupportsOrderBookUnwatch      bool
 	SupportsOrderBookBatchUnwatch bool
+	RecycleExchangeOnTradeChange  bool
 }
 
 // ExchangePolicySet haelt die Konfiguration pro Markt-Typ.
@@ -177,14 +179,16 @@ var exchangePolicies = map[string]ExchangePolicySet{
 	},
 	"kucoin": {
 		Spot: ExchangeConfig{
-			Enabled:                   true,
-			UseForSymbols:             true,
-			BatchSize:                 100,
-			SymbolsPerShard:           200,
-			SubscribePause:            500 * time.Millisecond,
-			NewShardPause:             1100 * time.Millisecond,
-			SupportsTradeUnwatch:      true,
-			SupportsTradeBatchUnwatch: true,
+			Enabled:                      true,
+			UseForSymbols:                true,
+			BatchSize:                    100,
+			SymbolsPerShard:              200,
+			OneTradeBatchPerShard:        true,
+			SubscribePause:               500 * time.Millisecond,
+			NewShardPause:                1100 * time.Millisecond,
+			SupportsTradeUnwatch:         true,
+			SupportsTradeBatchUnwatch:    false,
+			RecycleExchangeOnTradeChange: true,
 		},
 		Swap: ExchangeConfig{
 			Enabled:         false,

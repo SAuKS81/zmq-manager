@@ -23,6 +23,7 @@ type BatchOrderBookShardWorker struct {
 	commandCh     chan ShardCommand
 	stopCh        chan struct{}
 	dataCh        chan<- *shared_types.OrderBookUpdate
+	statusCh      chan<- *shared_types.StreamStatusEvent
 	wg            *sync.WaitGroup
 	mu            sync.Mutex
 	activeSymbols map[string]int
@@ -30,7 +31,7 @@ type BatchOrderBookShardWorker struct {
 	cancelWorkers context.CancelFunc
 }
 
-func NewBatchOrderBookShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *BatchOrderBookShardWorker {
+func NewBatchOrderBookShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchOrderBookShardWorker {
 	exchange := createCCXTExchange(exchangeName, marketType)
 	if exchange == nil {
 		log.Printf("[CCXT-BATCH-OB-FATAL] Konnte Exchange-Instanz fuer %s nicht erstellen", exchangeName)
@@ -43,6 +44,7 @@ func NewBatchOrderBookShardWorker(exchangeName, marketType string, config Exchan
 		commandCh:     make(chan ShardCommand, 500),
 		stopCh:        stopCh,
 		dataCh:        dataCh,
+		statusCh:      statusCh,
 		wg:            wg,
 		activeSymbols: make(map[string]int),
 		exchange:      exchange,
@@ -126,6 +128,16 @@ drain:
 		if sw.config.SupportsOrderBookBatchUnwatch {
 			if _, err := sw.safeUnWatchOrderBookForSymbols(symbolsToUnwatch); err != nil {
 				log.Printf("[CCXT-BATCH-OB-WARN] UnWatchOrderBookForSymbols(%d) fehlgeschlagen (%s/%s): %v. Fallback auf Shard-Recycle.", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_update_failed",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "orderbooks",
+					Symbols:    append([]string(nil), symbolsToUnwatch...),
+					Status:     "failed",
+					Reason:     "unwatch_orderbook_for_symbols_failed",
+					Message:    err.Error(),
+				})
 				sw.recycleExchange()
 			}
 		} else {
@@ -164,6 +176,8 @@ func (sw *BatchOrderBookShardWorker) recycleExchange() {
 
 func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []string) {
 	currentBatch := append([]string(nil), symbolsBatch...)
+	attempt := 0
+	reconnecting := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -174,8 +188,20 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 				if ctx.Err() != nil {
 					return
 				}
+				attempt++
 				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
 					log.Printf("[CCXT-BATCH-OB-WARN] Entferne ungueltiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
+					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+						Type:       "stream_update_failed",
+						Exchange:   sw.exchangeName,
+						MarketType: sw.marketType,
+						DataType:   "orderbooks",
+						Symbol:     missingSymbol,
+						Status:     "failed",
+						Reason:     "missing_market_symbol",
+						Message:    err.Error(),
+						Attempt:    attempt,
+					})
 					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
 					sw.mu.Lock()
 					delete(sw.activeSymbols, missingSymbol)
@@ -186,9 +212,34 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 					}
 					continue
 				}
-				log.Printf("[CCXT-BATCH-OB-ERROR] watchOrderBookForSymbols fuer Batch (%d Symbole) fehlgeschlagen: %v. Warte 5s.", len(currentBatch), err)
+				log.Printf("[CCXT-BATCH-OB-ERROR] exchange=%s market_type=%s data_type=orderbooks batch_size=%d symbols=%s attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err)
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_reconnecting",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "orderbooks",
+					Symbols:    append([]string(nil), currentBatch...),
+					Status:     "reconnecting",
+					Reason:     "watch_orderbook_for_symbols_failed",
+					Message:    err.Error(),
+					Attempt:    attempt,
+				})
+				reconnecting = true
 				time.Sleep(5 * time.Second)
 				continue
+			}
+			if reconnecting {
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_restored",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "orderbooks",
+					Symbols:    append([]string(nil), currentBatch...),
+					Status:     "running",
+					Attempt:    attempt,
+				})
+				attempt = 0
+				reconnecting = false
 			}
 
 			ingestNow := time.Now()

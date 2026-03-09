@@ -23,6 +23,7 @@ type BatchShardWorker struct {
 	commandCh     chan ShardCommand
 	stopCh        chan struct{}
 	dataCh        chan<- *shared_types.TradeUpdate
+	statusCh      chan<- *shared_types.StreamStatusEvent
 	wg            *sync.WaitGroup
 	mu            sync.Mutex
 	activeSymbols map[string]bool
@@ -30,7 +31,7 @@ type BatchShardWorker struct {
 	cancelWorkers context.CancelFunc
 }
 
-func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, wg *sync.WaitGroup) *BatchShardWorker {
+func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchShardWorker {
 	exchange := createCCXTExchange(exchangeName, marketType)
 	if exchange == nil {
 		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange-Instanz fuer %s nicht erstellen", exchangeName)
@@ -43,6 +44,7 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 		commandCh:     make(chan ShardCommand, 500),
 		stopCh:        stopCh,
 		dataCh:        dataCh,
+		statusCh:      statusCh,
 		wg:            wg,
 		activeSymbols: make(map[string]bool),
 		exchange:      exchange,
@@ -108,8 +110,10 @@ drain:
 		return
 	}
 
+	hadActiveWorkers := sw.cancelWorkers != nil
 	if sw.cancelWorkers != nil {
 		sw.cancelWorkers()
+		sw.cancelWorkers = nil
 	}
 
 	var symbolsToWatch []string
@@ -118,7 +122,14 @@ drain:
 	}
 	sw.mu.Unlock()
 
-	if len(unsubscribeSymbols) > 0 {
+	recycledForListChange := false
+	if hadActiveWorkers && sw.config.RecycleExchangeOnTradeChange {
+		log.Printf("[CCXT-BATCH-SHARD-INFO] Recycle Exchange nach Listenwechsel (%s/%s), um parallele Trade-Batches auf derselben Instanz zu vermeiden.", sw.exchangeName, sw.marketType)
+		sw.recycleExchange()
+		recycledForListChange = true
+	}
+
+	if len(unsubscribeSymbols) > 0 && !recycledForListChange {
 		symbolsToUnwatch := make([]string, 0, len(unsubscribeSymbols))
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
@@ -126,6 +137,16 @@ drain:
 		if sw.config.SupportsTradeBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTradesForSymbols") {
 			if _, err := sw.safeUnWatchTradesForSymbols(symbolsToUnwatch); err != nil {
 				log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v. Fallback auf Shard-Recycle.", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_update_failed",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "trades",
+					Symbols:    append([]string(nil), symbolsToUnwatch...),
+					Status:     "failed",
+					Reason:     "unwatch_trades_for_symbols_failed",
+					Message:    err.Error(),
+				})
 				sw.recycleExchange()
 			}
 		} else {
@@ -162,6 +183,8 @@ func (sw *BatchShardWorker) recycleExchange() {
 
 func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []string) {
 	currentBatch := append([]string(nil), symbolsBatch...)
+	attempt := 0
+	reconnecting := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -172,8 +195,20 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 				if ctx.Err() != nil {
 					return
 				}
+				attempt++
 				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
 					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne ungueltiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
+					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+						Type:       "stream_update_failed",
+						Exchange:   sw.exchangeName,
+						MarketType: sw.marketType,
+						DataType:   "trades",
+						Symbol:     missingSymbol,
+						Status:     "failed",
+						Reason:     "missing_market_symbol",
+						Message:    err.Error(),
+						Attempt:    attempt,
+					})
 					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
 					sw.mu.Lock()
 					delete(sw.activeSymbols, missingSymbol)
@@ -184,9 +219,34 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					}
 					continue
 				}
-				log.Printf("[CCXT-BATCH-SHARD-ERROR] watchTradesForSymbols fehlgeschlagen: %v. Warte 5s.", err)
+				log.Printf("[CCXT-BATCH-SHARD-ERROR] exchange=%s market_type=%s data_type=trades batch_size=%d symbols=%s attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err)
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_reconnecting",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "trades",
+					Symbols:    append([]string(nil), currentBatch...),
+					Status:     "reconnecting",
+					Reason:     "watch_trades_for_symbols_failed",
+					Message:    err.Error(),
+					Attempt:    attempt,
+				})
+				reconnecting = true
 				time.Sleep(5 * time.Second)
 				continue
+			}
+			if reconnecting {
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_restored",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "trades",
+					Symbols:    append([]string(nil), currentBatch...),
+					Status:     "running",
+					Attempt:    attempt,
+				})
+				attempt = 0
+				reconnecting = false
 			}
 			if len(trades) == 0 {
 				time.Sleep(100 * time.Millisecond)

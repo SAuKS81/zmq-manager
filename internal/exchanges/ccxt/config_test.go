@@ -82,3 +82,20 @@ func TestGetConfigDisablesBybitOrderBookUnwatch(t *testing.T) {
 		t.Fatalf("expected bybit swap orderbook unwatch to stay disabled, got %#v", swapCfg)
 	}
 }
+
+func TestGetConfigHardensKucoinTradeBatchLifecycle(t *testing.T) {
+	cfg := getConfig("kucoin", "spot")
+
+	if !cfg.UseForSymbols {
+		t.Fatal("expected kucoin spot to stay in batch mode")
+	}
+	if !cfg.OneTradeBatchPerShard {
+		t.Fatal("expected kucoin spot to enforce one trade batch per shard")
+	}
+	if cfg.SupportsTradeBatchUnwatch {
+		t.Fatalf("expected kucoin spot batch unwatch to stay disabled, got %#v", cfg)
+	}
+	if !cfg.RecycleExchangeOnTradeChange {
+		t.Fatalf("expected kucoin spot to recycle exchange on trade list changes, got %#v", cfg)
+	}
+}

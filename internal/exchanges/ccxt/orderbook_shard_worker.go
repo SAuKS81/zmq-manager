@@ -23,6 +23,7 @@ type OrderBookShardWorker struct {
 	commandCh      chan ShardCommand
 	stopCh         chan struct{}
 	dataCh         chan<- *shared_types.OrderBookUpdate
+	statusCh       chan<- *shared_types.StreamStatusEvent
 	wg             *sync.WaitGroup
 	mu             sync.Mutex
 	exchange       ccxtpro.IExchange
@@ -30,7 +31,7 @@ type OrderBookShardWorker struct {
 	activeDepths   map[string]int
 }
 
-func NewOrderBookShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, wg *sync.WaitGroup) *OrderBookShardWorker {
+func NewOrderBookShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *OrderBookShardWorker {
 	return &OrderBookShardWorker{
 		exchangeName:   exchangeName,
 		marketType:     marketType,
@@ -38,6 +39,7 @@ func NewOrderBookShardWorker(exchangeName, marketType string, config ExchangeCon
 		commandCh:      make(chan ShardCommand, 100),
 		stopCh:         stopCh,
 		dataCh:         dataCh,
+		statusCh:       statusCh,
 		wg:             wg,
 		activeWatchers: make(map[string]context.CancelFunc),
 		activeDepths:   make(map[string]int),
@@ -102,6 +104,16 @@ func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
 			if sw.config.SupportsOrderBookUnwatch {
 				if _, err := sw.safeUnWatchOrderBook(symbol); err != nil {
 					log.Printf("[CCXT-OB-SHARD-WARN] UnWatchOrderBook('%s') fehlgeschlagen: %v. Fallback auf Shard-Recycle.", symbol, err)
+					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+						Type:       "stream_update_failed",
+						Exchange:   sw.exchangeName,
+						MarketType: sw.marketType,
+						DataType:   "orderbooks",
+						Symbol:     symbol,
+						Status:     "failed",
+						Reason:     "unwatch_orderbook_failed",
+						Message:    err.Error(),
+					})
 					recycleNeeded = true
 				}
 			} else {
@@ -117,6 +129,8 @@ func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
 }
 
 func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol string, depth int) {
+	attempt := 0
+	reconnecting := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -127,9 +141,35 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 				if ctx.Err() != nil {
 					return
 				}
-				log.Printf("[CCXT-OB-SHARD-ERROR] WatchOrderBook('%s'): %v. Warte 5s.", symbol, err)
+				attempt++
+				log.Printf("[CCXT-OB-SHARD-ERROR] exchange=%s market_type=%s data_type=orderbooks symbol=%s depth=%d attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, symbol, depth, attempt, err)
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_reconnecting",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "orderbooks",
+					Symbol:     symbol,
+					Status:     "reconnecting",
+					Reason:     "watch_orderbook_failed",
+					Message:    err.Error(),
+					Attempt:    attempt,
+				})
+				reconnecting = true
 				time.Sleep(5 * time.Second)
 				continue
+			}
+			if reconnecting {
+				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+					Type:       "stream_restored",
+					Exchange:   sw.exchangeName,
+					MarketType: sw.marketType,
+					DataType:   "orderbooks",
+					Symbol:     symbol,
+					Status:     "running",
+					Attempt:    attempt,
+				})
+				attempt = 0
+				reconnecting = false
 			}
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()

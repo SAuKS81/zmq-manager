@@ -182,7 +182,7 @@ func (rt *runtimeTracker) recordStatusForSymbol(event *shared_types.StreamStatus
 			state.LastError = ""
 			state.LastErrorTS = 0
 		}
-	case "stream_unsubscribe_failed":
+	case "stream_unsubscribe_failed", "stream_subscribe_failed", "stream_update_failed":
 		state.Status = runtimeStatusFailed
 	case "stream_force_closed":
 		state.Status = runtimeStatusStopped

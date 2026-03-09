@@ -15,15 +15,16 @@ import (
 type CCXTExchange struct {
 	mu            sync.Mutex
 	tradeDataCh   chan<- *shared_types.TradeUpdate
-	obDataCh      chan<- *shared_types.OrderBookUpdate // NEU: Kanal für Orderbücher
+	obDataCh      chan<- *shared_types.OrderBookUpdate
+	statusCh      chan<- *shared_types.StreamStatusEvent
 	batchManagers map[string]*ConnectionManager
 }
 
-// GEÄNDERT: Die Signatur des Konstruktors wird um den Orderbuch-Kanal erweitert.
-func NewCCXTExchange(tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate) exchanges.Exchange {
+func NewCCXTExchange(tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
 	return &CCXTExchange{
 		tradeDataCh:   tradeDataCh,
 		obDataCh:      obDataCh,
+		statusCh:      statusCh,
 		batchManagers: make(map[string]*ConnectionManager),
 	}
 }
@@ -34,16 +35,15 @@ func (e *CCXTExchange) HandleRequest(req *shared_types.ClientRequest) {
 
 	config := getConfig(req.Exchange, req.MarketType)
 	if !config.Enabled {
-		log.Printf("[CCXT-ROUTER] Ignoriere Anfrage für deaktivierte Börse/Markt: %s/%s", req.Exchange, req.MarketType)
+		log.Printf("[CCXT-ROUTER] Ignoriere Anfrage fuer deaktivierte Boerse/Markt: %s/%s", req.Exchange, req.MarketType)
 		return
 	}
 
 	managerID := fmt.Sprintf("%s-%s", req.Exchange, req.MarketType)
 	manager, exists := e.batchManagers[managerID]
 	if !exists {
-		log.Printf("[CCXT-ROUTER] Erstelle neuen Connection Manager für %s", managerID)
-		// GEÄNDERT: Der ConnectionManager wird jetzt mit beiden Kanälen erstellt.
-		manager = NewConnectionManager(req.Exchange, req.MarketType, config, e.tradeDataCh, e.obDataCh)
+		log.Printf("[CCXT-ROUTER] Erstelle neuen Connection Manager fuer %s", managerID)
+		manager = NewConnectionManager(req.Exchange, req.MarketType, config, e.tradeDataCh, e.obDataCh, e.statusCh)
 		e.batchManagers[managerID] = manager
 		go manager.Run()
 	}
@@ -57,9 +57,7 @@ func (e *CCXTExchange) HandleRequest(req *shared_types.ClientRequest) {
 	default:
 		return
 	}
-	
-	// GEÄNDERT: Die ManagerCommand enthält jetzt den DataType, damit der
-	// ConnectionManager weiß, welche Art von Worker er verwenden muss.
+
 	manager.commandCh <- ManagerCommand{
 		Action:   managerAction,
 		Symbol:   req.Symbol,
@@ -71,6 +69,7 @@ func (e *CCXTExchange) HandleRequest(req *shared_types.ClientRequest) {
 func (e *CCXTExchange) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
 	var wg sync.WaitGroup
 	log.Println("[CCXT-ROUTER] Stoppe alle Connection Manager...")
 	for _, manager := range e.batchManagers {

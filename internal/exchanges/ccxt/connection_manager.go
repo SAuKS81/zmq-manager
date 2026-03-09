@@ -37,6 +37,7 @@ type ConnectionManager struct {
 
 	tradeDataCh chan<- *shared_types.TradeUpdate
 	obDataCh    chan<- *shared_types.OrderBookUpdate
+	statusCh    chan<- *shared_types.StreamStatusEvent
 
 	tradeShards        []IShardWorker
 	symbolToTradeShard map[string]IShardWorker
@@ -53,7 +54,7 @@ type ConnectionManager struct {
 	runDone  chan struct{}
 }
 
-func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate) *ConnectionManager {
+func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) *ConnectionManager {
 	return &ConnectionManager{
 		exchangeName:       exchangeName,
 		marketType:         marketType,
@@ -62,6 +63,7 @@ func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig
 		stopCh:             make(chan struct{}),
 		tradeDataCh:        tradeDataCh,
 		obDataCh:           obDataCh,
+		statusCh:           statusCh,
 		symbolToTradeShard: make(map[string]IShardWorker),
 		tradeShardLoad:     make(map[IShardWorker]int),
 		symbolToOBShard:    make(map[string]IShardWorker),
@@ -131,6 +133,16 @@ func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
 	return true
 }
 
+func (cm *ConnectionManager) tradeShardCapacity() int {
+	if cm.config.OneTradeBatchPerShard && cm.config.UseForSymbols && cm.config.BatchSize > 0 {
+		return cm.config.BatchSize
+	}
+	if cm.config.SymbolsPerShard > 0 {
+		return cm.config.SymbolsPerShard
+	}
+	return 1
+}
+
 // processTradeCommands ist korrekt und bleibt unverändert
 func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 	symbolsToAdd := make(map[string]int)
@@ -148,11 +160,12 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 	if len(symbolsToAdd) == 0 {
 		return
 	}
+	shardCapacity := cm.tradeShardCapacity()
 	additionsByShard := make(map[IShardWorker]map[string]int)
 	for symbol := range symbolsToAdd {
 		var targetShard IShardWorker
 		for _, shard := range cm.tradeShards {
-			if cm.tradeShardLoad[shard] < cm.config.SymbolsPerShard {
+			if cm.tradeShardLoad[shard] < shardCapacity {
 				targetShard = shard
 				break
 			}
@@ -161,9 +174,9 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 			stopCh := make(chan struct{})
 			var newShard IShardWorker
 			if cm.config.UseForSymbols {
-				newShard = NewBatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, &cm.wg)
+				newShard = NewBatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, cm.statusCh, &cm.wg)
 			} else {
-				newShard = NewSingleWatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, &cm.wg)
+				newShard = NewSingleWatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, cm.statusCh, &cm.wg)
 			}
 			cm.tradeShards = append(cm.tradeShards, newShard)
 			cm.tradeShardLoad[newShard] = 0
@@ -213,7 +226,7 @@ func (cm *ConnectionManager) processSingleOrderBookCommands(cmds []ManagerComman
 		if targetShard == nil {
 			log.Printf("[CCXT-CONN-MANAGER] Erstelle neuen SINGLE OrderBook-Shard für %s", cm.exchangeName)
 			stopCh := make(chan struct{})
-			newShard := NewOrderBookShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.obDataCh, &cm.wg)
+			newShard := NewOrderBookShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.obDataCh, cm.statusCh, &cm.wg)
 			cm.obShards = append(cm.obShards, newShard)
 			cm.obShardLoad[newShard] = 0
 			cm.wg.Add(1)
@@ -271,7 +284,7 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 			log.Printf("[CCXT-CONN-MANAGER] Erstelle neuen BATCH OrderBook-Shard für %s (Limit: %d Symbole)", cm.exchangeName, cm.config.SymbolsPerShard)
 			stopCh := make(chan struct{})
 			// Hier wird der NEUE Batch-Worker erstellt
-			newShard := NewBatchOrderBookShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.obDataCh, &cm.wg)
+			newShard := NewBatchOrderBookShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.obDataCh, cm.statusCh, &cm.wg)
 			cm.obShards = append(cm.obShards, newShard)
 			cm.obShardLoad[newShard] = 0 // Initialisiere die Auslastung
 			cm.wg.Add(1)

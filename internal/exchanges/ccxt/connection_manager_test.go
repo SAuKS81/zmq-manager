@@ -28,6 +28,7 @@ func TestUnsubscribeTradeSymbolsLocked(t *testing.T) {
 		ExchangeConfig{Enabled: true},
 		make(chan *shared_types.TradeUpdate, 1),
 		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
 	)
 
 	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 1)}
@@ -64,6 +65,7 @@ func TestUnsubscribeOrderBookSymbolsLocked(t *testing.T) {
 		ExchangeConfig{Enabled: true},
 		make(chan *shared_types.TradeUpdate, 1),
 		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
 	)
 
 	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 1)}
@@ -110,6 +112,7 @@ func TestConnectionManagerStartStopNoDeadlock(t *testing.T) {
 			cfg,
 			make(chan *shared_types.TradeUpdate, 1),
 			make(chan *shared_types.OrderBookUpdate, 1),
+			make(chan *shared_types.StreamStatusEvent, 1),
 		)
 
 		doneRun := make(chan struct{})
@@ -126,6 +129,27 @@ func TestConnectionManagerStartStopNoDeadlock(t *testing.T) {
 
 		waitOrTimeout(t, &wg, 2*time.Second, "Stop waitgroup timeout on iteration")
 		waitChanOrTimeout(t, doneRun, 2*time.Second, "Run loop did not exit on iteration")
+	}
+}
+
+func TestTradeShardCapacityUsesBatchSizeWhenOnlyOneBatchPerShardIsAllowed(t *testing.T) {
+	cm := NewConnectionManager(
+		"kucoin",
+		"spot",
+		ExchangeConfig{
+			Enabled:               true,
+			UseForSymbols:         true,
+			BatchSize:             100,
+			SymbolsPerShard:       200,
+			OneTradeBatchPerShard: true,
+		},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	if got := cm.tradeShardCapacity(); got != 100 {
+		t.Fatalf("expected trade shard capacity 100, got %d", got)
 	}
 }
 
