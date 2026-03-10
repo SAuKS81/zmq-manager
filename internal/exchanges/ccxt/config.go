@@ -187,8 +187,8 @@ var exchangePolicies = map[string]ExchangePolicySet{
 			SubscribePause:               500 * time.Millisecond,
 			NewShardPause:                1100 * time.Millisecond,
 			SupportsTradeUnwatch:         true,
-			SupportsTradeBatchUnwatch:    false,
-			RecycleExchangeOnTradeChange: true,
+			SupportsTradeBatchUnwatch:    true,
+			RecycleExchangeOnTradeChange: false,
 		},
 		Swap: ExchangeConfig{
 			Enabled:         false,
