@@ -592,7 +592,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			sm.recordDeployBatchResult(req.RequestID, false)
 		}
 	} else {
-		log.Printf("[SUB-MANAGER] FATAL: Kein passender Handler fuer die Anfrage gefunden: Exchange=%s", req.Exchange)
+		log.Printf("[SUB-MANAGER] ERROR: Kein passender Handler fuer die Anfrage gefunden: exchange=%s market_type=%s data_type=%s", req.Exchange, req.MarketType, req.DataType)
 		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
 			Type:       failedEventType,
 			Exchange:   req.Exchange,

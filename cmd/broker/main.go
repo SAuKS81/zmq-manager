@@ -48,6 +48,11 @@ func main() {
 	}()
 
 	log.Println("Starte Marktdaten-Broker...")
+	if broker.CCXTBuildEnabled() {
+		log.Println("[BROKER] CCXT-Support ist in diesem Build aktiviert.")
+	} else {
+		log.Println("[BROKER] CCXT-Support ist in diesem Build deaktiviert. Nur native Handler stehen zur Verfuegung.")
+	}
 
 	var clientMgr *broker.ClientManager
 	subMgr := broker.NewSubscriptionManager(nil)
