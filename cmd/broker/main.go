@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"bybit-watcher/internal/broker"
+	"bybit-watcher/internal/loghub"
 	"bybit-watcher/internal/metrics"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -27,6 +29,14 @@ func main() {
 	}
 	if *pprofMutexFrac > 0 {
 		runtime.SetMutexProfileFraction(*pprofMutexFrac)
+	}
+
+	logCloser, err := configureLogging()
+	if err != nil {
+		log.Printf("[LOGHUB] zentrale Log-Spiegelung deaktiviert: %v", err)
+	}
+	if logCloser != nil {
+		defer logCloser.Close()
 	}
 
 	metrics.Init()
@@ -72,4 +82,14 @@ func sampleQueueMetrics(sm *broker.SubscriptionManager, cm *broker.ClientManager
 		metrics.SetQueueSample("router_send_p1", p1Len, p1Cap)
 		metrics.SetQueueSample("router_send_p2_latest", p2Len, p2Cap)
 	}
+}
+
+func configureLogging() (io.Closer, error) {
+	writer, err := loghub.NewFromEnv()
+	if err != nil || writer == nil {
+		return writer, err
+	}
+
+	log.SetOutput(io.MultiWriter(log.Writer(), writer))
+	return writer, nil
 }
