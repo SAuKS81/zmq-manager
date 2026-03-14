@@ -41,12 +41,14 @@ type ConnectionManager struct {
 	statusCh    chan<- *shared_types.StreamStatusEvent
 
 	tradeShards        []IShardWorker
+	tradeShardStops    map[IShardWorker]chan struct{}
 	symbolToTradeShard map[string]IShardWorker
 	symbolToTradeCache map[string]int
 	tradeShardCache    map[IShardWorker]int
 	tradeShardLoad     map[IShardWorker]int
 
 	obShards        []IShardWorker
+	obShardStops    map[IShardWorker]chan struct{}
 	symbolToOBShard map[string]IShardWorker
 	symbolToOBDepth map[string]int
 	obShardLoad     map[IShardWorker]int
@@ -68,10 +70,12 @@ func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig
 		tradeDataCh:        tradeDataCh,
 		obDataCh:           obDataCh,
 		statusCh:           statusCh,
+		tradeShardStops:    make(map[IShardWorker]chan struct{}),
 		symbolToTradeShard: make(map[string]IShardWorker),
 		symbolToTradeCache: make(map[string]int),
 		tradeShardCache:    make(map[IShardWorker]int),
 		tradeShardLoad:     make(map[IShardWorker]int),
+		obShardStops:       make(map[IShardWorker]chan struct{}),
 		symbolToOBShard:    make(map[string]IShardWorker),
 		symbolToOBDepth:    make(map[string]int),
 		obShardLoad:        make(map[IShardWorker]int),
@@ -194,6 +198,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 				newShard = NewSingleWatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, cm.statusCh, &cm.wg)
 			}
 			cm.tradeShards = append(cm.tradeShards, newShard)
+			cm.tradeShardStops[newShard] = stopCh
 			cm.tradeShardLoad[newShard] = 0
 			cm.tradeShardCache[newShard] = symbolsToAdd[symbol]
 			cm.wg.Add(1)
@@ -252,6 +257,7 @@ func (cm *ConnectionManager) processSingleOrderBookCommands(cmds []ManagerComman
 			stopCh := make(chan struct{})
 			newShard := NewOrderBookShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.obDataCh, cm.statusCh, &cm.wg)
 			cm.obShards = append(cm.obShards, newShard)
+			cm.obShardStops[newShard] = stopCh
 			cm.obShardLoad[newShard] = 0
 			cm.wg.Add(1)
 			go newShard.Run()
@@ -315,6 +321,7 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 			// Hier wird der NEUE Batch-Worker erstellt
 			newShard := NewBatchOrderBookShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.obDataCh, cm.statusCh, &cm.wg)
 			cm.obShards = append(cm.obShards, newShard)
+			cm.obShardStops[newShard] = stopCh
 			cm.obShardLoad[newShard] = 0 // Initialisiere die Auslastung
 			cm.wg.Add(1)
 			go newShard.Run()
@@ -367,6 +374,9 @@ func (cm *ConnectionManager) unsubscribeTradeSymbolsLocked(symbolsToRemove map[s
 	for shard, symbols := range removalsByShard {
 		log.Printf("[CCXT-CONN-MANAGER] Reconfigure trade shard: unsubscribe %d Symbole", len(symbols))
 		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
+		if cm.tradeShardLoad[shard] == 0 {
+			cm.retireTradeShardLocked(shard)
+		}
 	}
 }
 
@@ -395,6 +405,9 @@ func (cm *ConnectionManager) unsubscribeOrderBookSymbolsLocked(symbolsToRemove m
 	for shard, symbols := range removalsByShard {
 		log.Printf("[CCXT-CONN-MANAGER] Reconfigure orderbook shard: unsubscribe %d Symbole", len(symbols))
 		shard.getCommandChannel() <- ShardCommand{Action: "unsubscribe", Symbols: symbols}
+		if cm.obShardLoad[shard] == 0 {
+			cm.retireOrderBookShardLocked(shard)
+		}
 	}
 }
 
@@ -409,4 +422,54 @@ func (cm *ConnectionManager) Stop(wg *sync.WaitGroup) {
 	})
 
 	<-cm.runDone
+	cm.mu.Lock()
+	cm.stopAllTradeShardsLocked()
+	cm.stopAllOrderBookShardsLocked()
+	cm.mu.Unlock()
+	cm.wg.Wait()
+}
+
+func (cm *ConnectionManager) retireTradeShardLocked(shard IShardWorker) {
+	stopCh, ok := cm.tradeShardStops[shard]
+	if !ok {
+		return
+	}
+	delete(cm.tradeShardStops, shard)
+	delete(cm.tradeShardLoad, shard)
+	delete(cm.tradeShardCache, shard)
+	for idx, candidate := range cm.tradeShards {
+		if candidate == shard {
+			cm.tradeShards = append(cm.tradeShards[:idx], cm.tradeShards[idx+1:]...)
+			break
+		}
+	}
+	close(stopCh)
+}
+
+func (cm *ConnectionManager) retireOrderBookShardLocked(shard IShardWorker) {
+	stopCh, ok := cm.obShardStops[shard]
+	if !ok {
+		return
+	}
+	delete(cm.obShardStops, shard)
+	delete(cm.obShardLoad, shard)
+	for idx, candidate := range cm.obShards {
+		if candidate == shard {
+			cm.obShards = append(cm.obShards[:idx], cm.obShards[idx+1:]...)
+			break
+		}
+	}
+	close(stopCh)
+}
+
+func (cm *ConnectionManager) stopAllTradeShardsLocked() {
+	for _, shard := range append([]IShardWorker(nil), cm.tradeShards...) {
+		cm.retireTradeShardLocked(shard)
+	}
+}
+
+func (cm *ConnectionManager) stopAllOrderBookShardsLocked() {
+	for _, shard := range append([]IShardWorker(nil), cm.obShards...) {
+		cm.retireOrderBookShardLocked(shard)
+	}
 }

@@ -58,6 +58,35 @@ func TestUnsubscribeTradeSymbolsLocked(t *testing.T) {
 	}
 }
 
+func TestUnsubscribeTradeSymbolsLockedRetiresEmptyShard(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 1)}
+	stopCh := make(chan struct{})
+	cm.tradeShards = []IShardWorker{shard}
+	cm.tradeShardStops[shard] = stopCh
+	cm.symbolToTradeShard["BTC/USDT"] = shard
+	cm.tradeShardLoad[shard] = 1
+
+	cm.unsubscribeTradeSymbolsLocked(map[string]int{"BTC/USDT": 0})
+
+	select {
+	case <-stopCh:
+	default:
+		t.Fatalf("expected empty trade shard to be retired")
+	}
+	if len(cm.tradeShards) != 0 {
+		t.Fatalf("expected retired trade shard to be removed, got %d shards", len(cm.tradeShards))
+	}
+}
+
 func TestUnsubscribeOrderBookSymbolsLocked(t *testing.T) {
 	cm := NewConnectionManager(
 		"binance",
@@ -92,6 +121,35 @@ func TestUnsubscribeOrderBookSymbolsLocked(t *testing.T) {
 	}
 	if got := cm.obShardLoad[shard]; got != 0 {
 		t.Fatalf("expected shard load 0, got %d", got)
+	}
+}
+
+func TestUnsubscribeOrderBookSymbolsLockedRetiresEmptyShard(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 1)}
+	stopCh := make(chan struct{})
+	cm.obShards = []IShardWorker{shard}
+	cm.obShardStops[shard] = stopCh
+	cm.symbolToOBShard["BTC/USDT"] = shard
+	cm.obShardLoad[shard] = 1
+
+	cm.unsubscribeOrderBookSymbolsLocked(map[string]int{"BTC/USDT": 5})
+
+	select {
+	case <-stopCh:
+	default:
+		t.Fatalf("expected empty orderbook shard to be retired")
+	}
+	if len(cm.obShards) != 0 {
+		t.Fatalf("expected retired orderbook shard to be removed, got %d shards", len(cm.obShards))
 	}
 }
 

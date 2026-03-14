@@ -66,6 +66,7 @@ func (sw *BatchShardWorker) Run() {
 			if sw.cancelWorkers != nil {
 				sw.cancelWorkers()
 			}
+			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
 			return
 		}
 	}

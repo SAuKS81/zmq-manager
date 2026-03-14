@@ -65,6 +65,7 @@ func (sw *OrderBookShardWorker) Run() {
 				cancel()
 			}
 			sw.mu.Unlock()
+			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
 			return
 		}
 	}

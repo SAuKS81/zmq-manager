@@ -68,6 +68,7 @@ func (sw *SingleWatchShardWorker) Run() {
 				cancel()
 			}
 			sw.mu.Unlock()
+			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
 			return
 		}
 	}
