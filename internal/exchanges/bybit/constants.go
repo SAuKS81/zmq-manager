@@ -15,6 +15,9 @@ const (
 
 	// Sharding
 	symbolsPerShard = 40
+
+	// Pooling
+	maxPooledReadBufCap = 256 * 1024
 )
 
 func getenvDefault(key, fallback string) string {

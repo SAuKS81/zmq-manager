@@ -151,13 +151,13 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 			}
 			msg := buf.Bytes()
 			if bytes.Contains(msg, bybitTradePongNeedle) {
-				bybitTradeReadBufPool.Put(buf)
+				recyclePooledBuffer(&bybitTradeReadBufPool, buf)
 				continue
 			}
 			if !bytes.Contains(msg, bybitTradeTopicNeedle) {
 				var resp wsCommandResponse
 				if err := gjson.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
-					bybitTradeReadBufPool.Put(buf)
+					recyclePooledBuffer(&bybitTradeReadBufPool, buf)
 					respCh <- resp
 					continue
 				}
@@ -225,7 +225,7 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 				tradeMsg.Data = tradeMsg.Data[:0]
 				if err := gjson.Unmarshal(msg, tradeMsg); err != nil {
 					bybitTradeMsgPool.Put(tradeMsg)
-					bybitTradeReadBufPool.Put(buf)
+					recyclePooledBuffer(&bybitTradeReadBufPool, buf)
 					metrics.RecordDropped(metrics.ReasonParseError, metrics.TypeTrade)
 					continue
 				}
@@ -239,7 +239,7 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 				tradeMsg.Data = tradeMsg.Data[:0]
 				bybitTradeMsgPool.Put(tradeMsg)
 			}
-			bybitTradeReadBufPool.Put(buf)
+			recyclePooledBuffer(&bybitTradeReadBufPool, buf)
 		case cmd := <-sw.commandCh:
 			for _, symbol := range cmd.Symbols {
 				if cmd.Action == "subscribe" {
@@ -410,7 +410,7 @@ func readWSTradeMessagePooled(conn *websocket.Conn) (*bytes.Buffer, error) {
 	buf.Reset()
 	_, err = buf.ReadFrom(r)
 	if err != nil {
-		bybitTradeReadBufPool.Put(buf)
+		recyclePooledBuffer(&bybitTradeReadBufPool, buf)
 		return nil, err
 	}
 	return buf, nil

@@ -48,7 +48,7 @@ var (
 )
 
 type incomingOBMessage struct {
-	payload        []byte
+	buf            *bytes.Buffer
 	ingestUnixNano int64
 }
 
@@ -168,18 +168,18 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 			}
 			msg := buf.Bytes()
 			if bytes.Contains(msg, bybitPongNeedle) {
-				bybitReadBufPool.Put(buf)
+				recyclePooledBuffer(&bybitReadBufPool, buf)
 				continue
 			}
 			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
 				var resp wsCommandResponse
 				if err := json.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
-					bybitReadBufPool.Put(buf)
+					recyclePooledBuffer(&bybitReadBufPool, buf)
 					respCh <- resp
 					continue
 				}
 			}
-			msgCh <- incomingOBMessage{payload: msg, ingestUnixNano: time.Now().UnixNano()}
+			msgCh <- incomingOBMessage{buf: buf, ingestUnixNano: time.Now().UnixNano()}
 		}
 	}()
 
@@ -235,7 +235,8 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 			if !ok {
 				return <-errCh
 			}
-			sw.handleIncomingMessage(incoming.payload, incoming.ingestUnixNano)
+			sw.handleIncomingMessage(incoming.buf.Bytes(), incoming.ingestUnixNano)
+			recyclePooledBuffer(&bybitReadBufPool, incoming.buf)
 		case cmd := <-sw.commandCh:
 			depth := getBybitDepth(cmd.Depth)
 			topic := fmt.Sprintf("orderbook.%d.%s", depth, cmd.Symbol)
@@ -590,7 +591,7 @@ func readWSMessagePooled(conn *websocket.Conn) (int, *bytes.Buffer, error) {
 	buf.Reset()
 	_, err = buf.ReadFrom(r)
 	if err != nil {
-		bybitReadBufPool.Put(buf)
+		recyclePooledBuffer(&bybitReadBufPool, buf)
 		return 0, nil, err
 	}
 

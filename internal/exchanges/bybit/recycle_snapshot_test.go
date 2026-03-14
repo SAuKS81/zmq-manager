@@ -41,3 +41,33 @@ func TestOrderBookDesiredTopicsSnapshotIgnoresStaleActiveTopics(t *testing.T) {
 		t.Fatalf("expected only desired topics, got %v", got)
 	}
 }
+
+func TestOrderBookManagerRetiresEmptyShard(t *testing.T) {
+	cm := NewOrderBookConnectionManager("ws://example", "spot", nil, nil)
+	stopCh := make(chan struct{})
+	shard := NewOrderBookShardWorker("ws://example", "spot", stopCh, nil, nil, nil)
+
+	cm.shards = append(cm.shards, shard)
+	cm.symbolToShard["BTCUSDT"] = shard
+	cm.symbolDepth["BTCUSDT"] = 1
+	cm.shardLoad[shard] = 1
+	cm.shardStops[shard] = stopCh
+
+	cm.removeSubscription("BTCUSDT", 1)
+
+	if len(cm.shards) != 0 {
+		t.Fatalf("expected shard to be retired, got %d shards", len(cm.shards))
+	}
+	if _, ok := cm.symbolToShard["BTCUSDT"]; ok {
+		t.Fatalf("expected symbolToShard entry to be removed")
+	}
+	if _, ok := cm.symbolDepth["BTCUSDT"]; ok {
+		t.Fatalf("expected symbolDepth entry to be removed")
+	}
+	if _, ok := cm.shardLoad[shard]; ok {
+		t.Fatalf("expected shardLoad entry to be removed")
+	}
+	if _, ok := cm.shardStops[shard]; ok {
+		t.Fatalf("expected shard stop channel to be removed")
+	}
+}
