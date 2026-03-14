@@ -18,13 +18,14 @@ import (
 )
 
 const (
-	pingInterval   = 15 * time.Second
-	clientTimeout  = 45 * time.Second
-	slowWarnWindow = 30 * time.Second
-	HeaderJSON     = "J"
-	HeaderTradeBin = "T"
-	HeaderOBBin    = "O"
-	p2LatestMax    = 200000
+	pingInterval    = 15 * time.Second
+	clientTimeout   = 45 * time.Second
+	slowWarnWindow  = 30 * time.Second
+	HeaderJSON      = "J"
+	HeaderTradeBin  = "T"
+	HeaderOBBin     = "O"
+	p2LatestMax     = 200000
+	p1BurstBeforeP2 = 2
 )
 
 const (
@@ -153,7 +154,7 @@ func NewClientManager(requestCh chan<- *shared_types.ClientRequest) *ClientManag
 		requestCh:      requestCh,
 		StatusCh:       make(chan *shared_types.StreamStatusEvent, 1024),
 		DistributionCh: make(chan *DistributionMessage, 10000),
-		sendChP1:       make(chan outboundEnvelope, 4096),
+		sendChP1:       make(chan outboundEnvelope, 16384),
 		p2Latest:       make(map[p2LatestKey]outboundEnvelope, 4096),
 		bindAddress:    bindAddr,
 	}
@@ -275,39 +276,30 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 	if len(updates) == 0 {
 		return
 	}
-
-	ingestNanos := make([]int64, 0, len(updates))
-	for _, ob := range updates {
-		if ob != nil && ob.IngestUnixNano > 0 {
-			ingestNanos = append(ingestNanos, ob.IngestUnixNano)
-		}
-	}
-
-	var jsonCache []byte
-	var msgpackCache []byte
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
 		encoding, exists := cm.clientEncoding(clientIDStr)
 		if !exists || cm.isControlClient(clientIDStr) {
 			continue
 		}
-
-		msg, ok := cm.encodePayloadForClient(
-			clientID,
-			encoding,
-			HeaderOBBin,
-			updates,
-			&jsonCache,
-			&msgpackCache,
-			metrics.TypeOBUpdate,
-		)
-		if ok {
-			cm.enqueueSocketSend(outboundEnvelope{
-				msg:         msg,
-				metricType:  metrics.TypeOBUpdate,
-				ingestNanos: ingestNanos,
-				priority:    priorityP1,
-			})
+		encodedCache := &perEncodingOrderBookCache{
+			jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
+			msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
+		}
+		for _, ob := range updates {
+			priority := priorityP2
+			if ob != nil && ob.UpdateType == metrics.TypeOBSnapshot {
+				priority = priorityP1
+			}
+			cm.enqueueOrderBookEnvelope(
+				clientID,
+				clientIDStr,
+				encoding,
+				ob,
+				orderBookEnvelopeType(ob),
+				priority,
+				encodedCache,
+			)
 		}
 	}
 }
@@ -339,13 +331,17 @@ func (cm *ClientManager) enqueueOrderBookEnvelope(
 		}
 	}
 
-	cm.enqueueSocketSend(outboundEnvelope{
+	envelope := outboundEnvelope{
 		msg:        msg,
 		metricType: metricType,
 		ingestNano: ob.IngestUnixNano,
 		priority:   priority,
 		p2Key:      p2Key,
-	})
+	}
+	if priority == priorityP2 && cm.enqueueP2Latest(envelope) {
+		return
+	}
+	cm.enqueueSocketSend(envelope)
 }
 
 func (cm *ClientManager) clientEncoding(clientID string) (string, bool) {
@@ -486,9 +482,31 @@ func marshalSingleOBAsMsgpackArray(ob *shared_types.OrderBookUpdate) ([]byte, er
 }
 
 func (cm *ClientManager) writeLoop() {
+	p1BurstCount := 0
 	for {
-		outbound := <-cm.sendChP1
-		cm.sendOutbound(outbound)
+		if p1BurstCount >= p1BurstBeforeP2 {
+			if outbound, ok := cm.popP2LatestDeterministic(); ok {
+				cm.sendOutbound(outbound)
+				p1BurstCount = 0
+				continue
+			}
+			p1BurstCount = 0
+		}
+
+		select {
+		case outbound := <-cm.sendChP1:
+			cm.sendOutbound(outbound)
+			p1BurstCount++
+		default:
+			if outbound, ok := cm.popP2LatestDeterministic(); ok {
+				cm.sendOutbound(outbound)
+				p1BurstCount = 0
+				continue
+			}
+			outbound := <-cm.sendChP1
+			cm.sendOutbound(outbound)
+			p1BurstCount = 1
+		}
 	}
 }
 
@@ -745,6 +763,10 @@ func (cm *ClientManager) enqueueSocketSend(envelope outboundEnvelope) bool {
 	case cm.sendChP1 <- envelope:
 		return true
 	default:
+		if envelope.priority == priorityP2 && cm.enqueueP2Latest(envelope) {
+			cm.markSlowClient(envelope)
+			return true
+		}
 		metrics.RecordDropped(metrics.ReasonBufferFull, envelope.metricType)
 		cm.markSlowClient(envelope)
 		if caller, stack, ok := logDropCallsite(envelope.metricType, metrics.ReasonBufferFull); ok {
@@ -762,6 +784,8 @@ func (cm *ClientManager) markSlowClient(envelope outboundEnvelope) {
 
 	now := time.Now()
 	var shouldKick bool
+	var warnLog string
+	var slowDrops int
 
 	cm.clientsMu.Lock()
 	client := cm.clients[clientID]
@@ -771,15 +795,31 @@ func (cm *ClientManager) markSlowClient(envelope outboundEnvelope) {
 		}
 		client.SlowQueueDrops++
 		client.LastQueueDropAt = now
-		if client.SlowQueueDrops == 1 {
-			log.Printf("[CLIENT-MANAGER-WARN] Client %s verursacht Sendestau; weitere Queue-Ueberlaeufe innerhalb von %s fuehren zum Disconnect.", clientID, slowWarnWindow)
-		} else {
-			delete(cm.clients, clientID)
-			shouldKick = true
+		slowDrops = client.SlowQueueDrops
+		role := client.Role
+		if role == "" {
+			role = clientRoleFeed
+		}
+		if role == clientRoleControl {
+			if slowDrops == 1 {
+				warnLog = "[CLIENT-MANAGER-WARN] Client %s verursacht Sendestau; weitere Queue-Ueberlaeufe innerhalb von %s fuehren zum Disconnect."
+			} else {
+				delete(cm.clients, clientID)
+				shouldKick = true
+			}
+		} else if slowDrops == 1 || slowDrops%25 == 0 {
+			warnLog = "[CLIENT-MANAGER-WARN] Feed-Client %s verursacht Sendestau; %d Nachrichten innerhalb von %s wurden verworfen oder zusammengefasst."
 		}
 	}
 	cm.clientsMu.Unlock()
 
+	if warnLog != "" {
+		if strings.Contains(warnLog, "%d") {
+			log.Printf(warnLog, clientID, slowDrops, slowWarnWindow)
+		} else {
+			log.Printf(warnLog, clientID, slowWarnWindow)
+		}
+	}
 	if shouldKick {
 		log.Printf("[CLIENT-MANAGER] Client %s wegen wiederholtem Sendestau getrennt.", clientID)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: []byte(clientID), Action: "disconnect"})
@@ -916,5 +956,7 @@ func (cm *ClientManager) sendOutbound(outbound outboundEnvelope) {
 }
 
 func (cm *ClientManager) SendQueueStats() (p1Len int, p1Cap int, p2Len int, p2Cap int) {
-	return len(cm.sendChP1), cap(cm.sendChP1), 0, 0
+	cm.p2Mu.Lock()
+	defer cm.p2Mu.Unlock()
+	return len(cm.sendChP1), cap(cm.sendChP1), len(cm.p2Latest), p2LatestMax
 }

@@ -310,11 +310,11 @@ func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
 
 	cm.distributeOrderBookBatch([][]byte{[]byte("client-1")}, updates)
 
-	if got := len(cm.sendChP1); got != 1 {
-		t.Fatalf("expected a single direct queue message, got %d", got)
+	if got := len(cm.sendChP1); got != 0 {
+		t.Fatalf("expected no direct queue messages for latest-only OB updates, got %d", got)
 	}
-	if gotP2 := len(cm.p2Latest); gotP2 != 0 {
-		t.Fatalf("expected no p2 backlog, got %d", gotP2)
+	if gotP2 := len(cm.p2Latest); gotP2 != 2 {
+		t.Fatalf("expected two latest-only OB entries, got %d", gotP2)
 	}
 }
 
@@ -346,7 +346,7 @@ func TestEnqueueSocketSendWarnsThenDisconnectsSlowClient(t *testing.T) {
 		sendChP1:  make(chan outboundEnvelope, 1),
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 		clients: map[string]*Client{
-			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"},
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleControl},
 		},
 	}
 	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
@@ -379,5 +379,30 @@ func TestEnqueueSocketSendWarnsThenDisconnectsSlowClient(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(got), []byte("wegen wiederholtem Sendestau getrennt")) {
 		t.Fatalf("expected slow-client disconnect log, got %q", got)
+	}
+}
+
+func TestEnqueueSocketSendKeepsSlowFeedClientConnected(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 2)
+	cm := &ClientManager{
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 1),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+		clients: map[string]*Client{
+			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed},
+		},
+	}
+	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
+
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-1")), metricType: "trade", priority: priorityP1})
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-2")), metricType: "trade", priority: priorityP1})
+
+	if _, exists := cm.clients["client-1"]; !exists {
+		t.Fatalf("expected feed client to stay connected under transient backpressure")
+	}
+
+	reqs := drainRequests(reqCh)
+	if len(reqs) != 0 {
+		t.Fatalf("expected no disconnect request for feed client, got %+v", reqs)
 	}
 }
