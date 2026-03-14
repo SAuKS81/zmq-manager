@@ -62,6 +62,7 @@ func (e *CCXTExchange) HandleRequest(req *shared_types.ClientRequest) {
 		Action:   managerAction,
 		Symbol:   req.Symbol,
 		DataType: req.DataType,
+		CacheN:   req.CacheN,
 		Depth:    req.OrderBookDepth,
 	}
 }

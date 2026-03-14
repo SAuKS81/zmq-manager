@@ -120,6 +120,7 @@ type incomingClientMessage struct {
 	Symbols        []string `json:"symbols"`
 	MarketType     string   `json:"market_type"`
 	DataType       string   `json:"data_type"`
+	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 	Encoding       string   `json:"encoding"`
 	Message        string   `json:"message"`
@@ -631,7 +632,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth})
 		}
 		return
 	case "unsubscribe_bulk":
@@ -656,7 +657,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth})
 		}
 		return
 	case "subscribe_all":
@@ -682,7 +683,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		return
 	}
 
-	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), OrderBookDepth: req.OrderBookDepth})
+	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth})
 }
 
 func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {

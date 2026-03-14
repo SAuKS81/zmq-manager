@@ -153,6 +153,99 @@ func TestTradeShardCapacityUsesBatchSizeWhenOnlyOneBatchPerShardIsAllowed(t *tes
 	}
 }
 
+func TestProcessTradeCommandsDoesNotResubscribeWhenCacheNIsUnchanged(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 2)}
+	cm.tradeShards = []IShardWorker{shard}
+	cm.symbolToTradeShard["BTC/USDT"] = shard
+	cm.symbolToTradeCache["BTC/USDT"] = 1
+	cm.tradeShardLoad[shard] = 1
+
+	cm.processTradeCommands([]ManagerCommand{{Action: "add", Symbol: "BTC/USDT", DataType: "trades", CacheN: 1}})
+
+	select {
+	case cmd := <-shard.commandCh:
+		t.Fatalf("expected no reconfigure command, got %+v", cmd)
+	default:
+	}
+}
+
+func TestProcessTradeCommandsReconfiguresWhenCacheNChanges(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 4)}
+	cm.tradeShards = []IShardWorker{shard}
+	cm.symbolToTradeShard["BTC/USDT"] = shard
+	cm.symbolToTradeCache["BTC/USDT"] = 1
+	cm.tradeShardLoad[shard] = 1
+
+	cm.processTradeCommands([]ManagerCommand{{Action: "add", Symbol: "BTC/USDT", DataType: "trades", CacheN: 5}})
+
+	first := <-shard.commandCh
+	second := <-shard.commandCh
+	if first.Action != "unsubscribe" {
+		t.Fatalf("expected first command unsubscribe, got %+v", first)
+	}
+	if second.Action != "subscribe" {
+		t.Fatalf("expected second command subscribe, got %+v", second)
+	}
+	if second.Symbols["BTC/USDT"] != 5 {
+		t.Fatalf("expected subscribe command to carry cache_n=5, got %+v", second)
+	}
+	if got := cm.symbolToTradeCache["BTC/USDT"]; got != 5 {
+		t.Fatalf("expected manager cache_n=5, got %d", got)
+	}
+}
+
+func TestProcessSingleOrderBookCommandsReconfiguresWhenDepthChanges(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{Enabled: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	shard := &fakeShardWorker{commandCh: make(chan ShardCommand, 4)}
+	cm.obShards = []IShardWorker{shard}
+	cm.symbolToOBShard["BTC/USDT"] = shard
+	cm.symbolToOBDepth["BTC/USDT"] = 5
+	cm.obShardLoad[shard] = 1
+
+	cm.processSingleOrderBookCommands([]ManagerCommand{{Action: "add", Symbol: "BTC/USDT", DataType: "orderbooks", Depth: 20}})
+
+	first := <-shard.commandCh
+	second := <-shard.commandCh
+	if first.Action != "unsubscribe" {
+		t.Fatalf("expected first command unsubscribe, got %+v", first)
+	}
+	if second.Action != "subscribe" {
+		t.Fatalf("expected second command subscribe, got %+v", second)
+	}
+	if second.Symbols["BTC/USDT"] != 20 {
+		t.Fatalf("expected subscribe command to carry depth=20, got %+v", second)
+	}
+	if got := cm.symbolToOBDepth["BTC/USDT"]; got != 20 {
+		t.Fatalf("expected manager depth=20, got %d", got)
+	}
+}
+
 func waitOrTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration, msg string) {
 	t.Helper()
 	done := make(chan struct{})

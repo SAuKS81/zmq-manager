@@ -26,6 +26,13 @@ func (r *recordingExchange) HandleRequest(req *shared_types.ClientRequest) {
 }
 func (r *recordingExchange) Stop() {}
 
+func (r *recordingExchange) lastReq() *shared_types.ClientRequest {
+	if len(r.reqs) == 0 {
+		return nil
+	}
+	return r.reqs[len(r.reqs)-1]
+}
+
 func TestDisconnectCleansAllSubscriptionMaps(t *testing.T) {
 	clientID := []byte("client-a")
 	otherID := "client-b"
@@ -652,5 +659,146 @@ func TestHandleRequestRejectsUnsupportedOrderBookDepth(t *testing.T) {
 
 	if len(rec.reqs) != 0 {
 		t.Fatalf("expected unsupported depth to be rejected before exchange handler, got %+v", rec.reqs)
+	}
+}
+
+func TestHandleRequestDedupesDuplicateTradeSubscribeAcrossOwners(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		tradeSubscriptionCacheN:        make(map[string]int),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"ccxt_generic": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	first := &shared_types.ClientRequest{
+		ClientID:    []byte("client-a"),
+		Action:      "subscribe",
+		Exchange:    "kucoin",
+		Symbol:      "BTC/USDT",
+		MarketType:  "spot",
+		DataType:    "trades",
+		RequestID:   "deploy-1",
+		CacheN:      1,
+	}
+	second := &shared_types.ClientRequest{
+		ClientID:    []byte("client-b"),
+		Action:      "subscribe",
+		Exchange:    "kucoin",
+		Symbol:      "BTC/USDT",
+		MarketType:  "spot",
+		DataType:    "trades",
+		RequestID:   "deploy-2",
+		CacheN:      1,
+	}
+
+	sm.handleRequest(first)
+	sm.handleRequest(second)
+
+	if len(rec.reqs) != 1 {
+		t.Fatalf("expected exactly one forwarded subscribe, got %+v", rec.reqs)
+	}
+	if rec.reqs[0].CacheN != 1 {
+		t.Fatalf("expected forwarded cache_n=1, got %+v", rec.reqs[0])
+	}
+}
+
+func TestHandleRequestTradeCacheIncreaseTriggersReconfigure(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		tradeSubscriptionCacheN:        make(map[string]int),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"ccxt_generic": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:    []byte("client-a"),
+		Action:      "subscribe",
+		Exchange:    "kucoin",
+		Symbol:      "BTC/USDT",
+		MarketType:  "spot",
+		DataType:    "trades",
+		RequestID:   "deploy-1",
+		CacheN:      1,
+	})
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:    []byte("client-b"),
+		Action:      "subscribe",
+		Exchange:    "kucoin",
+		Symbol:      "BTC/USDT",
+		MarketType:  "spot",
+		DataType:    "trades",
+		RequestID:   "deploy-2",
+		CacheN:      5,
+	})
+
+	if len(rec.reqs) != 2 {
+		t.Fatalf("expected initial subscribe plus reconfigure subscribe, got %+v", rec.reqs)
+	}
+	if got := rec.lastReq(); got == nil || got.Action != "subscribe" || got.CacheN != 5 {
+		t.Fatalf("expected reconfigure subscribe with cache_n=5, got %+v", got)
+	}
+}
+
+func TestHandleRequestOrderBookDepthIncreaseTriggersReconfigure(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		tradeSubscriptionCacheN:        make(map[string]int),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"bybit_native": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:       []byte("client-a"),
+		Action:         "subscribe",
+		Exchange:       "bybit_native",
+		Symbol:         "BTCUSDT",
+		MarketType:     "spot",
+		DataType:       "orderbooks",
+		RequestID:      "deploy-1",
+		OrderBookDepth: 50,
+	})
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:       []byte("client-b"),
+		Action:         "subscribe",
+		Exchange:       "bybit_native",
+		Symbol:         "BTCUSDT",
+		MarketType:     "spot",
+		DataType:       "orderbooks",
+		RequestID:      "deploy-2",
+		OrderBookDepth: 200,
+	})
+
+	if len(rec.reqs) != 2 {
+		t.Fatalf("expected initial subscribe plus depth reconfigure, got %+v", rec.reqs)
+	}
+	if got := rec.lastReq(); got == nil || got.Action != "subscribe" || got.OrderBookDepth != 200 {
+		t.Fatalf("expected reconfigure subscribe with depth=200, got %+v", got)
 	}
 }

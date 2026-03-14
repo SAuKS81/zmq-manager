@@ -47,6 +47,7 @@ type ClientRequest struct {
 	MarketType     string `json:"market_type"`
 	DataType       string `json:"data_type"`
 	Encoding       string `json:"encoding,omitempty"`
+	CacheN         int    `json:"cache_n,omitempty"`
 	OrderBookDepth int    `json:"depth,omitempty"`
 	BatchSent      int    `json:"-"`
 }
@@ -61,6 +62,7 @@ type BulkClientRequest struct {
 	MarketType     string   `json:"market_type"`
 	DataType       string   `json:"data_type"`
 	Encoding       string   `json:"encoding,omitempty"`
+	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 }
 
@@ -87,6 +89,7 @@ type RuntimeSubscriptionItem struct {
 	DataType   string `json:"data_type"`
 	Adapter    string `json:"adapter"`
 	Encoding   string `json:"encoding,omitempty"`
+	CacheN     int    `json:"cache_n,omitempty"`
 	Depth      int    `json:"depth,omitempty"`
 	Running    bool   `json:"running"`
 	Owners     int    `json:"owners"`

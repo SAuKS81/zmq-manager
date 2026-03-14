@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bybit-watcher/internal/shared_types"
+	ccxt "github.com/ccxt/ccxt/go/v4"
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
@@ -26,7 +27,7 @@ type BatchShardWorker struct {
 	statusCh      chan<- *shared_types.StreamStatusEvent
 	wg            *sync.WaitGroup
 	mu            sync.Mutex
-	activeSymbols map[string]bool
+	activeSymbols map[string]int
 	exchange      ccxtpro.IExchange
 	cancelWorkers context.CancelFunc
 }
@@ -46,7 +47,7 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 		dataCh:        dataCh,
 		statusCh:      statusCh,
 		wg:            wg,
-		activeSymbols: make(map[string]bool),
+		activeSymbols: make(map[string]int),
 		exchange:      exchange,
 	}
 }
@@ -93,11 +94,12 @@ drain:
 	listChanged := false
 	unsubscribeSymbols := make(map[string]bool)
 	for _, cmd := range commands {
-		for s := range cmd.Symbols {
-			if cmd.Action == "subscribe" && !sw.activeSymbols[s] {
-				sw.activeSymbols[s] = true
+		for s, cacheN := range cmd.Symbols {
+			currentCacheN, exists := sw.activeSymbols[s]
+			if cmd.Action == "subscribe" && (!exists || currentCacheN != cacheN) {
+				sw.activeSymbols[s] = cacheN
 				listChanged = true
-			} else if cmd.Action == "unsubscribe" && sw.activeSymbols[s] {
+			} else if cmd.Action == "unsubscribe" && exists {
 				delete(sw.activeSymbols, s)
 				listChanged = true
 				unsubscribeSymbols[s] = true
@@ -190,7 +192,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		case <-ctx.Done():
 			return
 		default:
-			trades, err := sw.safeWatchTradesForSymbols(currentBatch)
+			trades, err := sw.safeWatchTradesForSymbols(currentBatch, sw.cacheNForBatch(currentBatch))
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -268,12 +270,15 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 	}
 }
 
-func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string) (trades []ccxtpro.Trade, err error) {
+func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string, cacheN int) (trades []ccxtpro.Trade, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in WatchTradesForSymbols: %v\n%s", r, string(debug.Stack()))
 		}
 	}()
+	if cacheN > 0 {
+		return sw.exchange.WatchTradesForSymbols(symbolsBatch, ccxt.WithWatchTradesForSymbolsLimit(int64(cacheN)))
+	}
 	return sw.exchange.WatchTradesForSymbols(symbolsBatch)
 }
 
@@ -308,4 +313,17 @@ func (sw *BatchShardWorker) filterSupportedSymbols(symbols []string) []string {
 	}
 
 	return filtered
+}
+
+func (sw *BatchShardWorker) cacheNForBatch(symbols []string) int {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	maxCacheN := 0
+	for _, symbol := range symbols {
+		if cacheN := sw.activeSymbols[symbol]; cacheN > maxCacheN {
+			maxCacheN = cacheN
+		}
+	}
+	return maxCacheN
 }

@@ -71,3 +71,17 @@ func TestCapabilitiesCatalogDisablesBybitCCXTOrderBookUnwatch(t *testing.T) {
 		t.Fatalf("expected bybit ccxt batch orderbook unwatch disabled, got %+v", bybit)
 	}
 }
+
+func TestCapabilitiesCatalogAdvertisesCCXTTradeCacheSupport(t *testing.T) {
+	required := []string{"binance", "bitget", "bitmart", "bybit", "coinex", "htx", "kucoin", "mexc", "woo", "ccxt_default"}
+
+	for _, exchange := range required {
+		item, ok := capabilityForExchange(exchange)
+		if !ok {
+			t.Fatalf("expected capability entry for %s", exchange)
+		}
+		if !item.SupportsCacheN {
+			t.Fatalf("expected SupportsCacheN for %s, got %+v", exchange, item)
+		}
+	}
+}

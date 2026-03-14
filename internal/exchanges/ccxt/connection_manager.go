@@ -20,6 +20,7 @@ type ManagerCommand struct {
 	Action   string
 	Symbol   string
 	DataType string
+	CacheN   int
 	Depth    int
 }
 
@@ -41,10 +42,13 @@ type ConnectionManager struct {
 
 	tradeShards        []IShardWorker
 	symbolToTradeShard map[string]IShardWorker
+	symbolToTradeCache map[string]int
+	tradeShardCache    map[IShardWorker]int
 	tradeShardLoad     map[IShardWorker]int
 
 	obShards        []IShardWorker
 	symbolToOBShard map[string]IShardWorker
+	symbolToOBDepth map[string]int
 	obShardLoad     map[IShardWorker]int
 
 	wg sync.WaitGroup
@@ -65,8 +69,11 @@ func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig
 		obDataCh:           obDataCh,
 		statusCh:           statusCh,
 		symbolToTradeShard: make(map[string]IShardWorker),
+		symbolToTradeCache: make(map[string]int),
+		tradeShardCache:    make(map[IShardWorker]int),
 		tradeShardLoad:     make(map[IShardWorker]int),
 		symbolToOBShard:    make(map[string]IShardWorker),
+		symbolToOBDepth:    make(map[string]int),
 		obShardLoad:        make(map[IShardWorker]int),
 		runDone:            make(chan struct{}),
 	}
@@ -149,8 +156,13 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 	symbolsToRemove := make(map[string]int)
 	for _, cmd := range cmds {
 		if cmd.Action == "add" {
-			if _, exists := cm.symbolToTradeShard[cmd.Symbol]; !exists {
-				symbolsToAdd[cmd.Symbol] = 0
+			desiredCacheN := cmd.CacheN
+			prevCacheN, exists := cm.symbolToTradeCache[cmd.Symbol]
+			if !exists {
+				symbolsToAdd[cmd.Symbol] = desiredCacheN
+			} else if prevCacheN != desiredCacheN {
+				symbolsToRemove[cmd.Symbol] = prevCacheN
+				symbolsToAdd[cmd.Symbol] = desiredCacheN
 			}
 		} else if cmd.Action == "remove" {
 			symbolsToRemove[cmd.Symbol] = 0
@@ -165,6 +177,9 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 	for symbol := range symbolsToAdd {
 		var targetShard IShardWorker
 		for _, shard := range cm.tradeShards {
+			if cm.config.UseForSymbols && cm.tradeShardLoad[shard] > 0 && cm.tradeShardCache[shard] != symbolsToAdd[symbol] {
+				continue
+			}
 			if cm.tradeShardLoad[shard] < shardCapacity {
 				targetShard = shard
 				break
@@ -180,6 +195,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 			}
 			cm.tradeShards = append(cm.tradeShards, newShard)
 			cm.tradeShardLoad[newShard] = 0
+			cm.tradeShardCache[newShard] = symbolsToAdd[symbol]
 			cm.wg.Add(1)
 			go newShard.Run()
 			time.Sleep(cm.config.NewShardPause)
@@ -188,8 +204,12 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 		if _, ok := additionsByShard[targetShard]; !ok {
 			additionsByShard[targetShard] = make(map[string]int)
 		}
-		additionsByShard[targetShard][symbol] = 0
+		additionsByShard[targetShard][symbol] = symbolsToAdd[symbol]
+		if cm.config.UseForSymbols && cm.tradeShardLoad[targetShard] == 0 {
+			cm.tradeShardCache[targetShard] = symbolsToAdd[symbol]
+		}
 		cm.symbolToTradeShard[symbol] = targetShard
+		cm.symbolToTradeCache[symbol] = symbolsToAdd[symbol]
 		cm.tradeShardLoad[targetShard]++
 	}
 	for shard, symbols := range additionsByShard {
@@ -203,7 +223,11 @@ func (cm *ConnectionManager) processSingleOrderBookCommands(cmds []ManagerComman
 	symbolsToRemove := make(map[string]int)
 	for _, cmd := range cmds {
 		if cmd.Action == "add" {
-			if _, exists := cm.symbolToOBShard[cmd.Symbol]; !exists {
+			prevDepth, exists := cm.symbolToOBDepth[cmd.Symbol]
+			if !exists {
+				symbolsToAdd[cmd.Symbol] = cmd.Depth
+			} else if prevDepth != cmd.Depth {
+				symbolsToRemove[cmd.Symbol] = prevDepth
 				symbolsToAdd[cmd.Symbol] = cmd.Depth
 			}
 		} else if cmd.Action == "remove" {
@@ -239,6 +263,7 @@ func (cm *ConnectionManager) processSingleOrderBookCommands(cmds []ManagerComman
 		}
 		additionsByShard[targetShard][symbol] = depth
 		cm.symbolToOBShard[symbol] = targetShard
+		cm.symbolToOBDepth[symbol] = depth
 		cm.obShardLoad[targetShard]++
 	}
 	for shard, symbols := range additionsByShard {
@@ -254,7 +279,11 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 	symbolsToRemove := make(map[string]int)
 	for _, cmd := range cmds {
 		if cmd.Action == "add" {
-			if _, exists := cm.symbolToOBShard[cmd.Symbol]; !exists {
+			prevDepth, exists := cm.symbolToOBDepth[cmd.Symbol]
+			if !exists {
+				symbolsToAdd[cmd.Symbol] = cmd.Depth
+			} else if prevDepth != cmd.Depth {
+				symbolsToRemove[cmd.Symbol] = prevDepth
 				symbolsToAdd[cmd.Symbol] = cmd.Depth
 			}
 		} else if cmd.Action == "remove" {
@@ -299,6 +328,7 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 		}
 		additionsByShard[targetShard][symbol] = depth
 		cm.symbolToOBShard[symbol] = targetShard
+		cm.symbolToOBDepth[symbol] = depth
 		cm.obShardLoad[targetShard]++ // Wichtig: Auslastung aktualisieren
 	}
 
@@ -325,8 +355,12 @@ func (cm *ConnectionManager) unsubscribeTradeSymbolsLocked(symbolsToRemove map[s
 		}
 		removalsByShard[shard][symbol] = 0
 		delete(cm.symbolToTradeShard, symbol)
+		delete(cm.symbolToTradeCache, symbol)
 		if cm.tradeShardLoad[shard] > 0 {
 			cm.tradeShardLoad[shard]--
+			if cm.tradeShardLoad[shard] == 0 {
+				delete(cm.tradeShardCache, shard)
+			}
 		}
 	}
 
@@ -352,6 +386,7 @@ func (cm *ConnectionManager) unsubscribeOrderBookSymbolsLocked(symbolsToRemove m
 		}
 		removalsByShard[shard][symbol] = 0
 		delete(cm.symbolToOBShard, symbol)
+		delete(cm.symbolToOBDepth, symbol)
 		if cm.obShardLoad[shard] > 0 {
 			cm.obShardLoad[shard]--
 		}

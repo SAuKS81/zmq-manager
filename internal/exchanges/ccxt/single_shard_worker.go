@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bybit-watcher/internal/shared_types"
+	ccxt "github.com/ccxt/ccxt/go/v4"
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
@@ -28,6 +29,7 @@ type SingleWatchShardWorker struct {
 	mu             sync.Mutex
 	exchange       ccxtpro.IExchange
 	activeWatchers map[string]context.CancelFunc
+	activeCacheN   map[string]int
 }
 
 func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *SingleWatchShardWorker {
@@ -41,6 +43,7 @@ func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeC
 		statusCh:       statusCh,
 		wg:             wg,
 		activeWatchers: make(map[string]context.CancelFunc),
+		activeCacheN:   make(map[string]int),
 	}
 }
 
@@ -78,17 +81,22 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 	recycleNeeded := false
 	startedWatchers := 0
 	for symbol := range cmd.Symbols {
+		cacheN := cmd.Symbols[symbol]
 		switch cmd.Action {
 		case "subscribe":
 			sw.mu.Lock()
-			if _, exists := sw.activeWatchers[symbol]; exists {
+			if _, exists := sw.activeWatchers[symbol]; exists && sw.activeCacheN[symbol] == cacheN {
 				sw.mu.Unlock()
 				continue
 			}
+			if cancel, exists := sw.activeWatchers[symbol]; exists {
+				cancel()
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			sw.activeWatchers[symbol] = cancel
+			sw.activeCacheN[symbol] = cacheN
 			sw.mu.Unlock()
-			go sw.runSingleWatch(ctx, symbol)
+			go sw.runSingleWatch(ctx, symbol, cacheN)
 			startedWatchers++
 			time.Sleep(sw.config.SubscribePause)
 		case "unsubscribe":
@@ -96,6 +104,7 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 			cancel, exists := sw.activeWatchers[symbol]
 			if exists {
 				delete(sw.activeWatchers, symbol)
+				delete(sw.activeCacheN, symbol)
 			}
 			sw.mu.Unlock()
 			if !exists {
@@ -137,7 +146,7 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 	}
 }
 
-func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol string) {
+func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol string, cacheN int) {
 	attempt := 0
 	reconnecting := false
 	for {
@@ -145,7 +154,7 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 		case <-ctx.Done():
 			return
 		default:
-			trades, err := sw.exchange.WatchTrades(symbol)
+			trades, err := sw.safeWatchTrades(symbol, cacheN)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -199,6 +208,18 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 	}
 }
 
+func (sw *SingleWatchShardWorker) safeWatchTrades(symbol string, cacheN int) (trades []ccxtpro.Trade, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in WatchTrades: %v\n%s", r, string(debug.Stack()))
+		}
+	}()
+	if cacheN > 0 {
+		return sw.exchange.WatchTrades(symbol, ccxt.WithWatchTradesLimit(int64(cacheN)))
+	}
+	return sw.exchange.WatchTrades(symbol)
+}
+
 func (sw *SingleWatchShardWorker) safeUnWatchTrades(symbol string) (_ interface{}, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -233,8 +254,9 @@ func (sw *SingleWatchShardWorker) recycleExchangeAndRestart() {
 		ctx, cancel := context.WithCancel(context.Background())
 		sw.mu.Lock()
 		sw.activeWatchers[symbol] = cancel
+		cacheN := sw.activeCacheN[symbol]
 		sw.mu.Unlock()
-		go sw.runSingleWatch(ctx, symbol)
+		go sw.runSingleWatch(ctx, symbol, cacheN)
 		time.Sleep(sw.config.SubscribePause)
 	}
 }

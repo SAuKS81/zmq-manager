@@ -58,6 +58,29 @@ func TestHandleMessageSubscribeBulk(t *testing.T) {
 	}
 }
 
+func TestHandleMessageSubscribeBulkPropagatesCacheN(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"kucoin","symbols":["BTC/USDT","ETH/USDT"],"market_type":"spot","data_type":"trades","cache_n":1}`)
+	cm.handleMessage([]byte("client-1"), payload)
+
+	reqs := drainRequests(reqCh)
+	if len(reqs) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(reqs))
+	}
+	for _, req := range reqs[1:] {
+		if req.CacheN != 1 {
+			t.Fatalf("expected cache_n=1 to propagate, got %+v", req)
+		}
+	}
+}
+
 func TestHandleMessageInvalidJSONNoPanic(t *testing.T) {
 	reqCh := make(chan *shared_types.ClientRequest, 10)
 	cm := &ClientManager{
