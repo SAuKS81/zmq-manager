@@ -1041,6 +1041,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 		adapter    string
 		cacheN     int
 		depth      int
+		sticky     bool
 		clients    map[string]bool
 		encodings  map[string]bool
 	}
@@ -1078,6 +1079,11 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 					entry.encodings[encoding] = true
 				}
 			}
+			if defaultDataType == "trades" {
+				entry.sticky = entry.sticky || sm.stickyTradeSubscriptions[routeKey]
+			} else if defaultDataType == "orderbooks" {
+				entry.sticky = entry.sticky || sm.stickyOrderBookSubscriptions[routeKey]
+			}
 			if cacheMap != nil {
 				if cacheN := cacheMap[routeKey]; cacheN > entry.cacheN {
 					entry.cacheN = cacheN
@@ -1103,6 +1109,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 			Encoding:   aggregateEncoding(entry.encodings),
 			CacheN:     entry.cacheN,
 			Depth:      entry.depth,
+			Sticky:     entry.sticky,
 			Running: sm.runtimeTracker.isRunning(runtimeKey{
 				Exchange:   entry.exchange,
 				MarketType: entry.marketType,

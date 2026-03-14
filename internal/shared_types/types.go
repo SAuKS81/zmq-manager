@@ -91,6 +91,7 @@ type RuntimeSubscriptionItem struct {
 	Encoding   string `json:"encoding,omitempty"`
 	CacheN     int    `json:"cache_n,omitempty"`
 	Depth      int    `json:"depth,omitempty"`
+	Sticky     bool   `json:"sticky"`
 	Running    bool   `json:"running"`
 	Owners     int    `json:"owners"`
 	Clients    int    `json:"clients"`

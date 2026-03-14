@@ -338,6 +338,37 @@ func TestBuildSubscriptionsSnapshotGroupsByExactRoute(t *testing.T) {
 	}
 }
 
+func TestBuildSubscriptionsSnapshotMarksStickyOwners(t *testing.T) {
+	clientControl := "client-control"
+	clientFeed := "client-feed"
+	subID := "binance-spot-BTC/USDT"
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions: map[string]map[string]bool{
+			subID: {clientControl: true, clientFeed: true},
+		},
+		tradeSubscriptionRoutes: map[string]string{
+			getClientRouteKey(clientControl, subID): "binance",
+			getClientRouteKey(clientFeed, subID):    "binance",
+		},
+		stickyTradeSubscriptions: map[string]bool{
+			getClientRouteKey(clientControl, subID): true,
+		},
+		orderBookSubscriptions:      make(map[string]map[string]bool),
+		orderBookSubscriptionRoutes: make(map[string]string),
+		orderBookSubscriptionDepths: make(map[string]int),
+		runtimeTracker:              newRuntimeTracker(),
+	}
+
+	resp := sm.buildSubscriptionsSnapshotResponse("global", "")
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 runtime subscription item, got %d", len(resp.Items))
+	}
+	if !resp.Items[0].Sticky {
+		t.Fatalf("expected runtime subscription item to be marked sticky, got %+v", resp.Items[0])
+	}
+}
+
 func TestBuildRuntimeSnapshotIncludesHealth(t *testing.T) {
 	sm := &SubscriptionManager{
 		tradeSubscriptions: map[string]map[string]bool{
@@ -539,22 +570,22 @@ func TestHandleRequestCCXTFallbackLogsOnlyOnceAcrossWholeDeployBatch(t *testing.
 	}()
 
 	sm.handleRequest(&shared_types.ClientRequest{
-		ClientID:    []byte("client-a"),
-		Action:      "subscribe",
-		RequestID:   "deploy-123",
-		Exchange:    "mexc",
-		Symbol:      "BTC/USDT",
-		MarketType:  "spot",
-		DataType:    "trades",
+		ClientID:   []byte("client-a"),
+		Action:     "subscribe",
+		RequestID:  "deploy-123",
+		Exchange:   "mexc",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
 	})
 	sm.handleRequest(&shared_types.ClientRequest{
-		ClientID:    []byte("client-a"),
-		Action:      "subscribe",
-		RequestID:   "deploy-123",
-		Exchange:    "mexc",
-		Symbol:      "ETH/USDT",
-		MarketType:  "spot",
-		DataType:    "trades",
+		ClientID:   []byte("client-a"),
+		Action:     "subscribe",
+		RequestID:  "deploy-123",
+		Exchange:   "mexc",
+		Symbol:     "ETH/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
 	})
 
 	want := "[SUB-MANAGER] Kein exakter Handler fuer exchange=mexc market_type=spot data_type=trades, fallback=ccxt_generic\n"
@@ -680,24 +711,24 @@ func TestHandleRequestDedupesDuplicateTradeSubscribeAcrossOwners(t *testing.T) {
 	}
 
 	first := &shared_types.ClientRequest{
-		ClientID:    []byte("client-a"),
-		Action:      "subscribe",
-		Exchange:    "kucoin",
-		Symbol:      "BTC/USDT",
-		MarketType:  "spot",
-		DataType:    "trades",
-		RequestID:   "deploy-1",
-		CacheN:      1,
+		ClientID:   []byte("client-a"),
+		Action:     "subscribe",
+		Exchange:   "kucoin",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
+		RequestID:  "deploy-1",
+		CacheN:     1,
 	}
 	second := &shared_types.ClientRequest{
-		ClientID:    []byte("client-b"),
-		Action:      "subscribe",
-		Exchange:    "kucoin",
-		Symbol:      "BTC/USDT",
-		MarketType:  "spot",
-		DataType:    "trades",
-		RequestID:   "deploy-2",
-		CacheN:      1,
+		ClientID:   []byte("client-b"),
+		Action:     "subscribe",
+		Exchange:   "kucoin",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
+		RequestID:  "deploy-2",
+		CacheN:     1,
 	}
 
 	sm.handleRequest(first)
@@ -729,24 +760,24 @@ func TestHandleRequestTradeCacheIncreaseTriggersReconfigure(t *testing.T) {
 	}
 
 	sm.handleRequest(&shared_types.ClientRequest{
-		ClientID:    []byte("client-a"),
-		Action:      "subscribe",
-		Exchange:    "kucoin",
-		Symbol:      "BTC/USDT",
-		MarketType:  "spot",
-		DataType:    "trades",
-		RequestID:   "deploy-1",
-		CacheN:      1,
+		ClientID:   []byte("client-a"),
+		Action:     "subscribe",
+		Exchange:   "kucoin",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
+		RequestID:  "deploy-1",
+		CacheN:     1,
 	})
 	sm.handleRequest(&shared_types.ClientRequest{
-		ClientID:    []byte("client-b"),
-		Action:      "subscribe",
-		Exchange:    "kucoin",
-		Symbol:      "BTC/USDT",
-		MarketType:  "spot",
-		DataType:    "trades",
-		RequestID:   "deploy-2",
-		CacheN:      5,
+		ClientID:   []byte("client-b"),
+		Action:     "subscribe",
+		Exchange:   "kucoin",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
+		RequestID:  "deploy-2",
+		CacheN:     5,
 	})
 
 	if len(rec.reqs) != 2 {
