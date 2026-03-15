@@ -204,7 +204,25 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 				}
 				attempt++
 				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
-					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne ungueltiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
+					if sw.symbolStillSupported(missingSymbol) {
+						log.Printf("[CCXT-BATCH-SHARD-WARN] Verdaechtiger BadSymbol fuer weiterhin unterstuetztes Symbol '%s' (%s/%s). Batch bleibt unveraendert. err=%v", missingSymbol, sw.exchangeName, sw.marketType, err)
+						emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
+							Type:       "stream_update_failed",
+							Exchange:   sw.exchangeName,
+							MarketType: sw.marketType,
+							DataType:   "trades",
+							Symbol:     missingSymbol,
+							Status:     "failed",
+							Reason:     "suspicious_missing_market_symbol",
+							Message:    err.Error(),
+							Attempt:    attempt,
+						})
+						reconnecting = true
+						sw.recycleExchangeWithTradeLimit(sw.cacheNForBatch(currentBatch))
+						time.Sleep(5 * time.Second)
+						continue
+					}
+					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne bestaetigt ungueltiges Symbol '%s' aus Batch (%s/%s). err=%v", missingSymbol, sw.exchangeName, sw.marketType, err)
 					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
 						Type:       "stream_update_failed",
 						Exchange:   sw.exchangeName,
@@ -352,4 +370,17 @@ func (sw *BatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
 	}
 	sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
 	return sw.exchange != nil
+}
+
+func (sw *BatchShardWorker) symbolStillSupported(symbol string) bool {
+	supported, err := getSupportedSymbols(sw.exchangeName, sw.marketType)
+	if err != nil {
+		log.Printf("[CCXT-BATCH-SHARD-WARN] supported symbol cache failed while validating '%s' (%s/%s): %v", symbol, sw.exchangeName, sw.marketType, err)
+		return true
+	}
+	if len(supported) == 0 {
+		return true
+	}
+	_, ok := supported[symbol]
+	return ok
 }
