@@ -18,8 +18,12 @@ type describableExchange interface {
 	Describe() interface{}
 }
 
-func createCCXTExchange(exchangeName, marketType string) ccxtpro.IExchange {
-	return ccxtpro.CreateExchange(exchangeName, makeExchangeOptions(exchangeName, marketType))
+func createCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro.IExchange {
+	effectiveTradeLimit := 0
+	if len(tradeLimit) > 0 {
+		effectiveTradeLimit = tradeLimit[0]
+	}
+	return ccxtpro.CreateExchange(exchangeName, makeExchangeOptions(exchangeName, marketType, effectiveTradeLimit))
 }
 
 func closeCCXTExchange(exchangeName, marketType string, exchange ccxtpro.IExchange) {

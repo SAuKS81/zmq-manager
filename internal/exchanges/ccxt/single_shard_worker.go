@@ -28,6 +28,7 @@ type SingleWatchShardWorker struct {
 	wg             *sync.WaitGroup
 	mu             sync.Mutex
 	exchange       ccxtpro.IExchange
+	tradeLimit     int
 	activeWatchers map[string]context.CancelFunc
 	activeCacheN   map[string]int
 }
@@ -50,12 +51,6 @@ func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeC
 func (sw *SingleWatchShardWorker) Run() {
 	defer sw.wg.Done()
 	log.Printf("[CCXT-SINGLE-SHARD] Starte Worker fuer %s", sw.exchangeName)
-
-	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
-	if sw.exchange == nil {
-		log.Printf("[CCXT-SINGLE-SHARD] Instanz fuer %s konnte nicht erstellt werden.", sw.exchangeName)
-		return
-	}
 
 	for {
 		select {
@@ -96,7 +91,16 @@ func (sw *SingleWatchShardWorker) handleCommand(cmd ShardCommand) {
 			ctx, cancel := context.WithCancel(context.Background())
 			sw.activeWatchers[symbol] = cancel
 			sw.activeCacheN[symbol] = cacheN
+			desiredTradeLimit := sw.maxActiveCacheNLocked()
 			sw.mu.Unlock()
+			if !sw.ensureTradeExchange(desiredTradeLimit) {
+				sw.mu.Lock()
+				delete(sw.activeWatchers, symbol)
+				delete(sw.activeCacheN, symbol)
+				sw.mu.Unlock()
+				cancel()
+				continue
+			}
 			go sw.runSingleWatch(ctx, symbol, cacheN)
 			startedWatchers++
 			time.Sleep(sw.config.SubscribePause)
@@ -238,6 +242,7 @@ func (sw *SingleWatchShardWorker) recycleExchangeAndRestart() {
 		symbols = append(symbols, symbol)
 		oldWatchers = append(oldWatchers, cancel)
 	}
+	desiredTradeLimit := sw.maxActiveCacheNLocked()
 	sw.activeWatchers = make(map[string]context.CancelFunc)
 	sw.mu.Unlock()
 
@@ -245,7 +250,8 @@ func (sw *SingleWatchShardWorker) recycleExchangeAndRestart() {
 		cancel()
 	}
 	closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
-	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
+	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType, desiredTradeLimit)
+	sw.tradeLimit = desiredTradeLimit
 	if sw.exchange == nil {
 		log.Printf("[CCXT-SINGLE-SHARD-FATAL] Konnte Exchange nach Recycle fuer %s/%s nicht neu erstellen", sw.exchangeName, sw.marketType)
 		return
@@ -260,4 +266,31 @@ func (sw *SingleWatchShardWorker) recycleExchangeAndRestart() {
 		go sw.runSingleWatch(ctx, symbol, cacheN)
 		time.Sleep(sw.config.SubscribePause)
 	}
+}
+
+func (sw *SingleWatchShardWorker) maxActiveCacheNLocked() int {
+	maxCacheN := 0
+	for _, cacheN := range sw.activeCacheN {
+		if cacheN > maxCacheN {
+			maxCacheN = cacheN
+		}
+	}
+	return maxCacheN
+}
+
+func (sw *SingleWatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
+	if desiredTradeLimit <= 0 {
+		desiredTradeLimit = 1
+	}
+	if sw.exchange != nil && sw.tradeLimit == desiredTradeLimit {
+		return true
+	}
+	closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType, desiredTradeLimit)
+	sw.tradeLimit = desiredTradeLimit
+	if sw.exchange == nil {
+		log.Printf("[CCXT-SINGLE-SHARD-FATAL] Konnte Exchange fuer %s/%s mit tradesLimit=%d nicht erstellen", sw.exchangeName, sw.marketType, desiredTradeLimit)
+		return false
+	}
+	return true
 }

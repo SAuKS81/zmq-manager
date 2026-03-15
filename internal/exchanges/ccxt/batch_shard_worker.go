@@ -29,15 +29,11 @@ type BatchShardWorker struct {
 	mu            sync.Mutex
 	activeSymbols map[string]int
 	exchange      ccxtpro.IExchange
+	tradeLimit    int
 	cancelWorkers context.CancelFunc
 }
 
 func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchShardWorker {
-	exchange := createCCXTExchange(exchangeName, marketType)
-	if exchange == nil {
-		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange-Instanz fuer %s nicht erstellen", exchangeName)
-		return nil
-	}
 	return &BatchShardWorker{
 		exchangeName:  exchangeName,
 		marketType:    marketType,
@@ -48,7 +44,6 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 		statusCh:      statusCh,
 		wg:            wg,
 		activeSymbols: make(map[string]int),
-		exchange:      exchange,
 	}
 }
 
@@ -123,12 +118,16 @@ drain:
 	for s := range sw.activeSymbols {
 		symbolsToWatch = append(symbolsToWatch, s)
 	}
+	desiredTradeLimit := sw.maxActiveCacheNLocked()
 	sw.mu.Unlock()
 
 	recycledForListChange := false
+	if desiredTradeLimit > 0 && !sw.ensureTradeExchange(desiredTradeLimit) {
+		return
+	}
 	if hadActiveWorkers && sw.config.RecycleExchangeOnTradeChange {
 		log.Printf("[CCXT-BATCH-SHARD-INFO] Recycle Exchange nach Listenwechsel (%s/%s), um parallele Trade-Batches auf derselben Instanz zu vermeiden.", sw.exchangeName, sw.marketType)
-		sw.recycleExchange()
+		sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
 		recycledForListChange = true
 	}
 
@@ -150,11 +149,11 @@ drain:
 					Reason:     "unwatch_trades_for_symbols_failed",
 					Message:    err.Error(),
 				})
-				sw.recycleExchange()
+				sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
 			}
 		} else {
 			log.Printf("[CCXT-BATCH-SHARD-INFO] Batch trade unwatch nicht freigegeben (%s/%s). Nutze harten Shard-Recycle fuer %d Symbole.", sw.exchangeName, sw.marketType, len(symbolsToUnwatch))
-			sw.recycleExchange()
+			sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
 		}
 	}
 
@@ -177,10 +176,15 @@ drain:
 }
 
 func (sw *BatchShardWorker) recycleExchange() {
+	sw.recycleExchangeWithTradeLimit(sw.tradeLimit)
+}
+
+func (sw *BatchShardWorker) recycleExchangeWithTradeLimit(tradeLimit int) {
 	closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
-	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
+	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType, tradeLimit)
+	sw.tradeLimit = tradeLimit
 	if sw.exchange == nil {
-		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange nach Recycle fuer %s/%s nicht neu erstellen", sw.exchangeName, sw.marketType)
+		log.Printf("[CCXT-BATCH-SHARD-FATAL] Konnte Exchange nach Recycle fuer %s/%s mit tradesLimit=%d nicht neu erstellen", sw.exchangeName, sw.marketType, tradeLimit)
 	}
 }
 
@@ -327,4 +331,25 @@ func (sw *BatchShardWorker) cacheNForBatch(symbols []string) int {
 		}
 	}
 	return maxCacheN
+}
+
+func (sw *BatchShardWorker) maxActiveCacheNLocked() int {
+	maxCacheN := 0
+	for _, cacheN := range sw.activeSymbols {
+		if cacheN > maxCacheN {
+			maxCacheN = cacheN
+		}
+	}
+	return maxCacheN
+}
+
+func (sw *BatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
+	if desiredTradeLimit <= 0 {
+		desiredTradeLimit = 1
+	}
+	if sw.exchange != nil && sw.tradeLimit == desiredTradeLimit {
+		return true
+	}
+	sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
+	return sw.exchange != nil
 }
