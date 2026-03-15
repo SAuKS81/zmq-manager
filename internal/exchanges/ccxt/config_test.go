@@ -75,11 +75,11 @@ func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 	if cfg.BatchSize != 20 {
 		t.Fatalf("expected bitmart batch size 20, got %d", cfg.BatchSize)
 	}
-	if cfg.SymbolsPerShard != 20 {
-		t.Fatalf("expected bitmart symbols per shard 20, got %d", cfg.SymbolsPerShard)
+	if cfg.SymbolsPerShard != 80 {
+		t.Fatalf("expected bitmart symbols per shard 80, got %d", cfg.SymbolsPerShard)
 	}
-	if cfg.SubscribePause != 350*time.Millisecond {
-		t.Fatalf("expected bitmart subscribe pause 350ms, got %s", cfg.SubscribePause)
+	if cfg.SubscribePause != 500*time.Millisecond {
+		t.Fatalf("expected bitmart subscribe pause 500ms, got %s", cfg.SubscribePause)
 	}
 	if cfg.NewShardPause != 2500*time.Millisecond {
 		t.Fatalf("expected bitmart new shard pause 2500ms, got %s", cfg.NewShardPause)
