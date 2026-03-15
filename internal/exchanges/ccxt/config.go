@@ -238,7 +238,7 @@ var exchangePolicies = map[string]ExchangePolicySet{
 			UseForSymbols:   false,
 			BatchSize:       1,
 			SymbolsPerShard: 30,
-			SubscribePause:  100 * time.Millisecond,
+			SubscribePause:  500 * time.Millisecond,
 			NewShardPause:   1100 * time.Millisecond,
 		},
 		Swap: ExchangeConfig{

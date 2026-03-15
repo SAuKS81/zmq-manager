@@ -95,6 +95,23 @@ func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 	}
 }
 
+func TestGetConfigIncludesMexcPolicy(t *testing.T) {
+	cfg := getConfig("mexc", "spot")
+
+	if !cfg.Enabled {
+		t.Fatal("expected mexc spot config to be enabled")
+	}
+	if cfg.UseForSymbols {
+		t.Fatal("expected mexc spot config to stay in single-watch mode")
+	}
+	if cfg.SymbolsPerShard != 30 {
+		t.Fatalf("expected mexc symbols per shard 30, got %d", cfg.SymbolsPerShard)
+	}
+	if cfg.SubscribePause != 500*time.Millisecond {
+		t.Fatalf("expected mexc subscribe pause 500ms, got %s", cfg.SubscribePause)
+	}
+}
+
 func TestGetConfigDisablesBybitOrderBookUnwatch(t *testing.T) {
 	spotCfg := getConfig("bybit", "spot")
 	swapCfg := getConfig("bybit", "swap")
