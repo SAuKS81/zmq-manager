@@ -23,11 +23,20 @@ func TestGetConfigFallsBackToConservativeDefault(t *testing.T) {
 	if cfg.SymbolsPerShard != 1 {
 		t.Fatalf("expected default symbols per shard 1, got %d", cfg.SymbolsPerShard)
 	}
-	if cfg.SubscribePause != 300*time.Millisecond {
-		t.Fatalf("expected default subscribe pause 300ms, got %s", cfg.SubscribePause)
+	if cfg.SubscribePause != 500*time.Millisecond {
+		t.Fatalf("expected default subscribe pause 500ms, got %s", cfg.SubscribePause)
 	}
-	if cfg.NewShardPause != 1200*time.Millisecond {
-		t.Fatalf("expected default new shard pause 1200ms, got %s", cfg.NewShardPause)
+	if cfg.NewShardPause != 2500*time.Millisecond {
+		t.Fatalf("expected default new shard pause 2500ms, got %s", cfg.NewShardPause)
+	}
+	if cfg.ReconnectBaseDelay != 10*time.Second {
+		t.Fatalf("expected default reconnect base delay 10s, got %s", cfg.ReconnectBaseDelay)
+	}
+	if cfg.ReconnectMaxDelay != 90*time.Second {
+		t.Fatalf("expected default reconnect max delay 90s, got %s", cfg.ReconnectMaxDelay)
+	}
+	if cfg.ReconnectJitter != 3*time.Second {
+		t.Fatalf("expected default reconnect jitter 3s, got %s", cfg.ReconnectJitter)
 	}
 }
 
@@ -69,8 +78,20 @@ func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 	if cfg.SymbolsPerShard != 20 {
 		t.Fatalf("expected bitmart symbols per shard 20, got %d", cfg.SymbolsPerShard)
 	}
-	if cfg.SubscribePause != 200*time.Millisecond {
-		t.Fatalf("expected bitmart subscribe pause 200ms, got %s", cfg.SubscribePause)
+	if cfg.SubscribePause != 350*time.Millisecond {
+		t.Fatalf("expected bitmart subscribe pause 350ms, got %s", cfg.SubscribePause)
+	}
+	if cfg.NewShardPause != 2500*time.Millisecond {
+		t.Fatalf("expected bitmart new shard pause 2500ms, got %s", cfg.NewShardPause)
+	}
+	if cfg.ReconnectBaseDelay != 15*time.Second {
+		t.Fatalf("expected bitmart reconnect base delay 15s, got %s", cfg.ReconnectBaseDelay)
+	}
+	if cfg.ReconnectMaxDelay != 120*time.Second {
+		t.Fatalf("expected bitmart reconnect max delay 120s, got %s", cfg.ReconnectMaxDelay)
+	}
+	if cfg.ReconnectJitter != 5*time.Second {
+		t.Fatalf("expected bitmart reconnect jitter 5s, got %s", cfg.ReconnectJitter)
 	}
 }
 
@@ -86,7 +107,7 @@ func TestGetConfigDisablesBybitOrderBookUnwatch(t *testing.T) {
 	}
 }
 
-func TestGetConfigHardensKucoinTradeBatchLifecycle(t *testing.T) {
+func TestGetConfigReflectsKucoinTradeBatchLifecycle(t *testing.T) {
 	cfg := getConfig("kucoin", "spot")
 
 	if !cfg.UseForSymbols {
@@ -95,10 +116,10 @@ func TestGetConfigHardensKucoinTradeBatchLifecycle(t *testing.T) {
 	if !cfg.OneTradeBatchPerShard {
 		t.Fatal("expected kucoin spot to enforce one trade batch per shard")
 	}
-	if cfg.SupportsTradeBatchUnwatch {
-		t.Fatalf("expected kucoin spot batch unwatch to stay disabled, got %#v", cfg)
+	if !cfg.SupportsTradeBatchUnwatch {
+		t.Fatalf("expected kucoin spot batch unwatch to stay enabled, got %#v", cfg)
 	}
-	if !cfg.RecycleExchangeOnTradeChange {
-		t.Fatalf("expected kucoin spot to recycle exchange on trade list changes, got %#v", cfg)
+	if cfg.RecycleExchangeOnTradeChange {
+		t.Fatalf("expected kucoin spot to keep exchange reuse on trade list changes, got %#v", cfg)
 	}
 }

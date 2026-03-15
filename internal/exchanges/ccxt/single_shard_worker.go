@@ -165,7 +165,8 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 					return
 				}
 				attempt++
-				log.Printf("[CCXT-SINGLE-SHARD-ERROR] exchange=%s market_type=%s data_type=trades symbol=%s attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, symbol, attempt, err)
+				delay := reconnectDelay(sw.config, attempt)
+				log.Printf("[CCXT-SINGLE-SHARD-ERROR] exchange=%s market_type=%s data_type=trades symbol=%s attempt=%d err=%v. Warte %s.", sw.exchangeName, sw.marketType, symbol, attempt, err, delay)
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
 					Type:       "stream_reconnecting",
 					Exchange:   sw.exchangeName,
@@ -178,7 +179,9 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 					Attempt:    attempt,
 				})
 				reconnecting = true
-				time.Sleep(5 * time.Second)
+				if !sleepWithContext(ctx, delay) {
+					return
+				}
 				continue
 			}
 			if reconnecting {

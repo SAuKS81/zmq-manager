@@ -143,7 +143,8 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 					return
 				}
 				attempt++
-				log.Printf("[CCXT-OB-SHARD-ERROR] exchange=%s market_type=%s data_type=orderbooks symbol=%s depth=%d attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, symbol, depth, attempt, err)
+				delay := reconnectDelay(sw.config, attempt)
+				log.Printf("[CCXT-OB-SHARD-ERROR] exchange=%s market_type=%s data_type=orderbooks symbol=%s depth=%d attempt=%d err=%v. Warte %s.", sw.exchangeName, sw.marketType, symbol, depth, attempt, err, delay)
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
 					Type:       "stream_reconnecting",
 					Exchange:   sw.exchangeName,
@@ -156,7 +157,9 @@ func (sw *OrderBookShardWorker) runSingleWatch(ctx context.Context, symbol strin
 					Attempt:    attempt,
 				})
 				reconnecting = true
-				time.Sleep(5 * time.Second)
+				if !sleepWithContext(ctx, delay) {
+					return
+				}
 				continue
 			}
 			if reconnecting {

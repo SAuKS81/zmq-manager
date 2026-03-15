@@ -28,6 +28,9 @@ type ExchangeConfig struct {
 	SubscribePause                time.Duration
 	BatchSubscribePause           time.Duration
 	NewShardPause                 time.Duration
+	ReconnectBaseDelay            time.Duration
+	ReconnectMaxDelay             time.Duration
+	ReconnectJitter               time.Duration
 	SupportsTradeUnwatch          bool
 	SupportsTradeBatchUnwatch     bool
 	SupportsOrderBookUnwatch      bool
@@ -52,20 +55,26 @@ func (p ExchangePolicySet) configForMarket(marketType string) ExchangeConfig {
 
 var defaultExchangePolicy = ExchangePolicySet{
 	Spot: ExchangeConfig{
-		Enabled:         true,
-		UseForSymbols:   false,
-		BatchSize:       1,
-		SymbolsPerShard: 1,
-		SubscribePause:  300 * time.Millisecond,
-		NewShardPause:   1200 * time.Millisecond,
+		Enabled:            true,
+		UseForSymbols:      false,
+		BatchSize:          1,
+		SymbolsPerShard:    1,
+		SubscribePause:     500 * time.Millisecond,
+		NewShardPause:      2500 * time.Millisecond,
+		ReconnectBaseDelay: 10 * time.Second,
+		ReconnectMaxDelay:  90 * time.Second,
+		ReconnectJitter:    3 * time.Second,
 	},
 	Swap: ExchangeConfig{
-		Enabled:         true,
-		UseForSymbols:   false,
-		BatchSize:       1,
-		SymbolsPerShard: 1,
-		SubscribePause:  300 * time.Millisecond,
-		NewShardPause:   1200 * time.Millisecond,
+		Enabled:            true,
+		UseForSymbols:      false,
+		BatchSize:          1,
+		SymbolsPerShard:    1,
+		SubscribePause:     500 * time.Millisecond,
+		NewShardPause:      2500 * time.Millisecond,
+		ReconnectBaseDelay: 10 * time.Second,
+		ReconnectMaxDelay:  90 * time.Second,
+		ReconnectJitter:    3 * time.Second,
 	},
 }
 
@@ -201,20 +210,26 @@ var exchangePolicies = map[string]ExchangePolicySet{
 	},
 	"bitmart": {
 		Spot: ExchangeConfig{
-			Enabled:         true,
-			UseForSymbols:   true,
-			BatchSize:       20,
-			SymbolsPerShard: 20,
-			SubscribePause:  200 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:            true,
+			UseForSymbols:      true,
+			BatchSize:          20,
+			SymbolsPerShard:    20,
+			SubscribePause:     350 * time.Millisecond,
+			NewShardPause:      2500 * time.Millisecond,
+			ReconnectBaseDelay: 15 * time.Second,
+			ReconnectMaxDelay:  120 * time.Second,
+			ReconnectJitter:    5 * time.Second,
 		},
 		Swap: ExchangeConfig{
-			Enabled:         false,
-			UseForSymbols:   false,
-			BatchSize:       1,
-			SymbolsPerShard: 50,
-			SubscribePause:  200 * time.Millisecond,
-			NewShardPause:   1100 * time.Millisecond,
+			Enabled:            false,
+			UseForSymbols:      false,
+			BatchSize:          1,
+			SymbolsPerShard:    50,
+			SubscribePause:     350 * time.Millisecond,
+			NewShardPause:      2500 * time.Millisecond,
+			ReconnectBaseDelay: 15 * time.Second,
+			ReconnectMaxDelay:  120 * time.Second,
+			ReconnectJitter:    5 * time.Second,
 		},
 	},
 	"mexc": {
@@ -281,6 +296,18 @@ func getConfig(exchangeName, marketType string) ExchangeConfig {
 	}
 	if cfg.SubscribePause <= 0 {
 		cfg.SubscribePause = defaultExchangePolicy.configForMarket(marketType).SubscribePause
+	}
+	if cfg.ReconnectBaseDelay <= 0 {
+		cfg.ReconnectBaseDelay = defaultExchangePolicy.configForMarket(marketType).ReconnectBaseDelay
+	}
+	if cfg.ReconnectMaxDelay <= 0 {
+		cfg.ReconnectMaxDelay = defaultExchangePolicy.configForMarket(marketType).ReconnectMaxDelay
+	}
+	if cfg.ReconnectJitter < 0 {
+		cfg.ReconnectJitter = 0
+	}
+	if cfg.ReconnectMaxDelay < cfg.ReconnectBaseDelay {
+		cfg.ReconnectMaxDelay = cfg.ReconnectBaseDelay
 	}
 	return cfg
 }

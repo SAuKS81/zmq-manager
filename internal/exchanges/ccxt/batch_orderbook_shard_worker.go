@@ -213,7 +213,8 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 					}
 					continue
 				}
-				log.Printf("[CCXT-BATCH-OB-ERROR] exchange=%s market_type=%s data_type=orderbooks batch_size=%d symbols=%s attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err)
+				delay := reconnectDelay(sw.config, attempt)
+				log.Printf("[CCXT-BATCH-OB-ERROR] exchange=%s market_type=%s data_type=orderbooks batch_size=%d symbols=%s attempt=%d err=%v. Warte %s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err, delay)
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
 					Type:       "stream_reconnecting",
 					Exchange:   sw.exchangeName,
@@ -226,7 +227,9 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 					Attempt:    attempt,
 				})
 				reconnecting = true
-				time.Sleep(5 * time.Second)
+				if !sleepWithContext(ctx, delay) {
+					return
+				}
 				continue
 			}
 			if reconnecting {

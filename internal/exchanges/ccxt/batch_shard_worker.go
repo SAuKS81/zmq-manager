@@ -205,6 +205,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 				attempt++
 				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
 					if sw.symbolStillSupported(missingSymbol) {
+						delay := reconnectDelay(sw.config, attempt)
 						log.Printf("[CCXT-BATCH-SHARD-WARN] Verdaechtiger BadSymbol fuer weiterhin unterstuetztes Symbol '%s' (%s/%s). Batch bleibt unveraendert. err=%v", missingSymbol, sw.exchangeName, sw.marketType, err)
 						emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
 							Type:       "stream_update_failed",
@@ -219,7 +220,9 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 						})
 						reconnecting = true
 						sw.recycleExchangeWithTradeLimit(sw.cacheNForBatch(currentBatch))
-						time.Sleep(5 * time.Second)
+						if !sleepWithContext(ctx, delay) {
+							return
+						}
 						continue
 					}
 					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne bestaetigt ungueltiges Symbol '%s' aus Batch (%s/%s). err=%v", missingSymbol, sw.exchangeName, sw.marketType, err)
@@ -244,7 +247,8 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					}
 					continue
 				}
-				log.Printf("[CCXT-BATCH-SHARD-ERROR] exchange=%s market_type=%s data_type=trades batch_size=%d symbols=%s attempt=%d err=%v. Warte 5s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err)
+				delay := reconnectDelay(sw.config, attempt)
+				log.Printf("[CCXT-BATCH-SHARD-ERROR] exchange=%s market_type=%s data_type=trades batch_size=%d symbols=%s attempt=%d err=%v. Warte %s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err, delay)
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
 					Type:       "stream_reconnecting",
 					Exchange:   sw.exchangeName,
@@ -257,7 +261,9 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					Attempt:    attempt,
 				})
 				reconnecting = true
-				time.Sleep(5 * time.Second)
+				if !sleepWithContext(ctx, delay) {
+					return
+				}
 				continue
 			}
 			if reconnecting {
