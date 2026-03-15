@@ -9,7 +9,9 @@ import (
 )
 
 const badSymbolPrefix = "does not have market symbol "
-const badSymbolPrefix2 = "bad symbol"
+const stackTraceMarker = "\nStack trace:"
+const stackMarker = "\nStack:"
+const debugStackMarker = "\ngoroutine "
 
 var symbolPattern = regexp.MustCompile(`([A-Za-z0-9._-]+/[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?)`)
 
@@ -17,7 +19,7 @@ func extractMissingMarketSymbol(err error) (string, bool) {
 	if err == nil {
 		return "", false
 	}
-	msg := strings.TrimSpace(err.Error())
+	msg := trimErrorEnvelope(strings.TrimSpace(err.Error()))
 	lower := strings.ToLower(msg)
 
 	// Primary pattern used by many ccxt errors.
@@ -33,14 +35,28 @@ func extractMissingMarketSymbol(err error) (string, bool) {
 		}
 	}
 
-	// Fallback for variants like "BadSymbol", "bad symbol", etc.
-	if strings.Contains(lower, badSymbolPrefix2) || strings.Contains(lower, "badsymbol") || strings.Contains(lower, "market symbol") {
+	// Stricter fallback for CCXT panic wrappers that still carry a BadSymbol marker
+	// in the headline but may include unrelated symbols in the appended stack trace.
+	if strings.Contains(lower, "badsymbol") || strings.Contains(lower, "[badsymbol]") || strings.Contains(lower, "[bad symbol]") {
 		if m := symbolPattern.FindStringSubmatch(msg); len(m) > 1 && m[1] != "" {
 			return m[1], true
 		}
 	}
 
 	return "", false
+}
+
+func trimErrorEnvelope(msg string) string {
+	if idx := strings.Index(msg, stackTraceMarker); idx >= 0 {
+		msg = msg[:idx]
+	}
+	if idx := strings.Index(msg, stackMarker); idx >= 0 {
+		msg = msg[:idx]
+	}
+	if idx := strings.Index(msg, debugStackMarker); idx >= 0 {
+		msg = msg[:idx]
+	}
+	return strings.TrimSpace(msg)
 }
 
 func removeSymbolFromBatch(batch []string, symbol string) []string {
