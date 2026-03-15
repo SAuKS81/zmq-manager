@@ -19,9 +19,7 @@ type describableExchange interface {
 }
 
 func createCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro.IExchange {
-	exchange := newCCXTExchange(exchangeName, marketType, tradeLimit...)
-	applyMarketSnapshot(exchangeName, marketType, exchange)
-	return exchange
+	return newCCXTExchange(exchangeName, marketType, tradeLimit...)
 }
 
 func newCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro.IExchange {
