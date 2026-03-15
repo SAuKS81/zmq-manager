@@ -202,9 +202,9 @@ var exchangePolicies = map[string]ExchangePolicySet{
 	"bitmart": {
 		Spot: ExchangeConfig{
 			Enabled:         true,
-			UseForSymbols:   false,
-			BatchSize:       1,
-			SymbolsPerShard: 50,
+			UseForSymbols:   true,
+			BatchSize:       20,
+			SymbolsPerShard: 20,
 			SubscribePause:  200 * time.Millisecond,
 			NewShardPause:   1100 * time.Millisecond,
 		},
