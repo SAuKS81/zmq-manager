@@ -29,6 +29,9 @@ func TestGetConfigFallsBackToConservativeDefault(t *testing.T) {
 	if cfg.NewShardPause != 2500*time.Millisecond {
 		t.Fatalf("expected default new shard pause 2500ms, got %s", cfg.NewShardPause)
 	}
+	if cfg.ShardSubscribePause != 2500*time.Millisecond {
+		t.Fatalf("expected default shard subscribe pause 2500ms, got %s", cfg.ShardSubscribePause)
+	}
 	if cfg.ReconnectBaseDelay != 10*time.Second {
 		t.Fatalf("expected default reconnect base delay 10s, got %s", cfg.ReconnectBaseDelay)
 	}

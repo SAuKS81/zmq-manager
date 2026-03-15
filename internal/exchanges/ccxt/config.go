@@ -28,6 +28,7 @@ type ExchangeConfig struct {
 	SubscribePause                time.Duration
 	BatchSubscribePause           time.Duration
 	NewShardPause                 time.Duration
+	ShardSubscribePause           time.Duration
 	ReconnectBaseDelay            time.Duration
 	ReconnectMaxDelay             time.Duration
 	ReconnectJitter               time.Duration
@@ -293,6 +294,9 @@ func getConfig(exchangeName, marketType string) ExchangeConfig {
 	}
 	if cfg.NewShardPause <= 0 {
 		cfg.NewShardPause = defaultExchangePolicy.configForMarket(marketType).NewShardPause
+	}
+	if cfg.ShardSubscribePause <= 0 {
+		cfg.ShardSubscribePause = cfg.NewShardPause
 	}
 	if cfg.SubscribePause <= 0 {
 		cfg.SubscribePause = defaultExchangePolicy.configForMarket(marketType).SubscribePause

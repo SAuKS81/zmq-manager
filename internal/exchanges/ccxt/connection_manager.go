@@ -154,6 +154,28 @@ func (cm *ConnectionManager) tradeShardCapacity() int {
 	return 1
 }
 
+func (cm *ConnectionManager) dispatchSubscribeCommandsSequentially(shards []IShardWorker, additionsByShard map[IShardWorker]map[string]int, dataType string) {
+	if len(additionsByShard) == 0 {
+		return
+	}
+
+	pause := cm.config.ShardSubscribePause
+	dispatched := 0
+	for _, shard := range shards {
+		symbols, ok := additionsByShard[shard]
+		if !ok || len(symbols) == 0 {
+			continue
+		}
+
+		dispatched++
+		log.Printf("[CCXT-CONN-MANAGER] Dispatch %s subscribe an Shard %d/%d mit %d Symbolen (%s/%s).", dataType, dispatched, len(additionsByShard), len(symbols), cm.exchangeName, cm.marketType)
+		shard.getCommandChannel() <- ShardCommand{Action: "subscribe", Symbols: symbols}
+		if dispatched < len(additionsByShard) && pause > 0 {
+			time.Sleep(pause)
+		}
+	}
+}
+
 // processTradeCommands ist korrekt und bleibt unverändert
 func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 	symbolsToAdd := make(map[string]int)
@@ -217,9 +239,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 		cm.symbolToTradeCache[symbol] = symbolsToAdd[symbol]
 		cm.tradeShardLoad[targetShard]++
 	}
-	for shard, symbols := range additionsByShard {
-		shard.getCommandChannel() <- ShardCommand{Action: "subscribe", Symbols: symbols}
-	}
+	cm.dispatchSubscribeCommandsSequentially(cm.tradeShards, additionsByShard, "trade")
 }
 
 // processSingleOrderBookCommands ist korrekt und bleibt unverändert
@@ -272,9 +292,7 @@ func (cm *ConnectionManager) processSingleOrderBookCommands(cmds []ManagerComman
 		cm.symbolToOBDepth[symbol] = depth
 		cm.obShardLoad[targetShard]++
 	}
-	for shard, symbols := range additionsByShard {
-		shard.getCommandChannel() <- ShardCommand{Action: "subscribe", Symbols: symbols}
-	}
+	cm.dispatchSubscribeCommandsSequentially(cm.obShards, additionsByShard, "orderbook")
 }
 
 // ======================================================================
@@ -340,10 +358,7 @@ func (cm *ConnectionManager) processBatchOrderBookCommands(cmds []ManagerCommand
 	}
 
 	// Sende die gebündelten Befehle an die jeweiligen Shards
-	for shard, symbols := range additionsByShard {
-		log.Printf("[CCXT-CONN-MANAGER] Sende %d OB-Symbole an BATCH Shard. Neue Auslastung: %d/%d", len(symbols), cm.obShardLoad[shard], cm.config.SymbolsPerShard)
-		shard.getCommandChannel() <- ShardCommand{Action: "subscribe", Symbols: symbols}
-	}
+	cm.dispatchSubscribeCommandsSequentially(cm.obShards, additionsByShard, "orderbook")
 }
 
 func (cm *ConnectionManager) unsubscribeTradeSymbolsLocked(symbolsToRemove map[string]int) {
