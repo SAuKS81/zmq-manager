@@ -27,6 +27,9 @@ func newCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro
 	if len(tradeLimit) > 0 {
 		effectiveTradeLimit = tradeLimit[0]
 	}
+	if effectiveTradeLimit > 0 {
+		log.Printf("[CCXT-LIFECYCLE] Create exchange=%s market_type=%s tradesLimit=%d", exchangeName, marketType, effectiveTradeLimit)
+	}
 	return ccxtpro.CreateExchange(exchangeName, makeExchangeOptions(exchangeName, marketType, effectiveTradeLimit))
 }
 
