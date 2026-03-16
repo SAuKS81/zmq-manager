@@ -6,6 +6,7 @@ package ccxt
 import (
 	"fmt"
 	"reflect"
+	"sync"
 
 	ccxtcore "github.com/ccxt/ccxt/go/v4"
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
@@ -111,6 +112,16 @@ func lookupTradeCacheValue(tradesValue reflect.Value, symbol string) (reflect.Va
 	}
 	if !tradesValue.IsValid() {
 		return reflect.Value{}, false
+	}
+
+	if tradesValue.Kind() == reflect.Ptr && !tradesValue.IsNil() {
+		if syncMap, ok := tradesValue.Interface().(*sync.Map); ok {
+			cache, found := syncMap.Load(symbol)
+			if !found {
+				return reflect.Value{}, false
+			}
+			return reflect.ValueOf(cache), true
+		}
 	}
 
 	if tradesValue.Kind() == reflect.Map {
