@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"bybit-watcher/internal/shared_types"
-	ccxt "github.com/ccxt/ccxt/go/v4"
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
@@ -122,7 +121,7 @@ drain:
 	sw.mu.Unlock()
 
 	recycledForListChange := false
-	if desiredTradeLimit > 0 && !sw.ensureTradeExchange(desiredTradeLimit) {
+	if !sw.ensureTradeExchange(desiredTradeLimit) {
 		return
 	}
 	if hadActiveWorkers && sw.config.RecycleExchangeOnTradeChange {
@@ -197,7 +196,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		case <-ctx.Done():
 			return
 		default:
-			trades, err := sw.safeWatchTradesForSymbols(currentBatch, sw.cacheNForBatch(currentBatch))
+			trades, err := sw.safeWatchTradesForSymbols(currentBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -219,7 +218,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 							Attempt:    attempt,
 						})
 						reconnecting = true
-						sw.recycleExchangeWithTradeLimit(sw.cacheNForBatch(currentBatch))
+						sw.recycleExchangeWithTradeLimit(sw.tradeLimitForCurrentBatch(currentBatch))
 						if !sleepWithContext(ctx, delay) {
 							return
 						}
@@ -299,15 +298,12 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 	}
 }
 
-func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string, cacheN int) (trades []ccxtpro.Trade, err error) {
+func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string) (trades []ccxtpro.Trade, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in WatchTradesForSymbols: %v\n%s", r, string(debug.Stack()))
 		}
 	}()
-	if cacheN > 0 {
-		return sw.exchange.WatchTradesForSymbols(symbolsBatch, ccxt.WithWatchTradesForSymbolsLimit(int64(cacheN)))
-	}
 	return sw.exchange.WatchTradesForSymbols(symbolsBatch)
 }
 
@@ -344,7 +340,7 @@ func (sw *BatchShardWorker) filterSupportedSymbols(symbols []string) []string {
 	return filtered
 }
 
-func (sw *BatchShardWorker) cacheNForBatch(symbols []string) int {
+func (sw *BatchShardWorker) tradeLimitForCurrentBatch(symbols []string) int {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 
@@ -371,7 +367,7 @@ func (sw *BatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
 	if desiredTradeLimit <= 0 {
 		desiredTradeLimit = 1
 	}
-	if sw.exchange != nil && sw.tradeLimit == desiredTradeLimit {
+	if sw.exchange != nil {
 		return true
 	}
 	sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
