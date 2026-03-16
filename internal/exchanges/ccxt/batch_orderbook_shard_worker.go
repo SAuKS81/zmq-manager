@@ -126,28 +126,13 @@ drain:
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
 		}
-		if sw.config.SupportsOrderBookBatchUnwatch {
+		if sw.config.SupportsOrderBookBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchOrderBookForSymbols") {
 			if _, err := sw.safeUnWatchOrderBookForSymbols(symbolsToUnwatch); err != nil {
-				log.Printf("[CCXT-BATCH-OB-WARN] UnWatchOrderBookForSymbols(%d) fehlgeschlagen (%s/%s): %v. Fallback auf Shard-Recycle.", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
-				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
-					Type:       "stream_update_failed",
-					Exchange:   sw.exchangeName,
-					MarketType: sw.marketType,
-					DataType:   "orderbooks",
-					Symbols:    append([]string(nil), symbolsToUnwatch...),
-					Status:     "failed",
-					Reason:     "unwatch_orderbook_for_symbols_failed",
-					Message:    err.Error(),
-				})
-				sw.recycleExchange()
+				log.Printf("[CCXT-BATCH-OB-WARN] UnWatchOrderBookForSymbols(%d) fehlgeschlagen (%s/%s): %v", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
 			}
-		} else {
-			log.Printf("[CCXT-BATCH-OB-INFO] Batch orderbook unwatch nicht freigegeben (%s/%s). Nutze harten Shard-Recycle fuer %d Symbole.", sw.exchangeName, sw.marketType, len(symbolsToUnwatch))
-			sw.recycleExchange()
 		}
 	}
 
-	symbolsToWatch = sw.filterSupportedSymbols(symbolsToWatch)
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
 		ctx, sw.cancelWorkers = context.WithCancel(context.Background())
@@ -190,29 +175,6 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 					return
 				}
 				attempt++
-				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
-					log.Printf("[CCXT-BATCH-OB-WARN] Entferne ungueltiges Symbol '%s' aus Batch (%s/%s).", missingSymbol, sw.exchangeName, sw.marketType)
-					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
-						Type:       "stream_update_failed",
-						Exchange:   sw.exchangeName,
-						MarketType: sw.marketType,
-						DataType:   "orderbooks",
-						Symbol:     missingSymbol,
-						Status:     "failed",
-						Reason:     "missing_market_symbol",
-						Message:    err.Error(),
-						Attempt:    attempt,
-					})
-					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
-					sw.mu.Lock()
-					delete(sw.activeSymbols, missingSymbol)
-					sw.mu.Unlock()
-					if len(currentBatch) == 0 {
-						log.Printf("[CCXT-BATCH-OB-WARN] Batch leer nach Symbol-Filter (%s/%s), Worker beendet.", sw.exchangeName, sw.marketType)
-						return
-					}
-					continue
-				}
 				delay := reconnectDelay(sw.config, attempt)
 				log.Printf("[CCXT-BATCH-OB-ERROR] exchange=%s market_type=%s data_type=orderbooks batch_size=%d symbols=%s attempt=%d err=%v. Warte %s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err, delay)
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
@@ -292,34 +254,4 @@ func (sw *BatchOrderBookShardWorker) safeUnWatchOrderBookForSymbols(symbolsBatch
 		}
 	}()
 	return sw.exchange.UnWatchOrderBookForSymbols(symbolsBatch)
-}
-
-func (sw *BatchOrderBookShardWorker) filterSupportedSymbols(symbols []string) []string {
-	supported, err := getSupportedSymbols(sw.exchangeName, sw.marketType)
-	if err != nil {
-		log.Printf("[CCXT-BATCH-OB-WARN] supported symbol cache failed for %s/%s: %v", sw.exchangeName, sw.marketType, err)
-		return symbols
-	}
-	if len(supported) == 0 {
-		return symbols
-	}
-
-	filtered := make([]string, 0, len(symbols))
-	removed := 0
-	for _, symbol := range symbols {
-		if _, ok := supported[symbol]; ok {
-			filtered = append(filtered, symbol)
-			continue
-		}
-		removed++
-		sw.mu.Lock()
-		delete(sw.activeSymbols, symbol)
-		sw.mu.Unlock()
-	}
-
-	if removed > 0 {
-		log.Printf("[CCXT-BATCH-OB-WARN] dropped %d unsupported symbols for %s/%s", removed, sw.exchangeName, sw.marketType)
-	}
-
-	return filtered
 }
