@@ -30,6 +30,7 @@ type SingleWatchShardWorker struct {
 	tradeLimit     int
 	activeWatchers map[string]context.CancelFunc
 	activeCacheN   map[string]int
+	cacheLogged    map[string]bool
 }
 
 func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *SingleWatchShardWorker {
@@ -44,6 +45,7 @@ func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeC
 		wg:             wg,
 		activeWatchers: make(map[string]context.CancelFunc),
 		activeCacheN:   make(map[string]int),
+		cacheLogged:    make(map[string]bool),
 	}
 }
 
@@ -187,6 +189,7 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 			for _, trade := range trades {
 				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 				if normalized != nil {
+					sw.logTradeCacheProofOnce(normalized.Symbol)
 					select {
 					case sw.dataCh <- normalized:
 					default:
@@ -248,4 +251,33 @@ func (sw *SingleWatchShardWorker) ensureTradeExchange(desiredTradeLimit int) boo
 		return false
 	}
 	return true
+}
+
+func (sw *SingleWatchShardWorker) logTradeCacheProofOnce(symbol string) {
+	sw.mu.Lock()
+	if sw.cacheLogged[symbol] {
+		sw.mu.Unlock()
+		return
+	}
+	sw.mu.Unlock()
+
+	snapshot, err := inspectTradeCache(sw.exchange, symbol)
+	if err != nil {
+		log.Printf("[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s inspect_failed=%v", sw.exchangeName, sw.marketType, symbol, err)
+		return
+	}
+
+	sw.mu.Lock()
+	sw.cacheLogged[symbol] = true
+	sw.mu.Unlock()
+
+	log.Printf(
+		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s max_size=%d current_len=%d cache_type=%s",
+		sw.exchangeName,
+		sw.marketType,
+		symbol,
+		snapshot.MaxSize,
+		snapshot.CurrentLen,
+		snapshot.CacheType,
+	)
 }

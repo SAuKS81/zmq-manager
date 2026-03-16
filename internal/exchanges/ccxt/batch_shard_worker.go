@@ -30,6 +30,7 @@ type BatchShardWorker struct {
 	exchange      ccxtpro.IExchange
 	tradeLimit    int
 	cancelWorkers context.CancelFunc
+	cacheLogged   map[string]bool
 }
 
 func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchShardWorker {
@@ -43,6 +44,7 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 		statusCh:      statusCh,
 		wg:            wg,
 		activeSymbols: make(map[string]int),
+		cacheLogged:   make(map[string]bool),
 	}
 }
 
@@ -224,6 +226,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					continue
 				}
 				if normalized != nil {
+					sw.logTradeCacheProofOnce(normalized.Symbol)
 					sw.dataCh <- normalized
 				}
 			}
@@ -268,4 +271,33 @@ func (sw *BatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
 	}
 	sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
 	return sw.exchange != nil
+}
+
+func (sw *BatchShardWorker) logTradeCacheProofOnce(symbol string) {
+	sw.mu.Lock()
+	if sw.cacheLogged[symbol] {
+		sw.mu.Unlock()
+		return
+	}
+	sw.mu.Unlock()
+
+	snapshot, err := inspectTradeCache(sw.exchange, symbol)
+	if err != nil {
+		log.Printf("[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s inspect_failed=%v", sw.exchangeName, sw.marketType, symbol, err)
+		return
+	}
+
+	sw.mu.Lock()
+	sw.cacheLogged[symbol] = true
+	sw.mu.Unlock()
+
+	log.Printf(
+		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s max_size=%d current_len=%d cache_type=%s",
+		sw.exchangeName,
+		sw.marketType,
+		symbol,
+		snapshot.MaxSize,
+		snapshot.CurrentLen,
+		snapshot.CacheType,
+	)
 }
