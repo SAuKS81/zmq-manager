@@ -31,6 +31,8 @@ type SingleWatchShardWorker struct {
 	activeWatchers map[string]context.CancelFunc
 	activeCacheN   map[string]int
 	cacheLogged    map[string]bool
+	cacheRechecked map[string]bool
+	tradeSeenCount map[string]int
 }
 
 func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *SingleWatchShardWorker {
@@ -46,6 +48,8 @@ func NewSingleWatchShardWorker(exchangeName, marketType string, config ExchangeC
 		activeWatchers: make(map[string]context.CancelFunc),
 		activeCacheN:   make(map[string]int),
 		cacheLogged:    make(map[string]bool),
+		cacheRechecked: make(map[string]bool),
+		tradeSeenCount: make(map[string]int),
 	}
 }
 
@@ -189,7 +193,7 @@ func (sw *SingleWatchShardWorker) runSingleWatch(ctx context.Context, symbol str
 			for _, trade := range trades {
 				normalized, _ := NormalizeTrade(trade, sw.exchangeName, sw.marketType, goTimestamp, ingestNow.UnixNano())
 				if normalized != nil {
-					sw.logTradeCacheProofOnce(normalized.Symbol)
+					sw.logTradeCacheProof(normalized.Symbol)
 					select {
 					case sw.dataCh <- normalized:
 					default:
@@ -253,9 +257,13 @@ func (sw *SingleWatchShardWorker) ensureTradeExchange(desiredTradeLimit int) boo
 	return true
 }
 
-func (sw *SingleWatchShardWorker) logTradeCacheProofOnce(symbol string) {
+func (sw *SingleWatchShardWorker) logTradeCacheProof(symbol string) {
 	sw.mu.Lock()
-	if sw.cacheLogged[symbol] {
+	sw.tradeSeenCount[symbol]++
+	tradeCount := sw.tradeSeenCount[symbol]
+	shouldLogInitial := !sw.cacheLogged[symbol]
+	shouldLogRecheck := sw.cacheLogged[symbol] && !sw.cacheRechecked[symbol] && tradeCount >= 25
+	if !shouldLogInitial && !shouldLogRecheck {
 		sw.mu.Unlock()
 		return
 	}
@@ -268,14 +276,23 @@ func (sw *SingleWatchShardWorker) logTradeCacheProofOnce(symbol string) {
 	}
 
 	sw.mu.Lock()
-	sw.cacheLogged[symbol] = true
+	phase := "initial"
+	if shouldLogInitial {
+		sw.cacheLogged[symbol] = true
+	}
+	if shouldLogRecheck {
+		sw.cacheRechecked[symbol] = true
+		phase = "recheck"
+	}
 	sw.mu.Unlock()
 
 	log.Printf(
-		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s max_size=%d current_len=%d cache_type=%s",
+		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s phase=%s trades_seen=%d max_size=%d current_len=%d cache_type=%s",
 		sw.exchangeName,
 		sw.marketType,
 		symbol,
+		phase,
+		tradeCount,
 		snapshot.MaxSize,
 		snapshot.CurrentLen,
 		snapshot.CacheType,

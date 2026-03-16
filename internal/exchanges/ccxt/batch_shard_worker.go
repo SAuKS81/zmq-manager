@@ -17,34 +17,38 @@ import (
 
 // BatchShardWorker verwaltet eine einzelne WebSocket-Verbindung fuer watchTradesForSymbols.
 type BatchShardWorker struct {
-	exchangeName  string
-	marketType    string
-	config        ExchangeConfig
-	commandCh     chan ShardCommand
-	stopCh        chan struct{}
-	dataCh        chan<- *shared_types.TradeUpdate
-	statusCh      chan<- *shared_types.StreamStatusEvent
-	wg            *sync.WaitGroup
-	mu            sync.Mutex
-	activeSymbols map[string]int
-	exchange      ccxtpro.IExchange
-	tradeLimit    int
-	cancelWorkers context.CancelFunc
-	cacheLogged   map[string]bool
+	exchangeName   string
+	marketType     string
+	config         ExchangeConfig
+	commandCh      chan ShardCommand
+	stopCh         chan struct{}
+	dataCh         chan<- *shared_types.TradeUpdate
+	statusCh       chan<- *shared_types.StreamStatusEvent
+	wg             *sync.WaitGroup
+	mu             sync.Mutex
+	activeSymbols  map[string]int
+	exchange       ccxtpro.IExchange
+	tradeLimit     int
+	cancelWorkers  context.CancelFunc
+	cacheLogged    map[string]bool
+	cacheRechecked map[string]bool
+	tradeSeenCount map[string]int
 }
 
 func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchShardWorker {
 	return &BatchShardWorker{
-		exchangeName:  exchangeName,
-		marketType:    marketType,
-		config:        config,
-		commandCh:     make(chan ShardCommand, 500),
-		stopCh:        stopCh,
-		dataCh:        dataCh,
-		statusCh:      statusCh,
-		wg:            wg,
-		activeSymbols: make(map[string]int),
-		cacheLogged:   make(map[string]bool),
+		exchangeName:   exchangeName,
+		marketType:     marketType,
+		config:         config,
+		commandCh:      make(chan ShardCommand, 500),
+		stopCh:         stopCh,
+		dataCh:         dataCh,
+		statusCh:       statusCh,
+		wg:             wg,
+		activeSymbols:  make(map[string]int),
+		cacheLogged:    make(map[string]bool),
+		cacheRechecked: make(map[string]bool),
+		tradeSeenCount: make(map[string]int),
 	}
 }
 
@@ -226,7 +230,7 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					continue
 				}
 				if normalized != nil {
-					sw.logTradeCacheProofOnce(normalized.Symbol)
+					sw.logTradeCacheProof(normalized.Symbol)
 					sw.dataCh <- normalized
 				}
 			}
@@ -273,9 +277,13 @@ func (sw *BatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
 	return sw.exchange != nil
 }
 
-func (sw *BatchShardWorker) logTradeCacheProofOnce(symbol string) {
+func (sw *BatchShardWorker) logTradeCacheProof(symbol string) {
 	sw.mu.Lock()
-	if sw.cacheLogged[symbol] {
+	sw.tradeSeenCount[symbol]++
+	tradeCount := sw.tradeSeenCount[symbol]
+	shouldLogInitial := !sw.cacheLogged[symbol]
+	shouldLogRecheck := sw.cacheLogged[symbol] && !sw.cacheRechecked[symbol] && tradeCount >= 25
+	if !shouldLogInitial && !shouldLogRecheck {
 		sw.mu.Unlock()
 		return
 	}
@@ -288,14 +296,23 @@ func (sw *BatchShardWorker) logTradeCacheProofOnce(symbol string) {
 	}
 
 	sw.mu.Lock()
-	sw.cacheLogged[symbol] = true
+	phase := "initial"
+	if shouldLogInitial {
+		sw.cacheLogged[symbol] = true
+	}
+	if shouldLogRecheck {
+		sw.cacheRechecked[symbol] = true
+		phase = "recheck"
+	}
 	sw.mu.Unlock()
 
 	log.Printf(
-		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s max_size=%d current_len=%d cache_type=%s",
+		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s phase=%s trades_seen=%d max_size=%d current_len=%d cache_type=%s",
 		sw.exchangeName,
 		sw.marketType,
 		symbol,
+		phase,
+		tradeCount,
 		snapshot.MaxSize,
 		snapshot.CurrentLen,
 		snapshot.CacheType,
