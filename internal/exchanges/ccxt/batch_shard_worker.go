@@ -31,9 +31,6 @@ type BatchShardWorker struct {
 	exchange       ccxtpro.IExchange
 	tradeLimit     int
 	cancelWorkers  context.CancelFunc
-	cacheLogged    map[string]bool
-	cacheRechecked map[string]bool
-	tradeSeenCount map[string]int
 	activeWorkers  atomic.Int64
 }
 
@@ -48,9 +45,6 @@ func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig,
 		statusCh:       statusCh,
 		wg:             wg,
 		activeSymbols:  make(map[string]int),
-		cacheLogged:    make(map[string]bool),
-		cacheRechecked: make(map[string]bool),
-		tradeSeenCount: make(map[string]int),
 	}
 }
 
@@ -272,7 +266,6 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, exchange ccxtpro
 					continue
 				}
 				if normalized != nil {
-					sw.logTradeCacheProof(exchange, normalized.Symbol)
 					if !sw.sendTradeUpdate(ctx, normalized) {
 						return
 					}
@@ -333,46 +326,4 @@ func (sw *BatchShardWorker) sendTradeUpdate(ctx context.Context, normalized *sha
 	case <-ctx.Done():
 		return false
 	}
-}
-
-func (sw *BatchShardWorker) logTradeCacheProof(exchange ccxtpro.IExchange, symbol string) {
-	sw.mu.Lock()
-	sw.tradeSeenCount[symbol]++
-	tradeCount := sw.tradeSeenCount[symbol]
-	shouldLogInitial := !sw.cacheLogged[symbol]
-	shouldLogRecheck := sw.cacheLogged[symbol] && !sw.cacheRechecked[symbol] && tradeCount >= 25
-	if !shouldLogInitial && !shouldLogRecheck {
-		sw.mu.Unlock()
-		return
-	}
-	sw.mu.Unlock()
-
-	snapshot, err := inspectTradeCache(exchange, symbol)
-	if err != nil {
-		log.Printf("[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s inspect_failed=%v", sw.exchangeName, sw.marketType, symbol, err)
-		return
-	}
-
-	sw.mu.Lock()
-	phase := "initial"
-	if shouldLogInitial {
-		sw.cacheLogged[symbol] = true
-	}
-	if shouldLogRecheck {
-		sw.cacheRechecked[symbol] = true
-		phase = "recheck"
-	}
-	sw.mu.Unlock()
-
-	log.Printf(
-		"[CCXT-TRADE-CACHE] exchange=%s market_type=%s symbol=%s phase=%s trades_seen=%d max_size=%d current_len=%d cache_type=%s",
-		sw.exchangeName,
-		sw.marketType,
-		symbol,
-		phase,
-		tradeCount,
-		snapshot.MaxSize,
-		snapshot.CurrentLen,
-		snapshot.CacheType,
-	)
 }
