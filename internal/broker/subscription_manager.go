@@ -414,7 +414,8 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		sm.registerDeployBatch(req)
 		return
 	}
-	exchangeNameForSubID := strings.Split(req.Exchange, "_")[0]
+	exchangeNameForSubID := canonicalSubscriptionExchange(req.Exchange)
+	req.Symbol = canonicalSubscriptionSymbol(exchangeNameForSubID, req.Symbol, req.MarketType)
 	if req.Action == "subscribe_all" && req.DataType == "trades" {
 		wildcardID := exchangeNameForSubID + "-" + req.MarketType + "-all"
 		if _, ok := sm.wildcardSubscribers[wildcardID]; !ok {
@@ -738,6 +739,39 @@ func (sm *SubscriptionManager) shouldLogCCXTFallback(req *shared_types.ClientReq
 
 func getSubscriptionID(exchange, symbol, marketType string) string {
 	return exchange + "-" + marketType + "-" + symbol
+}
+
+func canonicalSubscriptionExchange(exchange string) string {
+	base := strings.Split(strings.ToLower(strings.TrimSpace(exchange)), "_")[0]
+	return canonicalCapabilityExchange(base)
+}
+
+func canonicalSubscriptionSymbol(exchange, symbol, marketType string) string {
+	exchange = canonicalSubscriptionExchange(exchange)
+	symbol = strings.TrimSpace(symbol)
+	if symbol == "" {
+		return ""
+	}
+
+	switch exchange {
+	case "binance":
+		if strings.Contains(symbol, "/") {
+			return binance.TranslateSymbolFromExchange(strings.ToUpper(binance.TranslateSymbolToExchange(symbol)), marketType)
+		}
+		return binance.TranslateSymbolFromExchange(symbol, marketType)
+	case "bybit":
+		if strings.Contains(symbol, "/") {
+			return bybit.TranslateSymbolFromExchange(strings.ToUpper(bybit.TranslateSymbolToExchange(symbol)), marketType)
+		}
+		return bybit.TranslateSymbolFromExchange(symbol, marketType)
+	case "bitget":
+		if strings.Contains(symbol, "/") {
+			return bitget.TranslateSymbolFromExchange(strings.ToUpper(bitget.TranslateSymbolToExchange(symbol)), marketType)
+		}
+		return bitget.TranslateSymbolFromExchange(symbol, marketType)
+	default:
+		return symbol
+	}
 }
 
 func runtimeSymbolAliases(exchange, symbol, marketType string) []string {

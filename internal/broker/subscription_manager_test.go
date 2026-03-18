@@ -199,6 +199,26 @@ func TestDuplicateStickySubscribeIsNoOp(t *testing.T) {
 	}
 }
 
+func TestCanonicalSubscriptionExchangeNormalizesAliases(t *testing.T) {
+	if got := canonicalSubscriptionExchange("huobi"); got != "htx" {
+		t.Fatalf("expected huobi to canonicalize to htx, got %q", got)
+	}
+	if got := canonicalSubscriptionExchange("binance_native"); got != "binance" {
+		t.Fatalf("expected binance_native to canonicalize to binance, got %q", got)
+	}
+}
+
+func TestCanonicalSubscriptionSymbolNormalizesNativeAndUnifiedForms(t *testing.T) {
+	native := canonicalSubscriptionSymbol("binance", "BTCUSDT", "spot")
+	unified := canonicalSubscriptionSymbol("binance", "BTC/USDT", "spot")
+	if native != unified {
+		t.Fatalf("expected native and unified forms to match, got %q vs %q", native, unified)
+	}
+	if native != "BTC/USDT" {
+		t.Fatalf("expected canonical unified symbol BTC/USDT, got %q", native)
+	}
+}
+
 func TestDisconnectCleanupFlappingLeavesNoGhostSubscribers(t *testing.T) {
 	sm := &SubscriptionManager{
 		tradeSubscriptions:     make(map[string]map[string]bool),
