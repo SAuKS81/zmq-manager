@@ -33,7 +33,6 @@ type ConnectionManager struct {
 	exchangeName string
 	marketType   string
 	config       ExchangeConfig
-	features     featureSupport
 	commandCh    chan ManagerCommand
 	stopCh       chan struct{}
 
@@ -62,12 +61,10 @@ type ConnectionManager struct {
 }
 
 func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) *ConnectionManager {
-	features := detectFeatureSupport(exchangeName, marketType)
 	return &ConnectionManager{
 		exchangeName:       exchangeName,
 		marketType:         marketType,
 		config:             config,
-		features:           features,
 		commandCh:          make(chan ManagerCommand, 1000),
 		stopCh:             make(chan struct{}),
 		tradeDataCh:        tradeDataCh,
@@ -135,20 +132,15 @@ func (cm *ConnectionManager) processCommands(cmds []ManagerCommand) {
 }
 
 func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
-	if !cm.config.UseForSymbols && !cm.features.OrderBookBatchWatch {
-		return false
-	}
-	// Workaround for pinned CCXT-Pro build:
-	// bybit swap orderbooks may stall with WatchOrderBookForSymbols.
-	// Use single-symbol watchOrderBook path for swap until upstream behavior is stable.
-	if cm.exchangeName == "bybit" && cm.marketType == "swap" {
-		return false
-	}
-	return cm.config.UseForSymbols || cm.features.OrderBookBatchWatch
+	// Temporarily force the single-symbol path for all exchanges while we
+	// isolate the known CCXT-Go watch*ForSymbols memory behavior.
+	return false
 }
 
 func (cm *ConnectionManager) shouldUseTradeBatchMode() bool {
-	return cm.config.UseForSymbols || cm.features.TradeBatchWatch
+	// Temporarily force the single-symbol path for all exchanges while we
+	// isolate the known CCXT-Go watch*ForSymbols memory behavior.
+	return false
 }
 
 func (cm *ConnectionManager) tradeShardCapacity() int {

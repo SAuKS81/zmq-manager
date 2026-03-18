@@ -10,13 +10,6 @@ import (
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
-type featureSupport struct {
-	TradeBatchWatch       bool
-	TradeBatchUnwatch     bool
-	OrderBookBatchWatch   bool
-	OrderBookBatchUnwatch bool
-}
-
 type describableExchange interface {
 	Describe() interface{}
 }
@@ -85,21 +78,6 @@ func exchangeHasFeature(exchangeName string, exchange ccxtpro.IExchange, feature
 
 	boolFlag, ok := flag.(bool)
 	return ok && boolFlag
-}
-
-func detectFeatureSupport(exchangeName, marketType string) featureSupport {
-	exchange := newCCXTExchange(exchangeName, marketType, 1)
-	if exchange == nil {
-		return featureSupport{}
-	}
-	defer closeCCXTExchange(exchangeName, marketType, exchange)
-
-	return featureSupport{
-		TradeBatchWatch:       exchangeHasFeature(exchangeName, exchange, "watchTradesForSymbols"),
-		TradeBatchUnwatch:     exchangeHasFeature(exchangeName, exchange, "unWatchTradesForSymbols"),
-		OrderBookBatchWatch:   exchangeHasFeature(exchangeName, exchange, "watchOrderBookForSymbols"),
-		OrderBookBatchUnwatch: exchangeHasFeature(exchangeName, exchange, "unWatchOrderBookForSymbols"),
-	}
 }
 
 func featureHardDisabled(exchangeName, feature string) bool {
