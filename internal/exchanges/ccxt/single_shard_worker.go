@@ -214,6 +214,9 @@ func (sw *SingleWatchShardWorker) safeWatchTrades(symbol string) (trades []ccxtp
 }
 
 func (sw *SingleWatchShardWorker) tryUnwatchTrade(symbol string) {
+	if featureHardDisabled(sw.exchangeName, "unWatchTrades") {
+		return
+	}
 	if !(sw.config.SupportsTradeUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTrades")) {
 		return
 	}

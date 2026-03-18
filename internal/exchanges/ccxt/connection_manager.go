@@ -33,6 +33,7 @@ type ConnectionManager struct {
 	exchangeName string
 	marketType   string
 	config       ExchangeConfig
+	features     featureSupport
 	commandCh    chan ManagerCommand
 	stopCh       chan struct{}
 
@@ -61,10 +62,12 @@ type ConnectionManager struct {
 }
 
 func NewConnectionManager(exchangeName, marketType string, config ExchangeConfig, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) *ConnectionManager {
+	features := detectFeatureSupport(exchangeName, marketType)
 	return &ConnectionManager{
 		exchangeName:       exchangeName,
 		marketType:         marketType,
 		config:             config,
+		features:           features,
 		commandCh:          make(chan ManagerCommand, 1000),
 		stopCh:             make(chan struct{}),
 		tradeDataCh:        tradeDataCh,
@@ -132,7 +135,7 @@ func (cm *ConnectionManager) processCommands(cmds []ManagerCommand) {
 }
 
 func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
-	if !cm.config.UseForSymbols {
+	if !cm.config.UseForSymbols && !cm.features.OrderBookBatchWatch {
 		return false
 	}
 	// Workaround for pinned CCXT-Pro build:
@@ -141,11 +144,15 @@ func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
 	if cm.exchangeName == "bybit" && cm.marketType == "swap" {
 		return false
 	}
-	return true
+	return cm.config.UseForSymbols || cm.features.OrderBookBatchWatch
+}
+
+func (cm *ConnectionManager) shouldUseTradeBatchMode() bool {
+	return cm.config.UseForSymbols || cm.features.TradeBatchWatch
 }
 
 func (cm *ConnectionManager) tradeShardCapacity() int {
-	if cm.config.OneTradeBatchPerShard && cm.config.UseForSymbols && cm.config.BatchSize > 0 {
+	if cm.config.OneTradeBatchPerShard && cm.shouldUseTradeBatchMode() && cm.config.BatchSize > 0 {
 		return cm.config.BatchSize
 	}
 	if cm.config.SymbolsPerShard > 0 {
@@ -203,7 +210,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 	for symbol := range symbolsToAdd {
 		var targetShard IShardWorker
 		for _, shard := range cm.tradeShards {
-			if cm.config.UseForSymbols && cm.tradeShardLoad[shard] > 0 && cm.tradeShardCache[shard] != symbolsToAdd[symbol] {
+			if cm.shouldUseTradeBatchMode() && cm.tradeShardLoad[shard] > 0 && cm.tradeShardCache[shard] != symbolsToAdd[symbol] {
 				continue
 			}
 			if cm.tradeShardLoad[shard] < shardCapacity {
@@ -214,7 +221,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 		if targetShard == nil {
 			stopCh := make(chan struct{})
 			var newShard IShardWorker
-			if cm.config.UseForSymbols {
+			if cm.shouldUseTradeBatchMode() {
 				newShard = NewBatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, cm.statusCh, &cm.wg)
 			} else {
 				newShard = NewSingleWatchShardWorker(cm.exchangeName, cm.marketType, cm.config, stopCh, cm.tradeDataCh, cm.statusCh, &cm.wg)
@@ -232,7 +239,7 @@ func (cm *ConnectionManager) processTradeCommands(cmds []ManagerCommand) {
 			additionsByShard[targetShard] = make(map[string]int)
 		}
 		additionsByShard[targetShard][symbol] = symbolsToAdd[symbol]
-		if cm.config.UseForSymbols && cm.tradeShardLoad[targetShard] == 0 {
+		if cm.shouldUseTradeBatchMode() && cm.tradeShardLoad[targetShard] == 0 {
 			cm.tradeShardCache[targetShard] = symbolsToAdd[symbol]
 		}
 		cm.symbolToTradeShard[symbol] = targetShard

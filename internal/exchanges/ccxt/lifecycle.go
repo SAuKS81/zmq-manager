@@ -10,6 +10,13 @@ import (
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
+type featureSupport struct {
+	TradeBatchWatch       bool
+	TradeBatchUnwatch     bool
+	OrderBookBatchWatch   bool
+	OrderBookBatchUnwatch bool
+}
+
 type closeableExchange interface {
 	Close() []error
 }
@@ -86,7 +93,28 @@ func exchangeHasFeature(exchangeName string, exchange ccxtpro.IExchange, feature
 	return ok && boolFlag
 }
 
+func detectFeatureSupport(exchangeName, marketType string) featureSupport {
+	exchange := newCCXTExchange(exchangeName, marketType, 1)
+	if exchange == nil {
+		return featureSupport{}
+	}
+	defer closeCCXTExchange(exchangeName, marketType, exchange)
+
+	return featureSupport{
+		TradeBatchWatch:       exchangeHasFeature(exchangeName, exchange, "watchTradesForSymbols"),
+		TradeBatchUnwatch:     exchangeHasFeature(exchangeName, exchange, "unWatchTradesForSymbols"),
+		OrderBookBatchWatch:   exchangeHasFeature(exchangeName, exchange, "watchOrderBookForSymbols"),
+		OrderBookBatchUnwatch: exchangeHasFeature(exchangeName, exchange, "unWatchOrderBookForSymbols"),
+	}
+}
+
 func featureHardDisabled(exchangeName, feature string) bool {
+	if strings.EqualFold(exchangeName, "binance") {
+		switch feature {
+		case "unWatchTrades", "unWatchTradesForSymbols":
+			return true
+		}
+	}
 	if strings.EqualFold(exchangeName, "mexc") {
 		return true
 	}

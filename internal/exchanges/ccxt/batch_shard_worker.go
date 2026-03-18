@@ -128,15 +128,29 @@ drain:
 	if !sw.ensureTradeExchange(desiredTradeLimit) {
 		return
 	}
+	rebuildExchange := false
 	if len(unsubscribeSymbols) > 0 {
+		batchUnwatchSupported := !featureHardDisabled(sw.exchangeName, "unWatchTradesForSymbols") &&
+			(sw.config.SupportsTradeBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTradesForSymbols"))
 		symbolsToUnwatch := make([]string, 0, len(unsubscribeSymbols))
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
 		}
-		if sw.config.SupportsTradeBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTradesForSymbols") {
+		if batchUnwatchSupported {
 			if _, err := sw.safeUnWatchTradesForSymbols(symbolsToUnwatch); err != nil {
 				log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+				rebuildExchange = true
 			}
+		} else if len(symbolsToWatch) > 0 {
+			rebuildExchange = true
+		}
+	}
+	if rebuildExchange {
+		closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+		sw.exchange = nil
+		sw.tradeLimit = 0
+		if !sw.ensureTradeExchange(desiredTradeLimit) {
+			return
 		}
 	}
 

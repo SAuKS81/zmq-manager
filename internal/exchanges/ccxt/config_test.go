@@ -52,6 +52,9 @@ func TestGetConfigUsesExchangeOverride(t *testing.T) {
 	if cfg.BatchSize != 20 {
 		t.Fatalf("expected bitget swap batch size 20, got %d", cfg.BatchSize)
 	}
+	if cfg.SymbolsPerShard != 100 {
+		t.Fatalf("expected bitget swap symbols per shard 100, got %d", cfg.SymbolsPerShard)
+	}
 	if cfg.SubscribePause != 500*time.Millisecond {
 		t.Fatalf("expected bitget subscribe pause 500ms, got %s", cfg.SubscribePause)
 	}
