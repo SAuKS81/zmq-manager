@@ -81,8 +81,8 @@ func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 	if cfg.BatchSize != 20 {
 		t.Fatalf("expected bitmart batch size 20, got %d", cfg.BatchSize)
 	}
-	if cfg.SymbolsPerShard != 80 {
-		t.Fatalf("expected bitmart symbols per shard 80, got %d", cfg.SymbolsPerShard)
+	if cfg.SymbolsPerShard != 100 {
+		t.Fatalf("expected bitmart symbols per shard 100, got %d", cfg.SymbolsPerShard)
 	}
 	if cfg.SubscribePause != 500*time.Millisecond {
 		t.Fatalf("expected bitmart subscribe pause 500ms, got %s", cfg.SubscribePause)
@@ -98,6 +98,18 @@ func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 	}
 	if cfg.ReconnectJitter != 5*time.Second {
 		t.Fatalf("expected bitmart reconnect jitter 5s, got %s", cfg.ReconnectJitter)
+	}
+}
+
+func TestGetConfigRaisesBybitShardDensity(t *testing.T) {
+	spotCfg := getConfig("bybit", "spot")
+	swapCfg := getConfig("bybit", "swap")
+
+	if spotCfg.SymbolsPerShard != 100 {
+		t.Fatalf("expected bybit spot symbols per shard 100, got %d", spotCfg.SymbolsPerShard)
+	}
+	if swapCfg.SymbolsPerShard != 100 {
+		t.Fatalf("expected bybit swap symbols per shard 100, got %d", swapCfg.SymbolsPerShard)
 	}
 }
 
