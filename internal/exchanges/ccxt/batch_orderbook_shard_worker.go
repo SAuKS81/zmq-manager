@@ -9,6 +9,7 @@ import (
 	"log"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bybit-watcher/internal/shared_types"
@@ -29,6 +30,7 @@ type BatchOrderBookShardWorker struct {
 	activeSymbols map[string]int
 	exchange      ccxtpro.IExchange
 	cancelWorkers context.CancelFunc
+	activeWorkers atomic.Int64
 }
 
 func NewBatchOrderBookShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchOrderBookShardWorker {
@@ -64,8 +66,12 @@ func (sw *BatchOrderBookShardWorker) Run() {
 			log.Printf("[CCXT-BATCH-OB] Stoppe Worker fuer %s (%s)", sw.exchangeName, sw.marketType)
 			if sw.cancelWorkers != nil {
 				sw.cancelWorkers()
+				sw.cancelWorkers = nil
 			}
 			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+			if !waitForActiveWorkers(&sw.activeWorkers, workerStopForceTimeout) {
+				log.Printf("[CCXT-BATCH-OB-WARN] Worker fuer %s/%s beenden sich nach Stop nicht rechtzeitig (active=%d).", sw.exchangeName, sw.marketType, sw.activeWorkers.Load())
+			}
 			return
 		}
 	}
@@ -121,7 +127,30 @@ drain:
 	}
 	sw.mu.Unlock()
 
-	if len(unsubscribeSymbols) > 0 {
+	forceRecycle := false
+	if sw.cancelWorkers != nil {
+		sw.cancelWorkers()
+		sw.cancelWorkers = nil
+		if !waitForActiveWorkers(&sw.activeWorkers, workerStopGracePeriod) {
+			log.Printf("[CCXT-BATCH-OB-WARN] Reconfigure timeout fuer %s/%s (active_workers=%d). Recycle Exchange, um haengende WatchOrderBookForSymbols-Goroutinen abzuraeumen.", sw.exchangeName, sw.marketType, sw.activeWorkers.Load())
+			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+			sw.exchange = nil
+			forceRecycle = true
+			if !waitForActiveWorkers(&sw.activeWorkers, workerStopForceTimeout) {
+				log.Printf("[CCXT-BATCH-OB-WARN] Alte Worker fuer %s/%s laufen nach Force-Recycle weiter (active=%d). Sie sollten nach dem Close auslaufen.", sw.exchangeName, sw.marketType, sw.activeWorkers.Load())
+			}
+		}
+	}
+
+	if sw.exchange == nil {
+		sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
+		if sw.exchange == nil {
+			log.Printf("[CCXT-BATCH-OB-FATAL] Konnte Exchange fuer %s/%s nach Reconfigure nicht erstellen", sw.exchangeName, sw.marketType)
+			return
+		}
+	}
+
+	if len(unsubscribeSymbols) > 0 && !forceRecycle {
 		symbolsToUnwatch := make([]string, 0, len(unsubscribeSymbols))
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
@@ -136,6 +165,7 @@ drain:
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
 		ctx, sw.cancelWorkers = context.WithCancel(context.Background())
+		exchange := sw.exchange
 		log.Printf("[CCXT-BATCH-OB] Symbol-Liste geaendert. Starte Watcher fuer %d Symbole in Batches von %d...", len(symbolsToWatch), sw.config.BatchSize)
 		for i := 0; i < len(symbolsToWatch); i += sw.config.BatchSize {
 			end := i + sw.config.BatchSize
@@ -144,7 +174,8 @@ drain:
 			}
 			batch := symbolsToWatch[i:end]
 			log.Printf("[CCXT-BATCH-OB] Starte Goroutine fuer Batch mit %d Symbolen.", len(batch))
-			go sw.runWorkerBatch(ctx, batch)
+			sw.activeWorkers.Add(1)
+			go sw.runWorkerBatch(ctx, exchange, batch)
 			time.Sleep(sw.config.SubscribePause)
 		}
 	} else {
@@ -160,7 +191,8 @@ func (sw *BatchOrderBookShardWorker) recycleExchange() {
 	}
 }
 
-func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []string) {
+func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, exchange ccxtpro.IExchange, symbolsBatch []string) {
+	defer sw.activeWorkers.Add(-1)
 	currentBatch := append([]string(nil), symbolsBatch...)
 	attempt := 0
 	reconnecting := false
@@ -169,7 +201,7 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 		case <-ctx.Done():
 			return
 		default:
-			orderbook, err := sw.safeWatchOrderBookForSymbols(currentBatch)
+			orderbook, err := sw.safeWatchOrderBookForSymbols(exchange, currentBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -193,6 +225,9 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 					return
 				}
 				continue
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			if reconnecting {
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
@@ -232,19 +267,21 @@ func (sw *BatchOrderBookShardWorker) runWorkerBatch(ctx context.Context, symbols
 				continue
 			}
 			if normalized != nil {
-				sw.dataCh <- normalized
+				if !sw.sendOrderBookUpdate(ctx, normalized) {
+					return
+				}
 			}
 		}
 	}
 }
 
-func (sw *BatchOrderBookShardWorker) safeWatchOrderBookForSymbols(symbolsBatch []string) (orderbook ccxtpro.OrderBook, err error) {
+func (sw *BatchOrderBookShardWorker) safeWatchOrderBookForSymbols(exchange ccxtpro.IExchange, symbolsBatch []string) (orderbook ccxtpro.OrderBook, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in WatchOrderBookForSymbols: %v\n%s", r, string(debug.Stack()))
 		}
 	}()
-	return sw.exchange.WatchOrderBookForSymbols(symbolsBatch)
+	return exchange.WatchOrderBookForSymbols(symbolsBatch)
 }
 
 func (sw *BatchOrderBookShardWorker) safeUnWatchOrderBookForSymbols(symbolsBatch []string) (_ interface{}, err error) {
@@ -254,4 +291,13 @@ func (sw *BatchOrderBookShardWorker) safeUnWatchOrderBookForSymbols(symbolsBatch
 		}
 	}()
 	return sw.exchange.UnWatchOrderBookForSymbols(symbolsBatch)
+}
+
+func (sw *BatchOrderBookShardWorker) sendOrderBookUpdate(ctx context.Context, normalized *shared_types.OrderBookUpdate) bool {
+	select {
+	case sw.dataCh <- normalized:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

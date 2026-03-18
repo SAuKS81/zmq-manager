@@ -17,10 +17,6 @@ type featureSupport struct {
 	OrderBookBatchUnwatch bool
 }
 
-type closeableExchange interface {
-	Close() []error
-}
-
 type describableExchange interface {
 	Describe() interface{}
 }
@@ -44,12 +40,10 @@ func closeCCXTExchange(exchangeName, marketType string, exchange ccxtpro.IExchan
 	if exchange == nil {
 		return
 	}
-	if c, ok := exchange.(closeableExchange); ok {
-		if errs := c.Close(); len(errs) > 0 {
-			for _, err := range errs {
-				if err != nil {
-					log.Printf("[CCXT-LIFECYCLE-WARN] Close exchange failed (%s/%s): %v", exchangeName, marketType, err)
-				}
+	if errs := exchange.Close(); len(errs) > 0 {
+		for _, err := range errs {
+			if err != nil {
+				log.Printf("[CCXT-LIFECYCLE-WARN] Close exchange failed (%s/%s): %v", exchangeName, marketType, err)
 			}
 		}
 	}
