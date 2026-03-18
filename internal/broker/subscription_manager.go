@@ -471,12 +471,43 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	prevOwnerCount := 0
 	prevEffectiveDepth := 0
 	prevEffectiveCacheN := 0
+	existingClientSubscribed := false
+	if clients, ok := subMap[subID]; ok {
+		existingClientSubscribed = clients[clientIDStr]
+	}
+	existingEncoding := encMap[routeKey]
+	existingSticky := false
+	existingExactExchange := ""
+	existingDepth := 0
+	existingCacheN := 0
 	if req.DataType == "orderbooks" {
 		prevOwnerCount = sm.orderBookOwnerCount(subID, req.Exchange)
 		prevEffectiveDepth = sm.effectiveOrderBookDepth(subID, req.Exchange)
+		existingSticky = sm.stickyOrderBookSubscriptions[routeKey]
+		existingExactExchange = sm.orderBookSubscriptionRoutes[routeKey]
+		existingDepth = sm.orderBookSubscriptionDepths[routeKey]
 	} else {
 		prevOwnerCount = sm.tradeOwnerCount(subID, req.Exchange)
 		prevEffectiveCacheN = sm.effectiveTradeCacheN(subID, req.Exchange)
+		existingSticky = sm.stickyTradeSubscriptions[routeKey]
+		existingExactExchange = sm.tradeSubscriptionRoutes[routeKey]
+		existingCacheN = sm.tradeSubscriptionCacheN[routeKey]
+	}
+
+	if req.Action == "subscribe" && existingClientSubscribed {
+		sameRoute := existingExactExchange == "" || existingExactExchange == req.Exchange
+		sameEncoding := existingEncoding == req.Encoding
+		sameSticky := existingSticky == req.Sticky
+		sameParams := false
+		if req.DataType == "orderbooks" {
+			sameParams = existingDepth == req.OrderBookDepth
+		} else {
+			sameParams = existingCacheN == req.CacheN
+		}
+		if sameRoute && sameEncoding && sameSticky && sameParams {
+			sm.recordDeployBatchResult(req.RequestID, false)
+			return
+		}
 	}
 
 	var forwardReq *shared_types.ClientRequest

@@ -155,6 +155,50 @@ func TestDisconnectKeepsStickySubscriptions(t *testing.T) {
 	}
 }
 
+func TestDuplicateStickySubscribeIsNoOp(t *testing.T) {
+	clientID := []byte("client-a")
+	rec := &recordingExchange{}
+
+	sm := &SubscriptionManager{
+		tradeSubscriptions:             make(map[string]map[string]bool),
+		orderBookSubscriptions:         make(map[string]map[string]bool),
+		tradeSubscriptionRoutes:        make(map[string]string),
+		tradeSubscriptionCacheN:        make(map[string]int),
+		orderBookSubscriptionRoutes:    make(map[string]string),
+		orderBookSubscriptionDepths:    make(map[string]int),
+		tradeSubscriptionEncodings:     make(map[string]string),
+		orderBookSubscriptionEncodings: make(map[string]string),
+		stickyTradeSubscriptions:       make(map[string]bool),
+		stickyOrderBookSubscriptions:   make(map[string]bool),
+		wildcardSubscribers:            make(map[string]map[string]bool),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"bitmart":      rec,
+			"ccxt_generic": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	req := &shared_types.ClientRequest{
+		ClientID:   clientID,
+		Action:     "subscribe",
+		Sticky:     true,
+		RequestID:  "deploy-1",
+		Exchange:   "bitmart",
+		Symbol:     "BTC/USDT",
+		MarketType: "spot",
+		DataType:   "trades",
+		CacheN:     1,
+		Encoding:   "json",
+	}
+
+	sm.handleRequest(req)
+	sm.handleRequest(req)
+
+	if len(rec.reqs) != 1 {
+		t.Fatalf("expected duplicate subscribe to be a no-op, got %d forwarded requests", len(rec.reqs))
+	}
+}
+
 func TestDisconnectCleanupFlappingLeavesNoGhostSubscribers(t *testing.T) {
 	sm := &SubscriptionManager{
 		tradeSubscriptions:     make(map[string]map[string]bool),
