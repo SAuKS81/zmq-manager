@@ -130,6 +130,23 @@ func TestGetConfigIncludesMexcPolicy(t *testing.T) {
 	}
 }
 
+func TestGetConfigBundlesWooSingleWatchShards(t *testing.T) {
+	cfg := getConfig("woo", "spot")
+
+	if !cfg.Enabled {
+		t.Fatal("expected woo spot config to be enabled")
+	}
+	if cfg.UseForSymbols {
+		t.Fatal("expected woo spot config to stay in single-watch mode")
+	}
+	if cfg.SymbolsPerShard != 40 {
+		t.Fatalf("expected woo symbols per shard 40, got %d", cfg.SymbolsPerShard)
+	}
+	if !cfg.SupportsTradeUnwatch {
+		t.Fatalf("expected woo trade unwatch support to stay enabled, got %#v", cfg)
+	}
+}
+
 func TestGetConfigDisablesBybitOrderBookUnwatch(t *testing.T) {
 	spotCfg := getConfig("bybit", "spot")
 	swapCfg := getConfig("bybit", "swap")
