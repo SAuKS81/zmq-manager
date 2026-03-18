@@ -25,3 +25,12 @@ func TestFeatureHardDisabledBlocksMEXCGlobally(t *testing.T) {
 		t.Fatal("expected mexc features to stay hard-disabled")
 	}
 }
+
+func TestFeatureHardDisabledBlocksBatchWatchPathsGlobally(t *testing.T) {
+	if !featureHardDisabled("binance", "watchTradesForSymbols") {
+		t.Fatal("expected batch trade watch path to be hard-disabled globally")
+	}
+	if !featureHardDisabled("kucoin", "watchOrderBookForSymbols") {
+		t.Fatal("expected batch orderbook watch path to be hard-disabled globally")
+	}
+}

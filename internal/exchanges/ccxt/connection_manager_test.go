@@ -211,6 +211,44 @@ func TestTradeShardCapacityUsesBatchSizeWhenOnlyOneBatchPerShardIsAllowed(t *tes
 	}
 }
 
+func TestTradeBatchModeTemporarilyDisabledEvenWhenUseForSymbolsIsConfigured(t *testing.T) {
+	cm := NewConnectionManager(
+		"kucoin",
+		"spot",
+		ExchangeConfig{
+			Enabled:       true,
+			UseForSymbols: true,
+			BatchSize:     100,
+		},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	if cm.shouldUseTradeBatchMode() {
+		t.Fatal("expected watchTradesForSymbols path to be hard-disabled temporarily")
+	}
+}
+
+func TestOrderBookBatchModeTemporarilyDisabledEvenWhenUseForSymbolsIsConfigured(t *testing.T) {
+	cm := NewConnectionManager(
+		"binance",
+		"spot",
+		ExchangeConfig{
+			Enabled:       true,
+			UseForSymbols: true,
+			BatchSize:     100,
+		},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+
+	if cm.shouldUseBatchOrderBookMode() {
+		t.Fatal("expected watchOrderBookForSymbols path to be hard-disabled temporarily")
+	}
+}
+
 func TestProcessTradeCommandsDoesNotResubscribeWhenCacheNIsUnchanged(t *testing.T) {
 	cm := NewConnectionManager(
 		"binance",

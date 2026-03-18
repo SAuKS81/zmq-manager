@@ -84,6 +84,13 @@ func exchangeHasFeature(exchangeName string, exchange ccxtpro.IExchange, feature
 }
 
 func featureHardDisabled(exchangeName, feature string) bool {
+	switch feature {
+	case "watchTradesForSymbols", "watchOrderBookForSymbols":
+		// Temporary safety switch:
+		// batch watch*ForSymbols paths are unstable in the pinned CCXT-Pro build.
+		// Force all exchanges onto single-symbol watch paths until upstream is fixed.
+		return true
+	}
 	if strings.EqualFold(exchangeName, "mexc") {
 		return true
 	}
