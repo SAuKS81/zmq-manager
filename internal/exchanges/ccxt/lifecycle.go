@@ -14,19 +14,24 @@ type describableExchange interface {
 	Describe() interface{}
 }
 
+func effectiveCCXTExchangeName(exchangeName string) string {
+	return canonicalExchangeName(exchangeName)
+}
+
 func createCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro.IExchange {
 	return newCCXTExchange(exchangeName, marketType, tradeLimit...)
 }
 
 func newCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro.IExchange {
+	effectiveExchangeName := effectiveCCXTExchangeName(exchangeName)
 	effectiveTradeLimit := 0
 	if len(tradeLimit) > 0 {
 		effectiveTradeLimit = tradeLimit[0]
 	}
 	if effectiveTradeLimit > 0 {
-		log.Printf("[CCXT-LIFECYCLE] Create exchange=%s market_type=%s tradesLimit=%d", exchangeName, marketType, effectiveTradeLimit)
+		log.Printf("[CCXT-LIFECYCLE] Create exchange=%s effective_exchange=%s market_type=%s tradesLimit=%d", exchangeName, effectiveExchangeName, marketType, effectiveTradeLimit)
 	}
-	return ccxtpro.CreateExchange(exchangeName, makeExchangeOptions(exchangeName, marketType, effectiveTradeLimit))
+	return ccxtpro.CreateExchange(effectiveExchangeName, makeExchangeOptions(effectiveExchangeName, marketType, effectiveTradeLimit))
 }
 
 func closeCCXTExchange(exchangeName, marketType string, exchange ccxtpro.IExchange) {

@@ -34,3 +34,15 @@ func TestFeatureHardDisabledBlocksMEXCGlobally(t *testing.T) {
 		t.Fatal("expected mexc features to stay hard-disabled")
 	}
 }
+
+func TestEffectiveCCXTExchangeNameCanonicalizesHuobiToHtx(t *testing.T) {
+	if got := effectiveCCXTExchangeName("huobi"); got != "htx" {
+		t.Fatalf("expected huobi to canonicalize to htx, got %q", got)
+	}
+}
+
+func TestEffectiveCCXTExchangeNameLeavesCanonicalNamesUntouched(t *testing.T) {
+	if got := effectiveCCXTExchangeName("htx"); got != "htx" {
+		t.Fatalf("expected htx to remain htx, got %q", got)
+	}
+}
