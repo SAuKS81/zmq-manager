@@ -76,7 +76,6 @@ func (sw *OrderBookShardWorker) getCommandChannel() chan<- ShardCommand {
 }
 
 func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
-	recycleNeeded := false
 	for symbol, depth := range cmd.Symbols {
 		switch cmd.Action {
 		case "subscribe":
@@ -102,30 +101,13 @@ func (sw *OrderBookShardWorker) handleCommand(cmd ShardCommand) {
 			if !exists {
 				continue
 			}
-			if sw.config.SupportsOrderBookUnwatch {
+			if sw.config.SupportsOrderBookUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchOrderBook") {
 				if _, err := sw.safeUnWatchOrderBook(symbol); err != nil {
-					log.Printf("[CCXT-OB-SHARD-WARN] UnWatchOrderBook('%s') fehlgeschlagen: %v. Fallback auf Shard-Recycle.", symbol, err)
-					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
-						Type:       "stream_update_failed",
-						Exchange:   sw.exchangeName,
-						MarketType: sw.marketType,
-						DataType:   "orderbooks",
-						Symbol:     symbol,
-						Status:     "failed",
-						Reason:     "unwatch_orderbook_failed",
-						Message:    err.Error(),
-					})
-					recycleNeeded = true
+					log.Printf("[CCXT-OB-SHARD-WARN] UnWatchOrderBook('%s') fehlgeschlagen (%s/%s): %v", symbol, sw.exchangeName, sw.marketType, err)
 				}
-			} else {
-				log.Printf("[CCXT-OB-SHARD-INFO] Orderbook unwatch nicht freigegeben (%s/%s). Nutze harten Shard-Recycle.", sw.exchangeName, sw.marketType)
-				recycleNeeded = true
 			}
 			cancel()
 		}
-	}
-	if recycleNeeded {
-		sw.recycleExchangeAndRestart()
 	}
 }
 
@@ -211,40 +193,4 @@ func (sw *OrderBookShardWorker) safeUnWatchOrderBook(symbol string) (_ interface
 		}
 	}()
 	return sw.exchange.UnWatchOrderBook(symbol)
-}
-
-func (sw *OrderBookShardWorker) recycleExchangeAndRestart() {
-	sw.mu.Lock()
-	type watcherState struct {
-		symbol string
-		depth  int
-		cancel context.CancelFunc
-	}
-	states := make([]watcherState, 0, len(sw.activeWatchers))
-	for symbol, cancel := range sw.activeWatchers {
-		states = append(states, watcherState{symbol: symbol, depth: sw.activeDepths[symbol], cancel: cancel})
-	}
-	sw.activeWatchers = make(map[string]context.CancelFunc)
-	sw.activeDepths = make(map[string]int)
-	sw.mu.Unlock()
-
-	for _, state := range states {
-		state.cancel()
-	}
-	closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
-	sw.exchange = createCCXTExchange(sw.exchangeName, sw.marketType)
-	if sw.exchange == nil {
-		log.Printf("[CCXT-OB-SHARD-FATAL] Konnte Exchange nach Recycle fuer %s/%s nicht neu erstellen", sw.exchangeName, sw.marketType)
-		return
-	}
-
-	for _, state := range states {
-		ctx, cancel := context.WithCancel(context.Background())
-		sw.mu.Lock()
-		sw.activeWatchers[state.symbol] = cancel
-		sw.activeDepths[state.symbol] = state.depth
-		sw.mu.Unlock()
-		go sw.runSingleWatch(ctx, state.symbol, state.depth)
-		time.Sleep(sw.config.SubscribePause)
-	}
 }

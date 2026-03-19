@@ -9,6 +9,7 @@ import (
 	"log"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bybit-watcher/internal/shared_types"
@@ -17,32 +18,33 @@ import (
 
 // BatchShardWorker verwaltet eine einzelne WebSocket-Verbindung fuer watchTradesForSymbols.
 type BatchShardWorker struct {
-	exchangeName  string
-	marketType    string
-	config        ExchangeConfig
-	commandCh     chan ShardCommand
-	stopCh        chan struct{}
-	dataCh        chan<- *shared_types.TradeUpdate
-	statusCh      chan<- *shared_types.StreamStatusEvent
-	wg            *sync.WaitGroup
-	mu            sync.Mutex
-	activeSymbols map[string]int
-	exchange      ccxtpro.IExchange
-	tradeLimit    int
-	cancelWorkers context.CancelFunc
+	exchangeName   string
+	marketType     string
+	config         ExchangeConfig
+	commandCh      chan ShardCommand
+	stopCh         chan struct{}
+	dataCh         chan<- *shared_types.TradeUpdate
+	statusCh       chan<- *shared_types.StreamStatusEvent
+	wg             *sync.WaitGroup
+	mu             sync.Mutex
+	activeSymbols  map[string]int
+	exchange       ccxtpro.IExchange
+	tradeLimit     int
+	cancelWorkers  context.CancelFunc
+	activeWorkers  atomic.Int64
 }
 
 func NewBatchShardWorker(exchangeName, marketType string, config ExchangeConfig, stopCh chan struct{}, dataCh chan<- *shared_types.TradeUpdate, statusCh chan<- *shared_types.StreamStatusEvent, wg *sync.WaitGroup) *BatchShardWorker {
 	return &BatchShardWorker{
-		exchangeName:  exchangeName,
-		marketType:    marketType,
-		config:        config,
-		commandCh:     make(chan ShardCommand, 500),
-		stopCh:        stopCh,
-		dataCh:        dataCh,
-		statusCh:      statusCh,
-		wg:            wg,
-		activeSymbols: make(map[string]int),
+		exchangeName:   exchangeName,
+		marketType:     marketType,
+		config:         config,
+		commandCh:      make(chan ShardCommand, 500),
+		stopCh:         stopCh,
+		dataCh:         dataCh,
+		statusCh:       statusCh,
+		wg:             wg,
+		activeSymbols:  make(map[string]int),
 	}
 }
 
@@ -59,8 +61,12 @@ func (sw *BatchShardWorker) Run() {
 			log.Printf("[CCXT-BATCH-SHARD] Stoppe Worker fuer %s (%s)", sw.exchangeName, sw.marketType)
 			if sw.cancelWorkers != nil {
 				sw.cancelWorkers()
+				sw.cancelWorkers = nil
 			}
 			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+			if !waitForActiveWorkers(&sw.activeWorkers, workerStopForceTimeout) {
+				log.Printf("[CCXT-BATCH-SHARD-WARN] Worker fuer %s/%s beenden sich nach Stop nicht rechtzeitig (active=%d).", sw.exchangeName, sw.marketType, sw.activeWorkers.Load())
+			}
 			return
 		}
 	}
@@ -107,7 +113,6 @@ drain:
 		return
 	}
 
-	hadActiveWorkers := sw.cancelWorkers != nil
 	if sw.cancelWorkers != nil {
 		sw.cancelWorkers()
 		sw.cancelWorkers = nil
@@ -120,53 +125,63 @@ drain:
 	desiredTradeLimit := sw.maxActiveCacheNLocked()
 	sw.mu.Unlock()
 
-	recycledForListChange := false
+	forceRecycle := false
+	if sw.cancelWorkers != nil {
+		sw.cancelWorkers()
+		sw.cancelWorkers = nil
+		if !waitForActiveWorkers(&sw.activeWorkers, workerStopGracePeriod) {
+			log.Printf("[CCXT-BATCH-SHARD-WARN] Reconfigure timeout fuer %s/%s (active_workers=%d). Recycle Exchange, um haengende WatchTradesForSymbols-Goroutinen abzuraeumen.", sw.exchangeName, sw.marketType, sw.activeWorkers.Load())
+			closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+			sw.exchange = nil
+			sw.tradeLimit = 0
+			forceRecycle = true
+			if !waitForActiveWorkers(&sw.activeWorkers, workerStopForceTimeout) {
+				log.Printf("[CCXT-BATCH-SHARD-WARN] Alte Worker fuer %s/%s laufen nach Force-Recycle weiter (active=%d). Sie sollten nach dem Close auslaufen.", sw.exchangeName, sw.marketType, sw.activeWorkers.Load())
+			}
+		}
+	}
+
 	if !sw.ensureTradeExchange(desiredTradeLimit) {
 		return
 	}
-	if hadActiveWorkers && sw.config.RecycleExchangeOnTradeChange {
-		log.Printf("[CCXT-BATCH-SHARD-INFO] Recycle Exchange nach Listenwechsel (%s/%s), um parallele Trade-Batches auf derselben Instanz zu vermeiden.", sw.exchangeName, sw.marketType)
-		sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
-		recycledForListChange = true
-	}
-
-	if len(unsubscribeSymbols) > 0 && !recycledForListChange {
+	rebuildExchange := false
+	if len(unsubscribeSymbols) > 0 && !forceRecycle {
+		batchUnwatchSupported := !featureHardDisabled(sw.exchangeName, "unWatchTradesForSymbols") &&
+			(sw.config.SupportsTradeBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTradesForSymbols"))
 		symbolsToUnwatch := make([]string, 0, len(unsubscribeSymbols))
 		for s := range unsubscribeSymbols {
 			symbolsToUnwatch = append(symbolsToUnwatch, s)
 		}
-		if sw.config.SupportsTradeBatchUnwatch || exchangeHasFeature(sw.exchangeName, sw.exchange, "unWatchTradesForSymbols") {
+		if batchUnwatchSupported {
 			if _, err := sw.safeUnWatchTradesForSymbols(symbolsToUnwatch); err != nil {
-				log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v. Fallback auf Shard-Recycle.", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
-				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
-					Type:       "stream_update_failed",
-					Exchange:   sw.exchangeName,
-					MarketType: sw.marketType,
-					DataType:   "trades",
-					Symbols:    append([]string(nil), symbolsToUnwatch...),
-					Status:     "failed",
-					Reason:     "unwatch_trades_for_symbols_failed",
-					Message:    err.Error(),
-				})
-				sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
+				log.Printf("[CCXT-BATCH-SHARD-WARN] UnWatchTradesForSymbols(%d) fehlgeschlagen (%s/%s): %v", len(symbolsToUnwatch), sw.exchangeName, sw.marketType, err)
+				rebuildExchange = true
 			}
-		} else {
-			log.Printf("[CCXT-BATCH-SHARD-INFO] Batch trade unwatch nicht freigegeben (%s/%s). Nutze harten Shard-Recycle fuer %d Symbole.", sw.exchangeName, sw.marketType, len(symbolsToUnwatch))
-			sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
+		} else if len(symbolsToWatch) > 0 {
+			rebuildExchange = true
+		}
+	}
+	if rebuildExchange {
+		closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+		sw.exchange = nil
+		sw.tradeLimit = 0
+		if !sw.ensureTradeExchange(desiredTradeLimit) {
+			return
 		}
 	}
 
-	symbolsToWatch = sw.filterSupportedSymbols(symbolsToWatch)
 	if len(symbolsToWatch) > 0 {
 		var ctx context.Context
 		ctx, sw.cancelWorkers = context.WithCancel(context.Background())
+		exchange := sw.exchange
 		for i := 0; i < len(symbolsToWatch); i += sw.config.BatchSize {
 			end := i + sw.config.BatchSize
 			if end > len(symbolsToWatch) {
 				end = len(symbolsToWatch)
 			}
 			batch := symbolsToWatch[i:end]
-			go sw.runWorkerBatch(ctx, batch)
+			sw.activeWorkers.Add(1)
+			go sw.runWorkerBatch(ctx, exchange, batch)
 			time.Sleep(sw.config.SubscribePause)
 		}
 	} else {
@@ -187,7 +202,8 @@ func (sw *BatchShardWorker) recycleExchangeWithTradeLimit(tradeLimit int) {
 	}
 }
 
-func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []string) {
+func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, exchange ccxtpro.IExchange, symbolsBatch []string) {
+	defer sw.activeWorkers.Add(-1)
 	currentBatch := append([]string(nil), symbolsBatch...)
 	attempt := 0
 	reconnecting := false
@@ -196,56 +212,12 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 		case <-ctx.Done():
 			return
 		default:
-			trades, err := sw.safeWatchTradesForSymbols(currentBatch)
+			trades, err := sw.safeWatchTradesForSymbols(exchange, currentBatch)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				attempt++
-				if missingSymbol, ok := extractMissingMarketSymbol(err); ok {
-					if sw.symbolStillSupported(missingSymbol) {
-						delay := reconnectDelay(sw.config, attempt)
-						log.Printf("[CCXT-BATCH-SHARD-WARN] Verdaechtiger BadSymbol fuer weiterhin unterstuetztes Symbol '%s' (%s/%s). Batch bleibt unveraendert. err=%v", missingSymbol, sw.exchangeName, sw.marketType, err)
-						emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
-							Type:       "stream_update_failed",
-							Exchange:   sw.exchangeName,
-							MarketType: sw.marketType,
-							DataType:   "trades",
-							Symbol:     missingSymbol,
-							Status:     "failed",
-							Reason:     "suspicious_missing_market_symbol",
-							Message:    err.Error(),
-							Attempt:    attempt,
-						})
-						reconnecting = true
-						sw.recycleExchangeWithTradeLimit(sw.tradeLimitForCurrentBatch(currentBatch))
-						if !sleepWithContext(ctx, delay) {
-							return
-						}
-						continue
-					}
-					log.Printf("[CCXT-BATCH-SHARD-WARN] Entferne bestaetigt ungueltiges Symbol '%s' aus Batch (%s/%s). err=%v", missingSymbol, sw.exchangeName, sw.marketType, err)
-					emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
-						Type:       "stream_update_failed",
-						Exchange:   sw.exchangeName,
-						MarketType: sw.marketType,
-						DataType:   "trades",
-						Symbol:     missingSymbol,
-						Status:     "failed",
-						Reason:     "missing_market_symbol",
-						Message:    err.Error(),
-						Attempt:    attempt,
-					})
-					currentBatch = removeSymbolFromBatch(currentBatch, missingSymbol)
-					sw.mu.Lock()
-					delete(sw.activeSymbols, missingSymbol)
-					sw.mu.Unlock()
-					if len(currentBatch) == 0 {
-						log.Printf("[CCXT-BATCH-SHARD-WARN] Batch leer nach Symbol-Filter (%s/%s), Worker beendet.", sw.exchangeName, sw.marketType)
-						return
-					}
-					continue
-				}
 				delay := reconnectDelay(sw.config, attempt)
 				log.Printf("[CCXT-BATCH-SHARD-ERROR] exchange=%s market_type=%s data_type=trades batch_size=%d symbols=%s attempt=%d err=%v. Warte %s.", sw.exchangeName, sw.marketType, len(currentBatch), summarizeSymbols(currentBatch, 5), attempt, err, delay)
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
@@ -264,6 +236,9 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					return
 				}
 				continue
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			if reconnecting {
 				emitStatus(sw.statusCh, &shared_types.StreamStatusEvent{
@@ -291,20 +266,22 @@ func (sw *BatchShardWorker) runWorkerBatch(ctx context.Context, symbolsBatch []s
 					continue
 				}
 				if normalized != nil {
-					sw.dataCh <- normalized
+					if !sw.sendTradeUpdate(ctx, normalized) {
+						return
+					}
 				}
 			}
 		}
 	}
 }
 
-func (sw *BatchShardWorker) safeWatchTradesForSymbols(symbolsBatch []string) (trades []ccxtpro.Trade, err error) {
+func (sw *BatchShardWorker) safeWatchTradesForSymbols(exchange ccxtpro.IExchange, symbolsBatch []string) (trades []ccxtpro.Trade, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic in WatchTradesForSymbols: %v\n%s", r, string(debug.Stack()))
 		}
 	}()
-	return sw.exchange.WatchTradesForSymbols(symbolsBatch)
+	return exchange.WatchTradesForSymbols(symbolsBatch)
 }
 
 func (sw *BatchShardWorker) safeUnWatchTradesForSymbols(symbolsBatch []string) (_ interface{}, err error) {
@@ -314,43 +291,6 @@ func (sw *BatchShardWorker) safeUnWatchTradesForSymbols(symbolsBatch []string) (
 		}
 	}()
 	return sw.exchange.UnWatchTradesForSymbols(symbolsBatch)
-}
-
-func (sw *BatchShardWorker) filterSupportedSymbols(symbols []string) []string {
-	supported, err := getSupportedSymbols(sw.exchangeName, sw.marketType)
-	if err != nil {
-		log.Printf("[CCXT-BATCH-SHARD-WARN] supported symbol cache failed for %s/%s: %v", sw.exchangeName, sw.marketType, err)
-		return symbols
-	}
-	if len(supported) == 0 {
-		return symbols
-	}
-
-	filtered := make([]string, 0, len(symbols))
-	for _, symbol := range symbols {
-		if _, ok := supported[symbol]; ok {
-			filtered = append(filtered, symbol)
-			continue
-		}
-		sw.mu.Lock()
-		delete(sw.activeSymbols, symbol)
-		sw.mu.Unlock()
-	}
-
-	return filtered
-}
-
-func (sw *BatchShardWorker) tradeLimitForCurrentBatch(symbols []string) int {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	maxCacheN := 0
-	for _, symbol := range symbols {
-		if cacheN := sw.activeSymbols[symbol]; cacheN > maxCacheN {
-			maxCacheN = cacheN
-		}
-	}
-	return maxCacheN
 }
 
 func (sw *BatchShardWorker) maxActiveCacheNLocked() int {
@@ -367,22 +307,23 @@ func (sw *BatchShardWorker) ensureTradeExchange(desiredTradeLimit int) bool {
 	if desiredTradeLimit <= 0 {
 		desiredTradeLimit = 1
 	}
-	if sw.exchange != nil {
+	if sw.exchange != nil && sw.tradeLimit == desiredTradeLimit {
 		return true
+	}
+	if sw.exchange != nil {
+		closeCCXTExchange(sw.exchangeName, sw.marketType, sw.exchange)
+		sw.exchange = nil
+		sw.tradeLimit = 0
 	}
 	sw.recycleExchangeWithTradeLimit(desiredTradeLimit)
 	return sw.exchange != nil
 }
 
-func (sw *BatchShardWorker) symbolStillSupported(symbol string) bool {
-	supported, err := getSupportedSymbols(sw.exchangeName, sw.marketType)
-	if err != nil {
-		log.Printf("[CCXT-BATCH-SHARD-WARN] supported symbol cache failed while validating '%s' (%s/%s): %v", symbol, sw.exchangeName, sw.marketType, err)
+func (sw *BatchShardWorker) sendTradeUpdate(ctx context.Context, normalized *shared_types.TradeUpdate) bool {
+	select {
+	case sw.dataCh <- normalized:
 		return true
+	case <-ctx.Done():
+		return false
 	}
-	if len(supported) == 0 {
-		return true
-	}
-	_, ok := supported[symbol]
-	return ok
 }

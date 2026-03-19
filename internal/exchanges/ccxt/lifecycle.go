@@ -10,10 +10,6 @@ import (
 	ccxtpro "github.com/ccxt/ccxt/go/v4/pro"
 )
 
-type closeableExchange interface {
-	Close() []error
-}
-
 type describableExchange interface {
 	Describe() interface{}
 }
@@ -27,6 +23,9 @@ func newCCXTExchange(exchangeName, marketType string, tradeLimit ...int) ccxtpro
 	if len(tradeLimit) > 0 {
 		effectiveTradeLimit = tradeLimit[0]
 	}
+	if effectiveTradeLimit > 0 {
+		log.Printf("[CCXT-LIFECYCLE] Create exchange=%s market_type=%s tradesLimit=%d", exchangeName, marketType, effectiveTradeLimit)
+	}
 	return ccxtpro.CreateExchange(exchangeName, makeExchangeOptions(exchangeName, marketType, effectiveTradeLimit))
 }
 
@@ -34,12 +33,10 @@ func closeCCXTExchange(exchangeName, marketType string, exchange ccxtpro.IExchan
 	if exchange == nil {
 		return
 	}
-	if c, ok := exchange.(closeableExchange); ok {
-		if errs := c.Close(); len(errs) > 0 {
-			for _, err := range errs {
-				if err != nil {
-					log.Printf("[CCXT-LIFECYCLE-WARN] Close exchange failed (%s/%s): %v", exchangeName, marketType, err)
-				}
+	if errs := exchange.Close(); len(errs) > 0 {
+		for _, err := range errs {
+			if err != nil {
+				log.Printf("[CCXT-LIFECYCLE-WARN] Close exchange failed (%s/%s): %v", exchangeName, marketType, err)
 			}
 		}
 	}
@@ -90,6 +87,12 @@ func featureHardDisabled(exchangeName, feature string) bool {
 		// batch watch*ForSymbols paths are unstable in the pinned CCXT-Pro build.
 		// Force all exchanges onto single-symbol watch paths until upstream is fixed.
 		return true
+	}
+	if strings.EqualFold(exchangeName, "binance") {
+		switch feature {
+		case "unWatchTrades", "unWatchTradesForSymbols":
+			return true
+		}
 	}
 	if strings.EqualFold(exchangeName, "mexc") {
 		return true
