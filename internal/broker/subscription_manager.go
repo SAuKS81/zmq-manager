@@ -773,6 +773,16 @@ func canonicalSubscriptionSymbol(exchange, symbol, marketType string) string {
 			return bitget.TranslateSymbolFromExchange(strings.ToUpper(bitget.TranslateSymbolToExchange(symbol)), marketType)
 		}
 		return bitget.TranslateSymbolFromExchange(symbol, marketType)
+	case "mexc":
+		if strings.Contains(symbol, "/") {
+			return mexc.TranslateSymbolFromExchange(strings.ToUpper(mexc.TranslateSymbolToExchange(symbol)))
+		}
+		return mexc.TranslateSymbolFromExchange(symbol)
+	case "kucoin":
+		if strings.Contains(symbol, "/") {
+			return kucoin.TranslateSymbolFromExchange(strings.ToUpper(kucoin.TranslateSymbolToExchange(symbol)))
+		}
+		return kucoin.TranslateSymbolFromExchange(symbol)
 	default:
 		return symbol
 	}
@@ -814,6 +824,18 @@ func runtimeSymbolAliases(exchange, symbol, marketType string) []string {
 			add(strings.ToUpper(bitget.TranslateSymbolToExchange(symbol)))
 		} else {
 			add(bitget.TranslateSymbolFromExchange(symbol, marketType))
+		}
+	case "mexc":
+		if strings.Contains(symbol, "/") {
+			add(strings.ToUpper(mexc.TranslateSymbolToExchange(symbol)))
+		} else {
+			add(mexc.TranslateSymbolFromExchange(symbol))
+		}
+	case "kucoin":
+		if strings.Contains(symbol, "/") {
+			add(strings.ToUpper(kucoin.TranslateSymbolToExchange(symbol)))
+		} else {
+			add(kucoin.TranslateSymbolFromExchange(symbol))
 		}
 	}
 
