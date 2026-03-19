@@ -130,6 +130,16 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			SupportsDeployQueue:       true,
 		},
 		{
+			Exchange:            "mexc_native",
+			Adapter:             "native",
+			MarketTypes:         []string{"spot"},
+			DataTypes:           []string{"trades", "orderbooks"},
+			OrderBookDepths:     []int{5, 10, 20},
+			SupportsCacheN:      false,
+			SupportsRequestID:   true,
+			SupportsDeployQueue: true,
+		},
+		{
 			Exchange:            "mexc",
 			Adapter:             "ccxt",
 			MarketTypes:         []string{"spot"},

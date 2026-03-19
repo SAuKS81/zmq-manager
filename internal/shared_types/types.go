@@ -49,6 +49,7 @@ type ClientRequest struct {
 	Encoding       string `json:"encoding,omitempty"`
 	CacheN         int    `json:"cache_n,omitempty"`
 	OrderBookDepth int    `json:"depth,omitempty"`
+	OrderBookFreq  string `json:"frequency,omitempty"`
 	BatchSent      int    `json:"-"`
 }
 
@@ -64,6 +65,7 @@ type BulkClientRequest struct {
 	Encoding       string   `json:"encoding,omitempty"`
 	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
+	OrderBookFreq  string   `json:"frequency,omitempty"`
 }
 
 type StreamStatusEvent struct {

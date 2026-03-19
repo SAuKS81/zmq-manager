@@ -9,9 +9,14 @@
 # Go build
 *.test
 *.out
+.gocache*/
+.gopath*/
 
 # IDE
 .vscode/
 
 # Local one-off helper scripts
 scripts/gen_symbols_binance_spot.sh
+
+# Generated code
+/collected_go_files

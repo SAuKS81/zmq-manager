@@ -234,6 +234,12 @@ Wichtig fuer native Orderbooks:
 
 - Binance native verwendet die dokumentierten Stufen `5`, `10`, `20`
 - Bybit native verwendet die dokumentierten Stufen `1`, `50`, `200`, `1000`
+- `mexc_native` verwendet fuer Orderbooks die dokumentierten Tiefen `5`, `10`, `20`
+- `mexc_native` unterstuetzt zusaetzlich optional `frequency`:
+  - `100ms`
+  - `10ms`
+- ohne explizite Angabe verwendet `mexc_native` standardmaessig `100ms`
+- `10ms` muss bei Bedarf bewusst angefordert werden
 - positive Zwischenwerte werden brokerseitig auf die naechste gueltige Stufe angehoben:
   - `binance_native depth=7 -> 10`
   - `bybit_native depth=5 -> 50`
@@ -265,6 +271,28 @@ Wichtig fuer native Orderbooks:
   "encoding": "msgpack"
 }
 ```
+
+MEXC nativer Orderbook-/Trade-Request mit optionalem Update-Intervall:
+
+```json
+{
+  "action": "subscribe_bulk",
+  "exchange": "mexc_native",
+  "symbols": ["BTC/USDT"],
+  "market_type": "spot",
+  "data_type": "orderbooks",
+  "depth": 5,
+  "frequency": "100ms",
+  "encoding": "msgpack"
+}
+```
+
+Hinweise:
+
+- `frequency` ist aktuell nur fuer `mexc_native` relevant
+- erlaubte Werte sind `100ms` und `10ms`
+- wenn `frequency` fehlt, nutzt `mexc_native` fuer `trades` und `orderbooks` automatisch `100ms`
+- `10ms` ist ein expliziter Opt-in fuer dichtere Updates
 
 ### 5.4 Subscribe-All
 
