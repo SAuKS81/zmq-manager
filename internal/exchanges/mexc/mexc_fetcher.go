@@ -60,10 +60,11 @@ func (e *MexcExchange) HandleRequest(req *shared_types.ClientRequest) {
 			e.spotMgr = NewConnectionManager("spot", e.dataCh, e.statusCh)
 			go e.spotMgr.Run()
 		}
+		freq := normalizePushIntervalMS(req.PushIntervalMS, req.OrderBookFreq)
 		e.spotMgr.commandCh <- ManagerCommand{
 			Action: managerAction,
 			Symbol: exchangeSymbol,
-			Freq:   normalizeStreamFrequency(req.OrderBookFreq),
+			Freq:   freq,
 		}
 	case "orderbooks":
 		if e.spotOBMgr == nil {
@@ -71,11 +72,12 @@ func (e *MexcExchange) HandleRequest(req *shared_types.ClientRequest) {
 			e.spotOBMgr = NewOrderBookConnectionManager("spot", e.obDataCh, e.statusCh)
 			go e.spotOBMgr.Run()
 		}
+		freq := normalizePushIntervalMS(req.PushIntervalMS, req.OrderBookFreq)
 		e.spotOBMgr.commandCh <- ManagerCommand{
 			Action: managerAction,
 			Symbol: exchangeSymbol,
 			Depth:  normalizeOrderBookDepth(req.OrderBookDepth),
-			Freq:   normalizeOrderBookFrequency(req.OrderBookFreq),
+			Freq:   freq,
 		}
 	default:
 		return

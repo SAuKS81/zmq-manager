@@ -50,6 +50,7 @@ type ClientRequest struct {
 	CacheN         int    `json:"cache_n,omitempty"`
 	OrderBookDepth int    `json:"depth,omitempty"`
 	OrderBookFreq  string `json:"frequency,omitempty"`
+	PushIntervalMS int    `json:"push_interval_ms,omitempty"`
 	BatchSent      int    `json:"-"`
 }
 
@@ -66,6 +67,26 @@ type BulkClientRequest struct {
 	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 	OrderBookFreq  string   `json:"frequency,omitempty"`
+	PushIntervalMS int      `json:"push_interval_ms,omitempty"`
+}
+
+type CapabilityParameter struct {
+	Type          string `json:"type"`
+	Required      bool   `json:"required"`
+	Default       any    `json:"default,omitempty"`
+	Min           any    `json:"min,omitempty"`
+	Max           any    `json:"max,omitempty"`
+	Step          any    `json:"step,omitempty"`
+	AllowedValues []int  `json:"allowed_values,omitempty"`
+}
+
+type ChannelCapability struct {
+	Subscribe         bool                           `json:"subscribe"`
+	Unsubscribe       bool                           `json:"unsubscribe"`
+	BulkSubscribe     bool                           `json:"bulk_subscribe"`
+	BulkUnsubscribe   bool                           `json:"bulk_unsubscribe"`
+	SupportsRequestID bool                           `json:"supports_request_id"`
+	Parameters        map[string]CapabilityParameter `json:"parameters,omitempty"`
 }
 
 type StreamStatusEvent struct {
@@ -149,19 +170,21 @@ type RuntimeSnapshotResponse struct {
 }
 
 type CapabilitiesItem struct {
-	Exchange                      string   `json:"exchange"`
-	Adapter                       string   `json:"adapter"`
-	MarketTypes                   []string `json:"market_types"`
-	DataTypes                     []string `json:"data_types"`
-	OrderBookDepths               []int    `json:"orderbook_depths,omitempty"`
-	UsesBatchSymbols              bool     `json:"uses_batch_symbols,omitempty"`
-	SupportsTradeUnwatch          bool     `json:"supports_trade_unwatch,omitempty"`
-	SupportsTradeBatchUnwatch     bool     `json:"supports_trade_batch_unwatch,omitempty"`
-	SupportsOrderBookUnwatch      bool     `json:"supports_orderbook_unwatch,omitempty"`
-	SupportsOrderBookBatchUnwatch bool     `json:"supports_orderbook_batch_unwatch,omitempty"`
-	SupportsCacheN                bool     `json:"supports_cache_n"`
-	SupportsRequestID             bool     `json:"supports_request_id"`
-	SupportsDeployQueue           bool     `json:"supports_deploy_queue"`
+	Exchange                      string                                  `json:"exchange"`
+	ManagerExchange               string                                  `json:"manager_exchange"`
+	Adapter                       string                                  `json:"adapter"`
+	MarketTypes                   []string                                `json:"market_types"`
+	DataTypes                     []string                                `json:"data_types"`
+	Channels                      map[string]map[string]ChannelCapability `json:"channels,omitempty"`
+	OrderBookDepths               []int                                   `json:"orderbook_depths,omitempty"`
+	UsesBatchSymbols              bool                                    `json:"uses_batch_symbols,omitempty"`
+	SupportsTradeUnwatch          bool                                    `json:"supports_trade_unwatch,omitempty"`
+	SupportsTradeBatchUnwatch     bool                                    `json:"supports_trade_batch_unwatch,omitempty"`
+	SupportsOrderBookUnwatch      bool                                    `json:"supports_orderbook_unwatch,omitempty"`
+	SupportsOrderBookBatchUnwatch bool                                    `json:"supports_orderbook_batch_unwatch,omitempty"`
+	SupportsCacheN                bool                                    `json:"supports_cache_n"`
+	SupportsRequestID             bool                                    `json:"supports_request_id"`
+	SupportsDeployQueue           bool                                    `json:"supports_deploy_queue"`
 }
 
 type CapabilitiesSnapshotResponse struct {

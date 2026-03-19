@@ -21,6 +21,94 @@ func TestCapabilityForExchangeSupportsHuobiAlias(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesCatalogIncludesMexcNativeChannelParameters(t *testing.T) {
+	item, ok := capabilityForExchange("mexc_native")
+	if !ok {
+		t.Fatal("expected mexc_native capability entry")
+	}
+
+	if item.Exchange != "mexc" {
+		t.Fatalf("expected logical exchange mexc, got %q", item.Exchange)
+	}
+	if item.ManagerExchange != "mexc_native" {
+		t.Fatalf("expected manager exchange mexc_native, got %q", item.ManagerExchange)
+	}
+	if item.Adapter != "native" {
+		t.Fatalf("expected adapter native, got %q", item.Adapter)
+	}
+
+	spotChannels := item.Channels["spot"]
+	if len(spotChannels) == 0 {
+		t.Fatalf("expected spot channels for mexc_native, got %+v", item.Channels)
+	}
+
+	for _, dataType := range []string{"trades", "orderbooks"} {
+		channel, ok := spotChannels[dataType]
+		if !ok {
+			t.Fatalf("expected %s channel for mexc_native spot, got %+v", dataType, spotChannels)
+		}
+		if dataType == "orderbooks" {
+			depthParam, ok := channel.Parameters["depth"]
+			if !ok {
+				t.Fatalf("expected depth parameter for orderbooks, got %+v", channel.Parameters)
+			}
+			if depthParam.Type != "int" || depthParam.Default != 5 {
+				t.Fatalf("unexpected depth parameter metadata: %+v", depthParam)
+			}
+			if len(depthParam.AllowedValues) != 3 || depthParam.AllowedValues[0] != 5 || depthParam.AllowedValues[1] != 10 || depthParam.AllowedValues[2] != 20 {
+				t.Fatalf("unexpected depth allowed values: %+v", depthParam.AllowedValues)
+			}
+		}
+		param, ok := channel.Parameters["push_interval_ms"]
+		if !ok {
+			t.Fatalf("expected push_interval_ms parameter for %s, got %+v", dataType, channel.Parameters)
+		}
+		if param.Type != "int" {
+			t.Fatalf("expected int parameter type, got %+v", param)
+		}
+		if param.Required {
+			t.Fatalf("expected optional push_interval_ms, got %+v", param)
+		}
+		if param.Default != 100 {
+			t.Fatalf("expected default 100, got %+v", param.Default)
+		}
+		if param.Min != 10 || param.Max != 100 || param.Step != 10 {
+			t.Fatalf("unexpected range metadata: %+v", param)
+		}
+		if len(param.AllowedValues) != 2 || param.AllowedValues[0] != 10 || param.AllowedValues[1] != 100 {
+			t.Fatalf("unexpected allowed values: %+v", param.AllowedValues)
+		}
+	}
+}
+
+func TestCapabilitiesCatalogIncludesBybitNativeDepthParameter(t *testing.T) {
+	item, ok := capabilityForExchange("bybit_native")
+	if !ok {
+		t.Fatal("expected bybit_native capability entry")
+	}
+
+	channel, ok := item.Channels["spot"]["orderbooks"]
+	if !ok {
+		t.Fatalf("expected bybit_native spot orderbooks channel, got %+v", item.Channels)
+	}
+	depthParam, ok := channel.Parameters["depth"]
+	if !ok {
+		t.Fatalf("expected depth parameter for bybit_native orderbooks, got %+v", channel.Parameters)
+	}
+	if depthParam.Type != "int" {
+		t.Fatalf("expected int depth parameter, got %+v", depthParam)
+	}
+	want := []int{1, 50, 200, 1000}
+	if len(depthParam.AllowedValues) != len(want) {
+		t.Fatalf("unexpected depth allowed values: %+v", depthParam.AllowedValues)
+	}
+	for i, depth := range want {
+		if depthParam.AllowedValues[i] != depth {
+			t.Fatalf("expected depth %d at index %d, got %+v", depth, i, depthParam.AllowedValues)
+		}
+	}
+}
+
 func TestCapabilitiesCatalogIncludesWaveOneExchanges(t *testing.T) {
 	required := map[string]bool{
 		"mexc":    false,

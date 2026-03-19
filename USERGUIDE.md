@@ -282,17 +282,18 @@ MEXC nativer Orderbook-/Trade-Request mit optionalem Update-Intervall:
   "market_type": "spot",
   "data_type": "orderbooks",
   "depth": 5,
-  "frequency": "100ms",
+  "push_interval_ms": 100,
   "encoding": "msgpack"
 }
 ```
 
 Hinweise:
 
-- `frequency` ist aktuell nur fuer `mexc_native` relevant
-- erlaubte Werte sind `100ms` und `10ms`
-- wenn `frequency` fehlt, nutzt `mexc_native` fuer `trades` und `orderbooks` automatisch `100ms`
-- `10ms` ist ein expliziter Opt-in fuer dichtere Updates
+- `push_interval_ms` ist aktuell nur fuer `mexc_native` relevant
+- erlaubte Werte sind `100` und `10`
+- wenn `push_interval_ms` fehlt, nutzt `mexc_native` fuer `trades` und `orderbooks` automatisch `100`
+- `10` ist ein expliziter Opt-in fuer dichtere Updates
+- der Broker akzeptiert fuer bestehende Tools weiterhin auch das aeltere Feld `frequency`, das Webinterface sollte aber `push_interval_ms` verwenden
 
 ### 5.4 Subscribe-All
 
@@ -497,16 +498,60 @@ Antwort:
   "ts": 1772300000000,
   "items": [
     {
-      "exchange": "bybit_native",
+      "exchange": "mexc",
+      "manager_exchange": "mexc_native",
       "adapter": "native",
-      "market_types": ["spot", "swap"],
+      "market_types": ["spot"],
       "data_types": ["trades", "orderbooks"],
-      "orderbook_depths": [1, 50, 200, 1000],
-      "uses_batch_symbols": false,
-      "supports_trade_unwatch": false,
-      "supports_trade_batch_unwatch": false,
-      "supports_orderbook_unwatch": false,
-      "supports_orderbook_batch_unwatch": false,
+      "orderbook_depths": [5, 10, 20],
+      "channels": {
+        "spot": {
+          "trades": {
+            "subscribe": true,
+            "unsubscribe": true,
+            "bulk_subscribe": true,
+            "bulk_unsubscribe": true,
+            "supports_request_id": true,
+            "parameters": {
+              "push_interval_ms": {
+                "type": "int",
+                "required": false,
+                "default": 100,
+                "min": 10,
+                "max": 100,
+                "step": 10,
+                "allowed_values": [10, 100]
+              }
+            }
+          },
+          "orderbooks": {
+            "subscribe": true,
+            "unsubscribe": true,
+            "bulk_subscribe": true,
+            "bulk_unsubscribe": true,
+            "supports_request_id": true,
+            "parameters": {
+              "depth": {
+                "type": "int",
+                "required": false,
+                "default": 5,
+                "min": 5,
+                "max": 20,
+                "allowed_values": [5, 10, 20]
+              },
+              "push_interval_ms": {
+                "type": "int",
+                "required": false,
+                "default": 100,
+                "min": 10,
+                "max": 100,
+                "step": 10,
+                "allowed_values": [10, 100]
+              }
+            }
+          }
+        }
+      },
       "supports_cache_n": false,
       "supports_request_id": true,
       "supports_deploy_queue": true
@@ -517,8 +562,10 @@ Antwort:
 
 Der Endpunkt ist fuer das UI die Quelle fuer:
 
+- logische Exchange-ID (`exchange`) und konkrete Manager-ID (`manager_exchange`)
 - unterstuetzte `market_type`-/`data_type`-Kombinationen
-- erlaubte Orderbook-Tiefen
+- generische Channel-Parameter je `market_type`/`data_type`
+- erlaubte Orderbook-Tiefen, sowohl kompatibel ueber `orderbook_depths` als auch generisch ueber `channels.*.*.parameters.depth`
 - Deploy-/Correlation-Faehigkeiten pro Route
 - konkrete CCXT-/Adapter-Capabilities fuer Lifecycle-Steuerung:
   - `uses_batch_symbols`
@@ -526,6 +573,14 @@ Der Endpunkt ist fuer das UI die Quelle fuer:
   - `supports_trade_batch_unwatch`
   - `supports_orderbook_unwatch`
   - `supports_orderbook_batch_unwatch`
+
+Wichtige UI-Regel:
+
+- das Frontend sollte fuer neue Adapter primaer `channels[market_type][data_type].parameters` auswerten
+- fehlende Parameter bedeuten:
+  - nicht anzeigen
+  - nicht mitsenden
+- fuer Requests an den Broker muss das UI `manager_exchange` als `exchange`-Feld verwenden
 
 ### 5.10 Deploy-Batch-Summary
 

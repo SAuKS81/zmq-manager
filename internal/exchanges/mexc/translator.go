@@ -54,6 +54,17 @@ func normalizeStreamFrequency(freq string) string {
 	return mexcDefaultStreamFreq
 }
 
+func normalizePushIntervalMS(pushIntervalMS int, fallback string) string {
+	switch pushIntervalMS {
+	case 10:
+		return "10ms"
+	case 100:
+		return "100ms"
+	default:
+		return normalizeStreamFrequency(fallback)
+	}
+}
+
 func NormalizeTrade(symbol string, trade *protoc.PublicAggreDealsV3ApiItem, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
 	if trade == nil {
 		return nil, fmt.Errorf("trade is nil")
