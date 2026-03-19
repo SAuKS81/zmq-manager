@@ -3,7 +3,7 @@ package mexc
 import (
 	"testing"
 
-	"bybit-watcher/internal/exchanges/mexc/protoc"
+	"bybit-watcher/internal/exchanges/mexc/mexcproto"
 )
 
 func TestTranslateSymbolRoundTripUSDT(t *testing.T) {
@@ -19,7 +19,7 @@ func TestTranslateSymbolRoundTripUSDT(t *testing.T) {
 }
 
 func TestNormalizeTradeFromProto(t *testing.T) {
-	trade := &protoc.PublicAggreDealsV3ApiItem{
+	trade := &mexcproto.PublicAggreDealsV3ApiItem{
 		Price:     "93220.00",
 		Quantity:  "0.04438243",
 		TradeType: 2,

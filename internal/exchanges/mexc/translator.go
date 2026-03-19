@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"bybit-watcher/internal/exchanges/mexc/protoc"
+	"bybit-watcher/internal/exchanges/mexc/mexcproto"
 	"bybit-watcher/internal/shared_types"
 )
 
@@ -65,7 +65,7 @@ func normalizePushIntervalMS(pushIntervalMS int, fallback string) string {
 	}
 }
 
-func NormalizeTrade(symbol string, trade *protoc.PublicAggreDealsV3ApiItem, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
+func NormalizeTrade(symbol string, trade *mexcproto.PublicAggreDealsV3ApiItem, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
 	if trade == nil {
 		return nil, fmt.Errorf("trade is nil")
 	}

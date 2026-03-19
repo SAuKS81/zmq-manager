@@ -3,7 +3,7 @@ package mexc
 import (
 	"testing"
 
-	"bybit-watcher/internal/exchanges/mexc/protoc"
+	"bybit-watcher/internal/exchanges/mexc/mexcproto"
 	"bybit-watcher/internal/shared_types"
 )
 
@@ -54,11 +54,11 @@ func TestApplyDeltaToState(t *testing.T) {
 	state.LastToVersion = 100
 
 	err := applyDeltaToState(state, depthDelta{
-		Bids: []*protoc.PublicAggreDepthV3ApiItem{
+		Bids: []*mexcproto.PublicAggreDepthV3ApiItem{
 			{Price: "100.0", Quantity: "3.0"},
 			{Price: "99.5", Quantity: "1.5"},
 		},
-		Asks: []*protoc.PublicAggreDepthV3ApiItem{
+		Asks: []*mexcproto.PublicAggreDepthV3ApiItem{
 			{Price: "101.0", Quantity: "0"},
 		},
 		FromVersion: 101,

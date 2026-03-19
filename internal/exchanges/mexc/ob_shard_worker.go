@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"bybit-watcher/internal/exchanges/mexc/protoc"
+	"bybit-watcher/internal/exchanges/mexc/mexcproto"
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
@@ -48,8 +48,8 @@ type localOrderBookState struct {
 }
 
 type depthDelta struct {
-	Asks        []*protoc.PublicAggreDepthV3ApiItem
-	Bids        []*protoc.PublicAggreDepthV3ApiItem
+	Asks        []*mexcproto.PublicAggreDepthV3ApiItem
+	Bids        []*mexcproto.PublicAggreDepthV3ApiItem
 	FromVersion int64
 	ToVersion   int64
 	Timestamp   int64
@@ -287,7 +287,7 @@ func (sw *OrderBookShardWorker) eventLoop(conn *websocket.Conn) error {
 }
 
 func (sw *OrderBookShardWorker) handleBinaryOrderBookMessage(payload []byte) error {
-	var wrapper protoc.PushDataV3ApiWrapper
+	var wrapper mexcproto.PushDataV3ApiWrapper
 	if err := proto.Unmarshal(payload, &wrapper); err != nil {
 		return err
 	}
@@ -745,7 +745,7 @@ func applyDeltaToState(state *localOrderBookState, delta depthDelta) error {
 	return nil
 }
 
-func applyAggreLevels(side map[string]shared_types.OrderBookLevel, levels []*protoc.PublicAggreDepthV3ApiItem) error {
+func applyAggreLevels(side map[string]shared_types.OrderBookLevel, levels []*mexcproto.PublicAggreDepthV3ApiItem) error {
 	for _, level := range levels {
 		if level == nil {
 			continue

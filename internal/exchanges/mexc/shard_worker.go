@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"bybit-watcher/internal/exchanges/mexc/protoc"
+	"bybit-watcher/internal/exchanges/mexc/mexcproto"
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/shared_types"
 	"github.com/gorilla/websocket"
@@ -221,7 +221,7 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 }
 
 func (sw *ShardWorker) handleBinaryTradeMessage(payload []byte) error {
-	var wrapper protoc.PushDataV3ApiWrapper
+	var wrapper mexcproto.PushDataV3ApiWrapper
 	if err := proto.Unmarshal(payload, &wrapper); err != nil {
 		return err
 	}
