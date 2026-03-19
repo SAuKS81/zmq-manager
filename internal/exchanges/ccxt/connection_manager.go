@@ -132,29 +132,15 @@ func (cm *ConnectionManager) processCommands(cmds []ManagerCommand) {
 }
 
 func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
-	if !cm.config.UseForSymbols {
-		return false
-	}
-	if featureHardDisabled(cm.exchangeName, "watchOrderBookForSymbols") {
-		return false
-	}
-	// Workaround for pinned CCXT-Pro build:
-	// bybit swap orderbooks may stall with WatchOrderBookForSymbols.
-	// Use single-symbol watchOrderBook path for swap until upstream behavior is stable.
-	if cm.exchangeName == "bybit" && cm.marketType == "swap" {
-		return false
-	}
-	return true
+	// Temporarily force the single-symbol path for all exchanges while we
+	// isolate the known CCXT-Go watch*ForSymbols memory behavior.
+	return false
 }
 
 func (cm *ConnectionManager) shouldUseTradeBatchMode() bool {
-	if !cm.config.UseForSymbols {
-		return false
-	}
-	if featureHardDisabled(cm.exchangeName, "watchTradesForSymbols") {
-		return false
-	}
-	return true
+	// Temporarily force the single-symbol path for all exchanges while we
+	// isolate the known CCXT-Go watch*ForSymbols memory behavior.
+	return false
 }
 
 func (cm *ConnectionManager) tradeShardCapacity() int {
