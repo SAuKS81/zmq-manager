@@ -5,6 +5,7 @@ import signal
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 
 import msgpack
 import zmq
@@ -47,15 +48,55 @@ def build_requests(exchanges: list[str], symbols: list[str], market_type: str, e
     return requests
 
 
+def format_ts_ms(ts_ms: int | None) -> str:
+    if not ts_ms:
+        return "-"
+    dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).astimezone()
+    return dt.strftime("%H:%M:%S.%f")[:-3]
+
+
+def normalize_trade_obj(trade) -> dict:
+    if isinstance(trade, dict):
+        if "timestamp" in trade or "exchange" in trade or "symbol" in trade or "price" in trade:
+            return trade
+        # msgpack tags from Go struct:
+        # e=exchange, s=symbol, t=timestamp, p=price
+        return {
+            "timestamp": trade.get("timestamp", trade.get("t")),
+            "exchange": trade.get("exchange", trade.get("e")),
+            "symbol": trade.get("symbol", trade.get("s")),
+            "price": trade.get("price", trade.get("p")),
+        }
+    if isinstance(trade, (list, tuple)) and len(trade) >= 8:
+        # Fallback if msgpack decoder returns positional arrays.
+        return {
+            "exchange": trade[0],
+            "symbol": trade[1],
+            "timestamp": trade[3],
+            "price": trade[6],
+        }
+    return {}
+
+
+def print_trade_row(trade: dict) -> None:
+    trade = normalize_trade_obj(trade)
+    ts = format_ts_ms(trade.get("timestamp"))
+    exchange = trade.get("exchange") or "?"
+    symbol = trade.get("symbol") or "?"
+    price = trade.get("price") or "?"
+    print(f"[TRADE] {ts} {exchange} {symbol} {price}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Simple native ZMQ trade rate client")
     parser.add_argument("--broker", default=default_broker_address(), help="ZMQ broker address")
     parser.add_argument("--market-type", default="spot", choices=["spot", "swap"], help="Market type")
-    parser.add_argument("--symbols", default="BTCUSDT,ETHUSDT", help="Comma-separated native symbols")
-    parser.add_argument("--exchanges", default="binance_native,bybit_native", help="Comma-separated exchanges")
+    parser.add_argument("--symbols", default="ETH/USDT", help="Comma-separated CCXT unified symbols")
+    parser.add_argument("--exchanges", default="bybit_native", help="Comma-separated exchanges")
     parser.add_argument("--encoding", default="msgpack", choices=["json", "msgpack", "binary"], help="Requested broker encoding")
     parser.add_argument("--rate-interval", type=float, default=1.0, help="Seconds between rate prints")
     parser.add_argument("--debug-frames", type=int, default=5, help="Print first N received frames for debugging")
+    parser.add_argument("--print-trades", action="store_true", help="Print each received trade")
     args = parser.parse_args()
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -116,6 +157,9 @@ def main() -> int:
                 if isinstance(obj, list):
                     msg_count += 1
                     trade_count += len(obj)
+                    if args.print_trades:
+                        for trade in obj:
+                            print_trade_row(trade)
                 continue
 
             if len(header) == 1 and header == b"O":
@@ -146,11 +190,16 @@ def main() -> int:
             if isinstance(obj, list):
                 msg_count += 1
                 trade_count += len(obj)
+                if args.print_trades:
+                    for trade in obj:
+                        print_trade_row(trade)
                 continue
 
             if isinstance(obj, dict) and obj.get("data_type") == "trades":
                 msg_count += 1
                 trade_count += 1
+                if args.print_trades:
+                    print_trade_row(obj)
                 continue
 
             print(f"[CLIENT] unhandled payload type={type(obj).__name__} header={header!r}")

@@ -635,6 +635,15 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe_bulk requires exchange, market_type and symbols")
 			return
 		}
+		for _, symbol := range req.Symbols {
+			if symbol == "" {
+				continue
+			}
+			if !isUnifiedSymbol(symbol, req.MarketType) {
+				cm.sendClientError(clientID, req.RequestID, "invalid_symbol_format", unifiedSymbolFormatHint(req.MarketType))
+				return
+			}
+		}
 		log.Printf(
 			"[CLIENT-MANAGER] 'subscribe_bulk': client=%s exchange=%s market_type=%s data_type=%s symbols=%d",
 			clientIDStr,
@@ -659,6 +668,15 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		if req.Exchange == "" || req.MarketType == "" || len(req.Symbols) == 0 {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "unsubscribe_bulk requires exchange, market_type and symbols")
 			return
+		}
+		for _, symbol := range req.Symbols {
+			if symbol == "" {
+				continue
+			}
+			if !isUnifiedSymbol(symbol, req.MarketType) {
+				cm.sendClientError(clientID, req.RequestID, "invalid_symbol_format", unifiedSymbolFormatHint(req.MarketType))
+				return
+			}
 		}
 		log.Printf(
 			"[CLIENT-MANAGER] 'unsubscribe_bulk': client=%s exchange=%s market_type=%s data_type=%s symbols=%d",
@@ -686,6 +704,10 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		}
 		if req.Exchange == "" || req.MarketType == "" || req.Symbol == "" {
 			cm.sendClientError(clientID, req.RequestID, "invalid_request", "subscribe/unsubscribe requires exchange, symbol and market_type")
+			return
+		}
+		if !isUnifiedSymbol(req.Symbol, req.MarketType) {
+			cm.sendClientError(clientID, req.RequestID, "invalid_symbol_format", unifiedSymbolFormatHint(req.MarketType))
 			return
 		}
 	case "disconnect":

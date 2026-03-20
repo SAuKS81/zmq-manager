@@ -14,6 +14,13 @@ func TestTranslateSymbolRoundTripSpot(t *testing.T) {
 	}
 }
 
+func TestTranslateCompactSpotSymbolFromExchange(t *testing.T) {
+	unified := TranslateSymbolFromExchange("BTCUSDT")
+	if unified != "BTC/USDT" {
+		t.Fatalf("expected BTC/USDT, got %q", unified)
+	}
+}
+
 func TestParseTradeTimestampMSHandlesNanoseconds(t *testing.T) {
 	got := parseTradeTimestampMS("1729843222921000000")
 	if got != 1729843222921 {

@@ -156,7 +156,7 @@ Fuer Deploy- und Queue-Workflows sollte das UI konsequent eine `request_id` setz
   "action": "subscribe_bulk",
   "request_id": "deploy-123",
   "exchange": "bybit_native",
-  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "symbols": ["BTC/USDT", "ETH/USDT"],
   "market_type": "spot",
   "data_type": "trades"
 }
@@ -188,7 +188,7 @@ Beispiel fuer einen sticky/headless Control-Deploy:
   "sticky": true,
   "request_id": "deploy-123",
   "exchange": "bybit_native",
-  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
   "market_type": "swap",
   "data_type": "orderbooks",
   "depth": 1
@@ -209,7 +209,7 @@ Bedeutung:
 {
   "action": "subscribe",
   "exchange": "binance_native",
-  "symbol": "BTCUSDT",
+  "symbol": "BTC/USDT",
   "market_type": "spot",
   "data_type": "trades",
   "encoding": "msgpack"
@@ -222,7 +222,7 @@ Mit Orderbook-Tiefe:
 {
   "action": "subscribe",
   "exchange": "bybit_native",
-  "symbol": "BTCUSDT",
+  "symbol": "BTC/USDT:USDT",
   "market_type": "swap",
   "data_type": "orderbooks",
   "depth": 50,
@@ -251,7 +251,7 @@ Wichtig fuer native Orderbooks:
 {
   "action": "unsubscribe",
   "exchange": "binance_native",
-  "symbol": "BTCUSDT",
+  "symbol": "BTC/USDT",
   "market_type": "spot",
   "data_type": "trades"
 }
@@ -308,7 +308,7 @@ Der Broker lehnt diesen Request explizit ab und erwartet stattdessen `subscribe_
   "action": "unsubscribe_bulk",
   "request_id": "deploy-124",
   "exchange": "bybit_native",
-  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "symbols": ["BTC/USDT", "ETH/USDT"],
   "market_type": "spot",
   "data_type": "trades"
 }
@@ -599,19 +599,11 @@ Bulk-Operationen (`subscribe_bulk`, `unsubscribe_bulk`) erzeugen nach Abschluss 
 
 ## 6. Symbolformat
 
-Es gibt zwei wichtige Faelle:
+Es gibt nur noch ein externes Symbolformat:
 
-### Native Adapter
+### Einheitliches Client-Format
 
-Typischerweise boersenspezifische native Symbole:
-
-- Binance native: `BTCUSDT`
-- Bybit native: `BTCUSDT`
-- Bitget native: `BTCUSDT`
-
-### CCXT
-
-CCXT-style Symbole:
+CCXT-unified Symbole:
 
 - Spot: `BTC/USDT`
 - Perp/Swap: `BTC/USDT:USDT`
@@ -620,9 +612,9 @@ Wichtig:
 
 - bei CCXT sollte `--exchanges` oder `exchange` **ohne** `_native` verwendet werden
 - bei nativen Adaptern immer mit `_native`
-- Snapshot, Health und Lifecycle-Events verwenden dieselbe Symbolform wie der jeweilige Adapterpfad:
-  - native Requests/Events bleiben in nativer Symbolform
-  - CCXT Requests/Events bleiben in CCXT-Symbolform
+- Requests, Status-Events, Runtime-Snapshots und Daten-Events verwenden nach außen immer CCXT-unified Symbole
+- native boersenspezifische Symbolformen sind nur noch intern erlaubt
+- Requests mit nicht-unified Symbolen werden brokerseitig abgelehnt
 
 ## 7. Welche Antworten der Broker liefert
 
@@ -841,7 +833,7 @@ Format:
   "exchange": "bybit_native",
   "market_type": "spot",
   "data_type": "trades",
-  "symbol": "BTCUSDT",
+  "symbol": "BTC/USDT",
   "adapter": "native",
   "request_id": "deploy-123",
   "status": "acked",
@@ -1184,7 +1176,7 @@ Voraussetzung:
 pip install pyzmq
 ```
 
-Standardaufruf fuer native Binance- und Bybit-Trades auf `BTCUSDT` und `ETHUSDT`:
+Standardaufruf fuer native Binance- und Bybit-Trades auf `ETH/USDT`:
 
 ```bash
 python3 clients/native_rate_client.py
@@ -1203,7 +1195,7 @@ Der Client:
 Beispiele:
 
 ```bash
-python3 clients/native_rate_client.py --market-type swap
-python3 clients/native_rate_client.py --symbols BTCUSDT,ETHUSDT,SOLUSDT
+python3 clients/native_rate_client.py --symbols BTC/USDT,ETH/USDT,SOL/USDT
+python3 clients/native_rate_client.py --market-type swap --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
 python3 clients/native_rate_client.py --broker tcp://127.0.0.1:5555
 ```

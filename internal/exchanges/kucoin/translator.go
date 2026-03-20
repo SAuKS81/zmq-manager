@@ -22,6 +22,12 @@ func TranslateSymbolFromExchange(exchangeSymbol string) string {
 	if len(parts) >= 2 {
 		return parts[0] + "/" + parts[1]
 	}
+	if strings.HasSuffix(exchangeSymbol, "USDT") {
+		base := strings.TrimSuffix(exchangeSymbol, "USDT")
+		if base != "" {
+			return base + "/USDT"
+		}
+	}
 	return exchangeSymbol
 }
 

@@ -472,6 +472,26 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		sm.recordDeployBatchResult(req.RequestID, true)
 		return
 	}
+	if (req.Action == "subscribe" || req.Action == "unsubscribe") && req.Symbol != "" && !isUnifiedSymbol(req.Symbol, req.MarketType) {
+		if req.Action == "subscribe" && req.DataType == "orderbooks" {
+			failedEventType = "stream_update_failed"
+		}
+		sm.sendStatusToClient(req.ClientID, &shared_types.StreamStatusEvent{
+			Type:       failedEventType,
+			Exchange:   req.Exchange,
+			MarketType: req.MarketType,
+			Symbol:     req.Symbol,
+			DataType:   req.DataType,
+			Adapter:    adapterFromExchangeRoute(req.Exchange),
+			RequestID:  req.RequestID,
+			Status:     "failed",
+			Reason:     "invalid_symbol_format",
+			Message:    unifiedSymbolFormatHint(req.MarketType),
+			Timestamp:  time.Now().UnixMilli(),
+		})
+		sm.recordDeployBatchResult(req.RequestID, true)
+		return
+	}
 
 	prevOwnerCount := 0
 	prevEffectiveDepth := 0

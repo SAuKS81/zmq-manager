@@ -32,7 +32,7 @@ func TestHandleMessageSubscribeBulk(t *testing.T) {
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
-	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"binance_native","symbols":["BTC/USDT","ETH/USDT"],"market_type":"swap","depth":1}`)
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"binance_native","symbols":["BTC/USDT:USDT","ETH/USDT:USDT"],"market_type":"swap","depth":1}`)
 	cm.handleMessage([]byte("client-1"), payload)
 
 	reqs := drainRequests(reqCh)
@@ -190,7 +190,7 @@ func TestHandleMessageControlClientRejectsSubscribeBulk(t *testing.T) {
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
-	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"bybit_native","symbols":["BTCUSDT"],"market_type":"spot","data_type":"orderbooks"}`)
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"bybit_native","symbols":["BTC/USDT"],"market_type":"spot","data_type":"orderbooks"}`)
 	cm.handleMessage([]byte("client-1"), payload)
 
 	if got := len(drainRequests(reqCh)); got != 0 {
@@ -212,7 +212,7 @@ func TestHandleMessageControlClientAllowsStickySubscribeBulk(t *testing.T) {
 		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
-	payload := []byte(`{"client_role":"control","action":"subscribe_bulk","sticky":true,"request_id":"deploy-123","exchange":"bybit_native","symbols":["BTCUSDT"],"market_type":"spot","data_type":"orderbooks"}`)
+	payload := []byte(`{"client_role":"control","action":"subscribe_bulk","sticky":true,"request_id":"deploy-123","exchange":"bybit_native","symbols":["BTC/USDT"],"market_type":"spot","data_type":"orderbooks"}`)
 	cm.handleMessage([]byte("client-1"), payload)
 
 	reqs := drainRequests(reqCh)
@@ -268,6 +268,46 @@ func TestHandleMessageConcurrentClientStateAccess(t *testing.T) {
 	}
 	if client.LastPong.IsZero() {
 		t.Fatalf("expected last pong timestamp to be set")
+	}
+}
+
+func TestHandleMessageRejectsNonUnifiedSpotSymbol(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"mexc_native","symbols":["BTCUSDT"],"market_type":"spot","data_type":"trades"}`)
+	cm.handleMessage([]byte("client-1"), payload)
+
+	if got := len(drainRequests(reqCh)); got != 0 {
+		t.Fatalf("expected no forwarded requests for invalid symbol, got %d", got)
+	}
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected one error response, got %d", got)
+	}
+}
+
+func TestHandleMessageRejectsNonUnifiedSwapSymbol(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
+	}
+
+	payload := []byte(`{"action":"subscribe","request_id":"deploy-123","exchange":"bybit_native","symbol":"BTCUSDT","market_type":"swap","data_type":"trades"}`)
+	cm.handleMessage([]byte("client-1"), payload)
+
+	if got := len(drainRequests(reqCh)); got != 0 {
+		t.Fatalf("expected no forwarded requests for invalid swap symbol, got %d", got)
+	}
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected one error response, got %d", got)
 	}
 }
 
