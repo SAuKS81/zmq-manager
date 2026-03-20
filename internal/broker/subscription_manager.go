@@ -12,6 +12,7 @@ import (
 	"bybit-watcher/internal/exchanges/binance"
 	"bybit-watcher/internal/exchanges/bitget"
 	"bybit-watcher/internal/exchanges/bybit"
+	"bybit-watcher/internal/exchanges/coinex"
 	"bybit-watcher/internal/exchanges/kucoin"
 	"bybit-watcher/internal/exchanges/mexc"
 	"bybit-watcher/internal/metrics"
@@ -77,6 +78,7 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 	sm.exchangeRegistry["bitget_native"] = bitget.NewBitgetExchange(sm.RequestCh, sm.TradeDataCh, sm.StatusCh)
 	sm.exchangeRegistry["mexc_native"] = mexc.NewMexcExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["kucoin_native"] = kucoin.NewKucoinExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["coinex_native"] = coinex.NewCoinexExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	registerCCXT(sm)
 	return sm
 }
