@@ -50,6 +50,7 @@ Zu pruefen bzw. umzubauen:
 - grosse `select`-Schleifen
 - unnoetige Wakeups
 - Einzelverarbeitung statt Batching
+- mehrere Ticker auf gemeinsame Maintenance-Takte reduzieren
 
 ### 3. Broker-Hot-Path
 
@@ -85,7 +86,7 @@ Das ist wichtig, aber nicht der erste Hebel.
 
 Als naechstes umzusetzen:
 
-- Bybit-`addSubscription()`-Pfade fuer Trades und Orderbooks entschlacken
-- zuerst Logging und offensichtliche Hot-Path-Nebenwirkungen reduzieren
+- Bybit-`runSession()`-Pfade fuer Trades und Orderbooks vereinfachen
+- zuerst Wakeups durch Ticker-/Maintenance-Logik reduzieren
 - danach lokaler Build + gezielte Tests
 - danach erneut `pprof` auf Vultr

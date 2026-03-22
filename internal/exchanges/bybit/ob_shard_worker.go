@@ -149,11 +149,9 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	respCh := make(chan wsCommandResponse, 128)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
-	batchTicker := time.NewTicker(200 * time.Millisecond)
-	retryTicker := time.NewTicker(250 * time.Millisecond)
+	maintenanceTicker := time.NewTicker(250 * time.Millisecond)
 	defer pingTicker.Stop()
-	defer batchTicker.Stop()
-	defer retryTicker.Stop()
+	defer maintenanceTicker.Stop()
 
 	go func() {
 		defer close(msgCh)
@@ -299,11 +297,11 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 				}
 			}
 			sw.mu.Unlock()
-		case <-batchTicker.C:
+		case <-maintenanceTicker.C:
 			if err := flushCommands(); err != nil {
 				return err
 			}
-		case <-retryTicker.C:
+
 			now := time.Now()
 			for reqID, cmd := range inflight {
 				if cmd.op != "unsubscribe" {
