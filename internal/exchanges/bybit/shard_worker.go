@@ -130,7 +130,6 @@ func (sw *ShardWorker) desiredSymbolsSnapshot() []string {
 func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 	msgCh := make(chan *bytes.Buffer, 256)
 	errCh := make(chan error, 1)
-	respCh := make(chan wsCommandResponse, 128)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
 	maintenanceTicker := time.NewTicker(250 * time.Millisecond)
 	defer pingTicker.Stop()
@@ -151,14 +150,6 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 			if bytes.Contains(msg, bybitTradePongNeedle) {
 				recyclePooledBuffer(&bybitTradeReadBufPool, buf)
 				continue
-			}
-			if !bytes.Contains(msg, bybitTradeTopicNeedle) {
-				var resp wsCommandResponse
-				if err := gjson.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
-					recyclePooledBuffer(&bybitTradeReadBufPool, buf)
-					respCh <- resp
-					continue
-				}
 			}
 			msgCh <- buf
 		}
@@ -214,6 +205,46 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 		select {
 		case buf := <-msgCh:
 			msg := buf.Bytes()
+			if !bytes.Contains(msg, bybitTradeTopicNeedle) {
+				var resp wsCommandResponse
+				if err := gjson.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
+					recyclePooledBuffer(&bybitTradeReadBufPool, buf)
+					cmd, ok := inflight[resp.ReqID]
+					if !ok {
+						continue
+					}
+					delete(inflight, resp.ReqID)
+					if !resp.Success {
+						if cmd.op == "unsubscribe" && cmd.attempt < 4 {
+							log.Printf("[SHARD-ERROR] unsubscribe nack req_id=%s attempt=%d ret_msg=%q retrying", resp.ReqID, cmd.attempt, resp.RetMsg)
+							for _, topic := range cmd.topics {
+								pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+							}
+							continue
+						}
+						sw.emitStatusForSymbols("stream_unsubscribe_failed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+						sw.emitStatusForSymbols("stream_force_closed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+						return fmt.Errorf("bybit command nack op=%s req_id=%s ret_msg=%q", cmd.op, resp.ReqID, resp.RetMsg)
+					}
+					sw.mu.Lock()
+					switch cmd.op {
+					case "subscribe":
+						for _, symbol := range cmd.topics {
+							sw.activeSymbols[symbol] = true
+							if !sw.desiredSymbols[symbol] {
+								pendingUnsubs = queueUniqueTopic(pendingUnsubs, symbol)
+							}
+						}
+					case "unsubscribe":
+						for _, symbol := range cmd.topics {
+							delete(sw.activeSymbols, symbol)
+						}
+					}
+					sw.mu.Unlock()
+					continue
+				}
+			}
+
 			ingestNow := time.Now()
 			goTimestamp := ingestNow.UnixMilli()
 			if bytes.Contains(msg, bybitTradeTopicNeedle) {
@@ -259,39 +290,6 @@ func (sw *ShardWorker) runSession(conn *websocket.Conn) error {
 					}
 				}
 			}
-		case resp := <-respCh:
-			cmd, ok := inflight[resp.ReqID]
-			if !ok {
-				continue
-			}
-			delete(inflight, resp.ReqID)
-			if !resp.Success {
-				if cmd.op == "unsubscribe" && cmd.attempt < 4 {
-					log.Printf("[SHARD-ERROR] unsubscribe nack req_id=%s attempt=%d ret_msg=%q retrying", resp.ReqID, cmd.attempt, resp.RetMsg)
-					for _, topic := range cmd.topics {
-						pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
-					}
-					continue
-				}
-				sw.emitStatusForSymbols("stream_unsubscribe_failed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
-				sw.emitStatusForSymbols("stream_force_closed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
-				return fmt.Errorf("bybit command nack op=%s req_id=%s ret_msg=%q", cmd.op, resp.ReqID, resp.RetMsg)
-			}
-			sw.mu.Lock()
-			switch cmd.op {
-			case "subscribe":
-				for _, symbol := range cmd.topics {
-					sw.activeSymbols[symbol] = true
-					if !sw.desiredSymbols[symbol] {
-						pendingUnsubs = queueUniqueTopic(pendingUnsubs, symbol)
-					}
-				}
-			case "unsubscribe":
-				for _, symbol := range cmd.topics {
-					delete(sw.activeSymbols, symbol)
-				}
-			}
-			sw.mu.Unlock()
 		case <-maintenanceTicker.C:
 			if err := flushCommands(); err != nil {
 				return err

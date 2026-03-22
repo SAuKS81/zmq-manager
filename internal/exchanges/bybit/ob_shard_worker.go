@@ -147,7 +147,6 @@ func (sw *OrderBookShardWorker) desiredTopicsSnapshot() []string {
 func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 	msgCh := make(chan incomingOBMessage, 250)
 	errCh := make(chan error, 1)
-	respCh := make(chan wsCommandResponse, 128)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
 	maintenanceTicker := time.NewTicker(250 * time.Millisecond)
 	defer pingTicker.Stop()
@@ -168,14 +167,6 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 			if bytes.Contains(msg, bybitPongNeedle) {
 				recyclePooledBuffer(&bybitReadBufPool, buf)
 				continue
-			}
-			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
-				var resp wsCommandResponse
-				if err := json.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
-					recyclePooledBuffer(&bybitReadBufPool, buf)
-					respCh <- resp
-					continue
-				}
 			}
 			msgCh <- incomingOBMessage{buf: buf, ingestUnixNano: time.Now().UnixNano()}
 		}
@@ -233,7 +224,52 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 			if !ok {
 				return <-errCh
 			}
-			sw.handleIncomingMessage(incoming.buf.Bytes(), incoming.ingestUnixNano)
+			msg := incoming.buf.Bytes()
+			if !bytes.Contains(msg, bybitOrderBookTopicNeedle) {
+				var resp wsCommandResponse
+				if err := json.Unmarshal(msg, &resp); err == nil && resp.ReqID != "" {
+					recyclePooledBuffer(&bybitReadBufPool, incoming.buf)
+					cmd, ok := inflight[resp.ReqID]
+					if !ok {
+						continue
+					}
+					delete(inflight, resp.ReqID)
+					if !resp.Success {
+						if cmd.op == "unsubscribe" && cmd.attempt < 4 {
+							log.Printf("[BYBIT-OB-SHARD-ERROR] unsubscribe nack req_id=%s attempt=%d ret_msg=%q retrying", resp.ReqID, cmd.attempt, resp.RetMsg)
+							for _, topic := range cmd.topics {
+								pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+							}
+							continue
+						}
+						sw.emitStatusForTopics("stream_unsubscribe_failed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+						sw.emitStatusForTopics("stream_force_closed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
+						return fmt.Errorf("bybit ob command nack op=%s req_id=%s ret_msg=%q", cmd.op, resp.ReqID, resp.RetMsg)
+					}
+					sw.mu.Lock()
+					switch cmd.op {
+					case "subscribe":
+						for _, topic := range cmd.topics {
+							depth := sw.desiredSubscriptions[topic]
+							sw.activeSubscriptions[topic] = depth
+							if _, stillDesired := sw.desiredSubscriptions[topic]; !stillDesired {
+								pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
+							}
+						}
+					case "unsubscribe":
+						for _, topic := range cmd.topics {
+							delete(sw.activeSubscriptions, topic)
+							delete(sw.orderbooks, topic)
+							if _, stillDesired := sw.desiredSubscriptions[topic]; !stillDesired {
+								delete(sw.topicSymbols, topic)
+							}
+						}
+					}
+					sw.mu.Unlock()
+					continue
+				}
+			}
+			sw.handleIncomingMessage(msg, incoming.ingestUnixNano)
 			recyclePooledBuffer(&bybitReadBufPool, incoming.buf)
 		case cmd := <-sw.commandCh:
 			depth := getBybitDepth(cmd.Depth)
@@ -259,44 +295,6 @@ func (sw *OrderBookShardWorker) runSession(ctx context.Context) error {
 					pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
 				}
 			}
-		case resp := <-respCh:
-			cmd, ok := inflight[resp.ReqID]
-			if !ok {
-				continue
-			}
-			delete(inflight, resp.ReqID)
-			if !resp.Success {
-				if cmd.op == "unsubscribe" && cmd.attempt < 4 {
-					log.Printf("[BYBIT-OB-SHARD-ERROR] unsubscribe nack req_id=%s attempt=%d ret_msg=%q retrying", resp.ReqID, cmd.attempt, resp.RetMsg)
-					for _, topic := range cmd.topics {
-						pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
-					}
-					continue
-				}
-				sw.emitStatusForTopics("stream_unsubscribe_failed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
-				sw.emitStatusForTopics("stream_force_closed", cmd.topics, "unsubscribe_nack", cmd.attempt, resp.RetMsg)
-				return fmt.Errorf("bybit ob command nack op=%s req_id=%s ret_msg=%q", cmd.op, resp.ReqID, resp.RetMsg)
-			}
-			sw.mu.Lock()
-			switch cmd.op {
-			case "subscribe":
-				for _, topic := range cmd.topics {
-					depth := sw.desiredSubscriptions[topic]
-					sw.activeSubscriptions[topic] = depth
-					if _, stillDesired := sw.desiredSubscriptions[topic]; !stillDesired {
-						pendingUnsubs = queueUniqueTopic(pendingUnsubs, topic)
-					}
-				}
-			case "unsubscribe":
-				for _, topic := range cmd.topics {
-					delete(sw.activeSubscriptions, topic)
-					delete(sw.orderbooks, topic)
-					if _, stillDesired := sw.desiredSubscriptions[topic]; !stillDesired {
-						delete(sw.topicSymbols, topic)
-					}
-				}
-			}
-			sw.mu.Unlock()
 		case <-maintenanceTicker.C:
 			if err := flushCommands(); err != nil {
 				return err

@@ -51,6 +51,7 @@ Zu pruefen bzw. umzubauen:
 - unnoetige Wakeups
 - Einzelverarbeitung statt Batching
 - mehrere Ticker auf gemeinsame Maintenance-Takte reduzieren
+- Nebenkanäle im Session-Pfad abbauen, wenn Daten und Command-Responses denselben Eingang nutzen koennen
 
 ### 3. Broker-Hot-Path
 
@@ -87,6 +88,6 @@ Das ist wichtig, aber nicht der erste Hebel.
 Als naechstes umzusetzen:
 
 - Bybit-`runSession()`-Pfade fuer Trades und Orderbooks vereinfachen
-- zuerst Wakeups durch Ticker-/Maintenance-Logik reduzieren
+- zuerst Wakeups und Channel-Hops reduzieren
 - danach lokaler Build + gezielte Tests
 - danach erneut `pprof` auf Vultr
