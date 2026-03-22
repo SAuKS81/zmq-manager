@@ -336,8 +336,8 @@ func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
 
 	cm.distributeOrderBookBatch([][]byte{[]byte("client-1")}, updates)
 
-	if got := len(cm.sendChP1); got != 2 {
-		t.Fatalf("expected two direct queue messages for orderbook updates, got %d", got)
+	if got := len(cm.sendChP1); got != 1 {
+		t.Fatalf("expected one batched queue message for orderbook updates, got %d", got)
 	}
 }
 

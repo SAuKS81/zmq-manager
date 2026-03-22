@@ -68,17 +68,6 @@ type outboundEnvelope struct {
 	ingestNanos []int64
 }
 
-type perEncodingOrderBookCache struct {
-	jsonByOB    map[*shared_types.OrderBookUpdate][]byte
-	msgpackByOB map[*shared_types.OrderBookUpdate][]byte
-}
-
-type obBatchLatestKey struct {
-	exchange   string
-	marketType string
-	symbol     string
-}
-
 type ClientManager struct {
 	socket         zmq4.Socket
 	clients        map[string]*Client
@@ -256,51 +245,38 @@ func (cm *ClientManager) distributeOrderBookBatch(clientIDs [][]byte, updates []
 	if len(updates) == 0 {
 		return
 	}
+	ingestNanos := make([]int64, 0, len(updates))
+	metricType := metrics.TypeOBUpdate
+	for _, ob := range updates {
+		if ob == nil {
+			continue
+		}
+		if ob.IngestUnixNano > 0 {
+			ingestNanos = append(ingestNanos, ob.IngestUnixNano)
+		}
+		if ob.UpdateType == metrics.TypeOBSnapshot {
+			metricType = metrics.TypeOBSnapshot
+		}
+	}
+
+	var jsonCache []byte
+	var msgpackCache []byte
 	for _, clientID := range clientIDs {
 		clientIDStr := string(clientID)
 		encoding, exists := cm.clientEncoding(clientIDStr)
 		if !exists || cm.isControlClient(clientIDStr) {
 			continue
 		}
-		encodedCache := &perEncodingOrderBookCache{
-			jsonByOB:    make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
-			msgpackByOB: make(map[*shared_types.OrderBookUpdate][]byte, len(updates)),
+		msg, ok := cm.encodePayloadForClient(clientID, encoding, HeaderOBBin, updates, &jsonCache, &msgpackCache, metricType)
+		if !ok {
+			continue
 		}
-		for _, ob := range updates {
-			cm.enqueueOrderBookEnvelope(
-				clientID,
-				clientIDStr,
-				encoding,
-				ob,
-				orderBookEnvelopeType(ob),
-				encodedCache,
-			)
-		}
+		cm.enqueueSocketSend(outboundEnvelope{
+			msg:         msg,
+			metricType:  metricType,
+			ingestNanos: ingestNanos,
+		})
 	}
-}
-
-func (cm *ClientManager) enqueueOrderBookEnvelope(
-	clientID []byte,
-	_ string,
-	encoding string,
-	ob *shared_types.OrderBookUpdate,
-	metricType string,
-	encodedCache *perEncodingOrderBookCache,
-) {
-	if ob == nil {
-		return
-	}
-	msg, ok := cm.encodeSingleOrderBookForClient(clientID, encoding, ob, metricType, encodedCache)
-	if !ok {
-		return
-	}
-
-	envelope := outboundEnvelope{
-		msg:        msg,
-		metricType: metricType,
-		ingestNano: ob.IngestUnixNano,
-	}
-	cm.enqueueSocketSend(envelope)
 }
 
 func (cm *ClientManager) clientEncoding(clientID string) (string, bool) {
@@ -364,74 +340,11 @@ func (cm *ClientManager) encodePayloadForClient(
 	return zmq4.NewMsgFrom(clientID, *jsonCache), true
 }
 
-func (cm *ClientManager) encodeSingleOrderBookForClient(
-	clientID []byte,
-	encoding string,
-	ob *shared_types.OrderBookUpdate,
-	metricType string,
-	cache *perEncodingOrderBookCache,
-) (zmq4.Msg, bool) {
-	var payload []byte
-	var ok bool
-
-	if encoding == "msgpack" || encoding == "binary" {
-		payload, ok = cache.msgpackByOB[ob]
-		if !ok {
-			binPayload, err := marshalSingleOBAsMsgpackArray(ob)
-			if err != nil {
-				metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
-				log.Printf("[MSGPACK ERROR] %v", err)
-				return zmq4.Msg{}, false
-			}
-			cache.msgpackByOB[ob] = binPayload
-			payload = binPayload
-		}
-		return zmq4.NewMsgFrom(clientID, headerOBBinFrame, payload), true
-	}
-
-	payload, ok = cache.jsonByOB[ob]
-	if !ok {
-		single := [1]*shared_types.OrderBookUpdate{ob}
-		raw, err := json.Marshal(single[:])
-		if err != nil {
-			metrics.RecordDropped(metrics.ReasonInternalErr, metricType)
-			return zmq4.Msg{}, false
-		}
-		cache.jsonByOB[ob] = raw
-		payload = raw
-	}
-	return zmq4.NewMsgFrom(clientID, payload), true
-}
-
-func orderBookEnvelopeType(ob *shared_types.OrderBookUpdate) string {
-	if ob != nil && ob.UpdateType == metrics.TypeOBSnapshot {
-		return metrics.TypeOBSnapshot
-	}
-	return metrics.TypeOBUpdate
-}
-
 func marshalMsgpack(v any) ([]byte, error) {
 	ctx := msgpackCtxPool.Get().(*msgpackEncoderCtx)
 	ctx.buf.Reset()
 	ctx.enc.ResetWriter(ctx.buf)
 	if err := ctx.enc.Encode(v); err != nil {
-		msgpackCtxPool.Put(ctx)
-		return nil, err
-	}
-	out := append([]byte(nil), ctx.buf.Bytes()...)
-	msgpackCtxPool.Put(ctx)
-	return out, nil
-}
-
-func marshalSingleOBAsMsgpackArray(ob *shared_types.OrderBookUpdate) ([]byte, error) {
-	ctx := msgpackCtxPool.Get().(*msgpackEncoderCtx)
-	ctx.buf.Reset()
-	ctx.enc.ResetWriter(ctx.buf)
-	if err := ctx.enc.EncodeArrayLen(1); err != nil {
-		msgpackCtxPool.Put(ctx)
-		return nil, err
-	}
-	if err := ctx.enc.Encode(ob); err != nil {
 		msgpackCtxPool.Put(ctx)
 		return nil, err
 	}
