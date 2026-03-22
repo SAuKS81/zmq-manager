@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"bybit-watcher/internal/exchanges/mexc/mexcproto"
+	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
 )
 
@@ -66,6 +67,10 @@ func normalizePushIntervalMS(pushIntervalMS int, fallback string) string {
 }
 
 func NormalizeTrade(symbol string, trade *mexcproto.PublicAggreDealsV3ApiItem, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
+	return normalizeTradeWithUnifiedSymbol(TranslateSymbolFromExchange(symbol), trade, goTimestamp, ingestUnixNano)
+}
+
+func normalizeTradeWithUnifiedSymbol(unifiedSymbol string, trade *mexcproto.PublicAggreDealsV3ApiItem, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
 	if trade == nil {
 		return nil, fmt.Errorf("trade is nil")
 	}
@@ -84,16 +89,16 @@ func NormalizeTrade(symbol string, trade *mexcproto.PublicAggreDealsV3ApiItem, g
 		side = "buy"
 	}
 
-	return &shared_types.TradeUpdate{
-		Exchange:       "mexc",
-		Symbol:         TranslateSymbolFromExchange(symbol),
-		MarketType:     "spot",
-		Timestamp:      trade.GetTime(),
-		GoTimestamp:    goTimestamp,
-		IngestUnixNano: ingestUnixNano,
-		Price:          price,
-		Amount:         amount,
-		Side:           side,
-		TradeID:        "",
-	}, nil
+	update := pools.GetTradeUpdate()
+	update.Exchange = "mexc"
+	update.Symbol = unifiedSymbol
+	update.MarketType = "spot"
+	update.Timestamp = trade.GetTime()
+	update.GoTimestamp = goTimestamp
+	update.IngestUnixNano = ingestUnixNano
+	update.Price = price
+	update.Amount = amount
+	update.Side = side
+	update.TradeID = ""
+	return update, nil
 }

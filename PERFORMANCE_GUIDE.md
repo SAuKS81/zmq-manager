@@ -58,7 +58,25 @@ Begruendung:
   - permanenter Flush-/Maintenance-Ticker
 - MEXC ist im Block-Profil inzwischen ein dominanter Eventloop-Pfad
 
-### 3. Bybit Session-/Worker-Pfade
+### 3. MEXC Daten-/Decode-Pfad
+
+Nach den Ticker-Anpassungen:
+
+- `internal/exchanges/mexc/shard_worker.go`
+- `internal/exchanges/mexc/translator.go`
+
+Ziel:
+
+- Allokationen pro Trade reduzieren
+- wiederholte Symbol-Normalisierung pro Trade vermeiden
+- Datenpfad direkt am Nachrichten-Handling verschlanken
+
+Begruendung:
+
+- letzter Messlauf zeigt keinen klaren Gewinn nur durch den Maintenance-Umbau
+- der naechste sinnvolle Hebel liegt naeher an Decode / Dispatch / Einzel-Event-Verarbeitung
+
+### 4. Bybit Session-/Worker-Pfade
 
 Danach:
 
@@ -74,7 +92,7 @@ Zu pruefen bzw. umzubauen:
 - mehrere Ticker auf gemeinsame Maintenance-Takte reduzieren
 - Nebenkanäle im Session-Pfad abbauen, wenn Daten und Command-Responses denselben Eingang nutzen koennen
 
-### 4. Broker-Hot-Path
+### 5. Broker-Hot-Path
 
 Danach:
 
@@ -86,7 +104,7 @@ Ziele:
 - globale Locks auf dem Nachrichten-Hot-Path reduzieren
 - Lock-Sharding, Sampling oder Owner-Goroutine-Modell pruefen
 
-### 5. Weitere Eventloop-/Ticker-Themen
+### 6. Weitere Eventloop-/Ticker-Themen
 
 Spaeter:
 
@@ -109,6 +127,6 @@ Das ist wichtig, aber nicht der erste Hebel.
 Als naechstes umzusetzen:
 
 - MEXC-Eventloops von permanentem Batch-Ticker auf bedarfsgetriggerte Flush-Timer umstellen
-- danach erneut messen, ob `mexc.(*ShardWorker).eventLoop` spuerbar sinkt
+- danach direkt den MEXC-Datenpfad weiter entschlacken
 - danach lokaler Build + gezielte Tests
 - danach erneut `pprof` auf Vultr

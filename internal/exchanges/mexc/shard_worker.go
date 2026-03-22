@@ -259,11 +259,12 @@ func (sw *ShardWorker) handleBinaryTradeMessage(payload []byte) error {
 	if symbol == "" {
 		return fmt.Errorf("missing symbol in protobuf payload")
 	}
+	unifiedSymbol := TranslateSymbolFromExchange(symbol)
 
 	ingestNow := time.Now()
 	goTimestamp := ingestNow.UnixMilli()
 	for _, trade := range deals.GetDeals() {
-		normalizedTrade, err := NormalizeTrade(symbol, trade, goTimestamp, ingestNow.UnixNano())
+		normalizedTrade, err := normalizeTradeWithUnifiedSymbol(unifiedSymbol, trade, goTimestamp, ingestNow.UnixNano())
 		if err != nil {
 			return err
 		}
