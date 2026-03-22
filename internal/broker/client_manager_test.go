@@ -29,7 +29,6 @@ func TestHandleMessageSubscribeBulk(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"binance_native","symbols":["BTC/USDT:USDT","ETH/USDT:USDT"],"market_type":"swap","depth":1}`)
@@ -64,7 +63,6 @@ func TestHandleMessageSubscribeBulkPropagatesCacheN(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"kucoin","symbols":["BTC/USDT","ETH/USDT"],"market_type":"spot","data_type":"trades","cache_n":1}`)
@@ -87,7 +85,6 @@ func TestHandleMessageInvalidJSONNoPanic(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"action":`))
@@ -103,7 +100,6 @@ func TestHandleMessageUnknownActionNoForward(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"action":"do_magic","exchange":"bybit_native","symbol":"BTC/USDT","market_type":"spot"}`))
@@ -118,7 +114,6 @@ func TestHandleMessageSubscribeAllRejected(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"action":"subscribe_all","exchange":"binance_native","market_type":"spot"}`))
@@ -137,7 +132,6 @@ func TestHandleMessageEncodingUpdate(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"encoding":"binary"}`))
@@ -159,7 +153,6 @@ func TestHandleMessageControlRolePersistsAndCleansUpSubscriptions(t *testing.T) 
 		},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	cm.handleMessage([]byte("client-1"), []byte(`{"client_role":"control","action":"get_runtime_snapshot","request_id":"snap-1"}`))
@@ -187,7 +180,6 @@ func TestHandleMessageControlClientRejectsSubscribeBulk(t *testing.T) {
 		},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"bybit_native","symbols":["BTC/USDT"],"market_type":"spot","data_type":"orderbooks"}`)
@@ -209,7 +201,6 @@ func TestHandleMessageControlClientAllowsStickySubscribeBulk(t *testing.T) {
 		},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"client_role":"control","action":"subscribe_bulk","sticky":true,"request_id":"deploy-123","exchange":"bybit_native","symbols":["BTC/USDT"],"market_type":"spot","data_type":"orderbooks"}`)
@@ -233,7 +224,6 @@ func TestHandleMessageConcurrentClientStateAccess(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	pongPayload := []byte(`{"message":"pong"}`)
@@ -277,7 +267,6 @@ func TestHandleMessageRejectsNonUnifiedSpotSymbol(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-123","exchange":"mexc_native","symbols":["BTCUSDT"],"market_type":"spot","data_type":"trades"}`)
@@ -297,7 +286,6 @@ func TestHandleMessageRejectsNonUnifiedSwapSymbol(t *testing.T) {
 		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 16),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	payload := []byte(`{"action":"subscribe","request_id":"deploy-123","exchange":"bybit_native","symbol":"BTCUSDT","market_type":"swap","data_type":"trades"}`)
@@ -314,16 +302,15 @@ func TestHandleMessageRejectsNonUnifiedSwapSymbol(t *testing.T) {
 func TestEnqueueSocketSendDoesNotBlockWhenChannelFull(t *testing.T) {
 	cm := &ClientManager{
 		sendChP1: make(chan outboundEnvelope, 1),
-		p2Latest: make(map[p2LatestKey]outboundEnvelope),
 		clients: map[string]*Client{
 			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"},
 		},
 	}
-	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
+	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade"}
 
 	done := make(chan struct{})
 	go func() {
-		cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-if-full")), metricType: "trade", priority: priorityP1})
+		cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-if-full")), metricType: "trade"})
 		close(done)
 	}()
 
@@ -340,7 +327,6 @@ func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
 			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed},
 		},
 		sendChP1: make(chan outboundEnvelope, 4),
-		p2Latest: make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	updates := []*shared_types.OrderBookUpdate{
@@ -350,11 +336,8 @@ func TestDistributeOrderBookBatchUsesUnifiedSendQueue(t *testing.T) {
 
 	cm.distributeOrderBookBatch([][]byte{[]byte("client-1")}, updates)
 
-	if got := len(cm.sendChP1); got != 0 {
-		t.Fatalf("expected no direct queue messages for latest-only OB updates, got %d", got)
-	}
-	if gotP2 := len(cm.p2Latest); gotP2 != 2 {
-		t.Fatalf("expected two latest-only OB entries, got %d", gotP2)
+	if got := len(cm.sendChP1); got != 2 {
+		t.Fatalf("expected two direct queue messages for orderbook updates, got %d", got)
 	}
 }
 
@@ -365,7 +348,6 @@ func TestDistributeTradeBatchSkipsControlClients(t *testing.T) {
 			"control-1": {ID: []byte("control-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleControl},
 		},
 		sendChP1: make(chan outboundEnvelope, 4),
-		p2Latest: make(map[p2LatestKey]outboundEnvelope),
 	}
 
 	trades := []*shared_types.TradeUpdate{
@@ -384,12 +366,11 @@ func TestEnqueueSocketSendWarnsThenDisconnectsSlowClient(t *testing.T) {
 	cm := &ClientManager{
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 1),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 		clients: map[string]*Client{
 			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleControl},
 		},
 	}
-	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
+	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade"}
 
 	var logBuf bytes.Buffer
 	prevWriter := log.Writer()
@@ -401,8 +382,8 @@ func TestEnqueueSocketSendWarnsThenDisconnectsSlowClient(t *testing.T) {
 		log.SetFlags(prevFlags)
 	}()
 
-	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-1")), metricType: "trade", priority: priorityP1})
-	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-2")), metricType: "trade", priority: priorityP1})
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-1")), metricType: "trade"})
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-2")), metricType: "trade"})
 
 	if _, exists := cm.clients["client-1"]; exists {
 		t.Fatalf("expected slow client to be removed after repeated queue overflow")
@@ -427,15 +408,14 @@ func TestEnqueueSocketSendKeepsSlowFeedClientConnected(t *testing.T) {
 	cm := &ClientManager{
 		requestCh: reqCh,
 		sendChP1:  make(chan outboundEnvelope, 1),
-		p2Latest:  make(map[p2LatestKey]outboundEnvelope),
 		clients: map[string]*Client{
 			"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed},
 		},
 	}
-	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade", priority: priorityP1}
+	cm.sendChP1 <- outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("filled")), metricType: "trade"}
 
-	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-1")), metricType: "trade", priority: priorityP1})
-	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-2")), metricType: "trade", priority: priorityP1})
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-1")), metricType: "trade"})
+	cm.enqueueSocketSend(outboundEnvelope{msg: zmq4.NewMsgFrom([]byte("client-1"), []byte("drop-2")), metricType: "trade"})
 
 	if _, exists := cm.clients["client-1"]; !exists {
 		t.Fatalf("expected feed client to stay connected under transient backpressure")
