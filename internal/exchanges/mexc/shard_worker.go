@@ -122,9 +122,7 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 	msgCh := make(chan socketMessage, 256)
 	errCh := make(chan error, 1)
 	pingTicker := time.NewTicker(pingEverySec * time.Second)
-	batchTicker := time.NewTicker(flushEvery * time.Millisecond)
 	defer pingTicker.Stop()
-	defer batchTicker.Stop()
 
 	go func() {
 		for {
@@ -140,8 +138,23 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 
 	pendingSubs := make([]symbolSubscription, 0, commandBatchSize)
 	pendingUnsubs := make([]symbolSubscription, 0, commandBatchSize)
+	var flushTimer *time.Timer
+	var flushCh <-chan time.Time
 	for _, symbol := range sw.desiredSymbolsSnapshot() {
 		pendingSubs = queueUniqueSymbolSubscription(pendingSubs, symbol)
+	}
+
+	scheduleFlush := func() {
+		if flushTimer != nil {
+			return
+		}
+		flushTimer = time.NewTimer(flushEvery * time.Millisecond)
+		flushCh = flushTimer.C
+	}
+
+	resetFlushTimer := func() {
+		flushTimer = nil
+		flushCh = nil
 	}
 
 	flushCommands := func() error {
@@ -168,6 +181,10 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 			pendingUnsubs = pendingUnsubs[:0]
 		}
 		return nil
+	}
+
+	if len(pendingSubs) > 0 || len(pendingUnsubs) > 0 {
+		scheduleFlush()
 	}
 
 	for {
@@ -204,9 +221,16 @@ func (sw *ShardWorker) eventLoop(conn *websocket.Conn) error {
 				}
 			}
 			sw.mu.Unlock()
-		case <-batchTicker.C:
+			if len(pendingSubs) > 0 || len(pendingUnsubs) > 0 {
+				scheduleFlush()
+			}
+		case <-flushCh:
+			resetFlushTimer()
 			if err := flushCommands(); err != nil {
 				return err
+			}
+			if len(pendingSubs) > 0 || len(pendingUnsubs) > 0 {
+				scheduleFlush()
 			}
 		case <-pingTicker.C:
 			if err := conn.WriteJSON(map[string]string{"method": "ping"}); err != nil {

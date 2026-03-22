@@ -37,7 +37,28 @@ Begruendung:
 - `log.Printf` haengt direkt am Bybit-`addSubscription()`-Pfad
 - geringer Eingriffsbereich bei guter Messbarkeit
 
-### 2. Bybit Session-/Worker-Pfade
+### 2. Session-/Worker-Pfade mit permanenten Maintenance-Tickern
+
+Aktueller gemeinsamer Hebel:
+
+- `internal/exchanges/mexc/shard_worker.go`
+- `internal/exchanges/mexc/ob_shard_worker.go`
+- danach weiter Bybit / Bitget vergleichen
+
+Ziel:
+
+- periodische Wakeups nur dann ausloesen, wenn es wirklich Pending-Arbeit gibt
+- Batching beibehalten, aber Leerlauf-Ticker vermeiden
+
+Begruendung:
+
+- der strukturelle Vergleich zeigt ein wiederkehrendes Muster:
+  - Reader-Goroutine
+  - Session-Loop mit `select`
+  - permanenter Flush-/Maintenance-Ticker
+- MEXC ist im Block-Profil inzwischen ein dominanter Eventloop-Pfad
+
+### 3. Bybit Session-/Worker-Pfade
 
 Danach:
 
@@ -53,7 +74,7 @@ Zu pruefen bzw. umzubauen:
 - mehrere Ticker auf gemeinsame Maintenance-Takte reduzieren
 - Nebenkanäle im Session-Pfad abbauen, wenn Daten und Command-Responses denselben Eingang nutzen koennen
 
-### 3. Broker-Hot-Path
+### 4. Broker-Hot-Path
 
 Danach:
 
@@ -65,7 +86,7 @@ Ziele:
 - globale Locks auf dem Nachrichten-Hot-Path reduzieren
 - Lock-Sharding, Sampling oder Owner-Goroutine-Modell pruefen
 
-### 4. Weitere Eventloop-/Ticker-Themen
+### 5. Weitere Eventloop-/Ticker-Themen
 
 Spaeter:
 
@@ -87,7 +108,7 @@ Das ist wichtig, aber nicht der erste Hebel.
 
 Als naechstes umzusetzen:
 
-- Bybit-`runSession()`-Pfade fuer Trades und Orderbooks vereinfachen
-- zuerst Wakeups und Channel-Hops reduzieren
+- MEXC-Eventloops von permanentem Batch-Ticker auf bedarfsgetriggerte Flush-Timer umstellen
+- danach erneut messen, ob `mexc.(*ShardWorker).eventLoop` spuerbar sinkt
 - danach lokaler Build + gezielte Tests
 - danach erneut `pprof` auf Vultr
