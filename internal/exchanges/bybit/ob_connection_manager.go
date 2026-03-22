@@ -1,7 +1,6 @@
 package bybit
 
 import (
-	"log"
 	"sync"
 
 	"bybit-watcher/internal/shared_types"
@@ -40,7 +39,6 @@ func NewOrderBookConnectionManager(wsURL, marketType string, dataCh chan<- *shar
 }
 
 func (cm *OrderBookConnectionManager) Run() {
-	log.Printf("[BYBIT-OB-CONN-MANAGER] Starte Manager fuer %s", cm.marketType)
 	for {
 		select {
 		case cmd := <-cm.commandCh:
@@ -50,7 +48,6 @@ func (cm *OrderBookConnectionManager) Run() {
 				cm.removeSubscription(cmd.Symbol, cmd.Depth)
 			}
 		case <-cm.stopCh:
-			log.Printf("[BYBIT-OB-CONN-MANAGER] Stoppe Manager fuer %s", cm.marketType)
 			cm.stopAllShards()
 			return
 		}
@@ -75,7 +72,6 @@ func (cm *OrderBookConnectionManager) addSubscription(symbol string, depth int) 
 		}
 	}
 
-	log.Printf("[BYBIT-OB-CONN-MANAGER] Erstelle neuen Shard fuer %s.", symbol)
 	stopCh := make(chan struct{})
 	newShard := NewOrderBookShardWorker(cm.wsURL, cm.marketType, stopCh, cm.dataCh, cm.statusCh, &cm.wg)
 	cm.shards = append(cm.shards, newShard)
@@ -111,7 +107,6 @@ func (cm *OrderBookConnectionManager) retireShard(shard *OrderBookShardWorker) {
 	if cm.shardLoad[shard] < 0 {
 		cm.shardLoad[shard] = 0
 	}
-	log.Printf("[BYBIT-OB-CONN-MANAGER] Shard ist jetzt leer (Load: %d). Entferne ihn aus dem aktiven Satz.", cm.shardLoad[shard])
 
 	if stopCh, ok := cm.shardStops[shard]; ok {
 		close(stopCh)

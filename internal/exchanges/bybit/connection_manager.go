@@ -1,7 +1,6 @@
 package bybit
 
 import (
-	"log"
 	"sync"
 
 	"bybit-watcher/internal/shared_types"
@@ -49,7 +48,6 @@ func NewConnectionManager(wsURL, marketType string, dataCh chan<- *shared_types.
 
 // Run startet die Hauptschleife des ConnectionManagers.
 func (cm *ConnectionManager) Run() {
-	log.Printf("[CONN-MANAGER] Starte Manager fuer %s", cm.marketType)
 	for {
 		select {
 		case cmd := <-cm.commandCh:
@@ -60,7 +58,6 @@ func (cm *ConnectionManager) Run() {
 				cm.removeSubscription(cmd.Symbol)
 			}
 		case <-cm.stopCh:
-			log.Printf("[CONN-MANAGER] Stoppe Manager fuer %s", cm.marketType)
 			cm.stopAllShards()
 			return
 		}
@@ -74,18 +71,13 @@ func (cm *ConnectionManager) Stop() {
 
 func (cm *ConnectionManager) addSubscription(symbol string) {
 	if cm.activeSubscriptions[symbol] {
-		log.Printf("[CONN-MANAGER-DEBUG] Symbol %s bereits abonniert, ignoriere.", symbol)
 		return
 	}
 
-	log.Printf("[CONN-MANAGER] Fuege Abonnement hinzu: %s", symbol)
 	cm.activeSubscriptions[symbol] = true
 
-	for i, shard := range cm.shards {
-		currentLoad := cm.shardLoad[shard]
-		log.Printf("[CONN-MANAGER-DEBUG] Pruefe Shard %d, Auslastung: %d/%d", i, currentLoad, symbolsPerShard)
-		if currentLoad < symbolsPerShard {
-			log.Printf("[CONN-MANAGER] Sende 'subscribe' fuer %s an existierenden Shard %d.", symbol, i)
+	for _, shard := range cm.shards {
+		if cm.shardLoad[shard] < symbolsPerShard {
 			shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: []string{symbol}}
 			cm.symbolToShard[symbol] = shard
 			cm.shardLoad[shard]++
@@ -93,7 +85,6 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 		}
 	}
 
-	log.Printf("[CONN-MANAGER] Erstelle neuen Shard fuer %s.", symbol)
 	stopCh := make(chan struct{})
 	newShard := NewShardWorker(cm.wsURL, cm.marketType, []string{symbol}, stopCh, cm.dataCh, cm.statusCh, &cm.wg)
 	cm.shards = append(cm.shards, newShard)
@@ -109,7 +100,6 @@ func (cm *ConnectionManager) removeSubscription(symbol string) {
 		return
 	}
 
-	log.Printf("[CONN-MANAGER] Entferne Abonnement: %s", symbol)
 	delete(cm.activeSubscriptions, symbol)
 
 	shard, ok := cm.symbolToShard[symbol]
@@ -129,7 +119,6 @@ func (cm *ConnectionManager) retireShard(shard *ShardWorker) {
 	if cm.shardLoad[shard] < 0 {
 		cm.shardLoad[shard] = 0
 	}
-	log.Printf("[CONN-MANAGER] Shard ist jetzt leer (Load: %d). Entferne ihn aus dem aktiven Satz.", cm.shardLoad[shard])
 
 	if stopCh, ok := cm.shardStops[shard]; ok {
 		close(stopCh)

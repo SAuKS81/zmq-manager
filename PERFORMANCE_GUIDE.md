@@ -17,37 +17,39 @@ Die bisherigen Messungen zeigen:
 
 ## Aktuelle Priorisierung
 
-### 1. Bitget Send-Limiter
+### 1. Bybit ConnectionManager
 
-Erster Fokus:
+Erster Fokus nach dem Bitget-Umbau:
 
-- `internal/exchanges/bitget/send_limiter.go`
-- `bitgetSendLimiter.Wait()`
+- `internal/exchanges/bybit/connection_manager.go`
+- `internal/exchanges/bybit/ob_connection_manager.go`
+- besonders `addSubscription()`
 
 Ziel:
 
-- kein Warten mehr unter `sync.Mutex`
-- Lock nur fuer kurzen State-Zugriff verwenden
-- Wartephase ausserhalb des Locks
+- Hot-Path in `addSubscription()` so klein wie moeglich machen
+- Logging aus dem Subscription-Pfad entfernen
+- keine unnoetigen Channel-Sends / Nebenwirkungen im unmittelbaren Entscheidungsweg
 
 Begruendung:
 
-- Mutex-Profil zeigt dort den aktuell klarsten Hotspot
-- geringes Risiko
-- klar abgrenzbarer erster Fix
+- aktuelles Mutex-Profil zeigt Bybit nun als dominanten kumulativen Treiber
+- `log.Printf` haengt direkt am Bybit-`addSubscription()`-Pfad
+- geringer Eingriffsbereich bei guter Messbarkeit
 
-### 2. Bitget ConnectionManager
+### 2. Bybit Session-/Worker-Pfade
 
 Danach:
 
-- `internal/exchanges/bitget/connection_manager.go`
-- besonders `addSubscription()`
+- `internal/exchanges/bybit/shard_worker.go`
+- `internal/exchanges/bybit/ob_shard_worker.go`
+- besonders `runSession()` / Eventloop-Pfade
 
 Zu pruefen bzw. umzubauen:
 
-- kein `Sleep` unter Lock
-- Timer-/AfterFunc-Handling entkoppeln
-- moeglichst kurze kritische Abschnitte
+- grosse `select`-Schleifen
+- unnoetige Wakeups
+- Einzelverarbeitung statt Batching
 
 ### 3. Broker-Hot-Path
 
@@ -79,10 +81,11 @@ Das ist wichtig, aber nicht der erste Hebel.
   - nicht ausweiten
   - naechsten Hotspot angehen
 
-## Nächster konkreter Schritt
+## Naechster konkreter Schritt
 
 Als naechstes umzusetzen:
 
-- Bitget Send-Limiter ohne Warten unter Lock
+- Bybit-`addSubscription()`-Pfade fuer Trades und Orderbooks entschlacken
+- zuerst Logging und offensichtliche Hot-Path-Nebenwirkungen reduzieren
 - danach lokaler Build + gezielte Tests
 - danach erneut `pprof` auf Vultr
