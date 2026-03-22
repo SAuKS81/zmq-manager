@@ -59,7 +59,6 @@ func (e *KucoinExchange) HandleRequest(req *shared_types.ClientRequest) {
 
 	if req.DataType == "orderbooks" {
 		if e.spotOBMgr == nil {
-			log.Println("[KUCOIN-EXCHANGE] Erster Spot-OrderBook-Abonnent. Starte Spot OrderBook Connection Manager.")
 			e.spotOBMgr = NewOrderBookConnectionManager("spot", e.obDataCh, e.statusCh)
 			go e.spotOBMgr.Run()
 		}
@@ -72,7 +71,6 @@ func (e *KucoinExchange) HandleRequest(req *shared_types.ClientRequest) {
 	}
 
 	if e.spotMgr == nil {
-		log.Println("[KUCOIN-EXCHANGE] Erster Spot-Trade-Abonnent. Starte Spot Connection Manager.")
 		e.spotMgr = NewConnectionManager("spot", e.dataCh, e.statusCh)
 		go e.spotMgr.Run()
 	}

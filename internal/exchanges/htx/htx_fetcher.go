@@ -60,7 +60,6 @@ func (e *HtxExchange) HandleRequest(req *shared_types.ClientRequest) {
 		if req.DataType == "orderbooks" {
 			cmd.Depth = normalizeOrderBookDepth(req.OrderBookDepth)
 			if e.spotOBMgr == nil {
-				log.Println("[HTX-EXCHANGE] Erster Spot-OrderBook-Abonnent. Starte Spot OrderBook Connection Manager.")
 				e.spotOBMgr = NewOrderBookConnectionManager(wsSpotURL, "spot", e.obDataCh, e.statusCh)
 				go e.spotOBMgr.Run()
 			}
@@ -68,7 +67,6 @@ func (e *HtxExchange) HandleRequest(req *shared_types.ClientRequest) {
 			return
 		}
 		if e.spotMgr == nil {
-			log.Println("[HTX-EXCHANGE] Erster Spot-Trade-Abonnent. Starte Spot Connection Manager.")
 			e.spotMgr = NewConnectionManager(wsSpotURL, "spot", e.dataCh, e.statusCh)
 			go e.spotMgr.Run()
 		}
@@ -77,7 +75,6 @@ func (e *HtxExchange) HandleRequest(req *shared_types.ClientRequest) {
 		if req.DataType == "orderbooks" {
 			cmd.Depth = normalizeOrderBookDepth(req.OrderBookDepth)
 			if e.swapOBMgr == nil {
-				log.Println("[HTX-EXCHANGE] Erster Swap-OrderBook-Abonnent. Starte Swap OrderBook Connection Manager.")
 				e.swapOBMgr = NewOrderBookConnectionManager(wsSwapURL, "swap", e.obDataCh, e.statusCh)
 				go e.swapOBMgr.Run()
 			}
@@ -85,7 +82,6 @@ func (e *HtxExchange) HandleRequest(req *shared_types.ClientRequest) {
 			return
 		}
 		if e.swapMgr == nil {
-			log.Println("[HTX-EXCHANGE] Erster Swap-Trade-Abonnent. Starte Swap Connection Manager.")
 			e.swapMgr = NewConnectionManager(wsSwapURL, "swap", e.dataCh, e.statusCh)
 			go e.swapMgr.Run()
 		}

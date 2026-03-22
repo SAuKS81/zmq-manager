@@ -168,7 +168,6 @@ func (cm *ClientManager) readLoop() {
 		clientIDStr := string(clientID)
 		cm.clientsMu.Lock()
 		if _, ok := cm.clients[clientIDStr]; !ok {
-			log.Printf("[CLIENT-MANAGER] Neuer Client verbunden: %s", clientIDStr)
 			cm.clients[clientIDStr] = &Client{ID: append([]byte(nil), clientID...), LastPong: time.Now(), Encoding: "json", Role: clientRoleFeed}
 		}
 		cm.clientsMu.Unlock()
@@ -531,7 +530,6 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			roleChangedToControl = prevRole != role && role == clientRoleControl
 		}
 		cm.clientsMu.Unlock()
-		log.Printf("[CLIENT-MANAGER] Client %s setzt Rolle auf: %s", clientIDStr, role)
 		if roleChangedToControl {
 			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "disconnect"})
 		}
@@ -548,7 +546,6 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			client.Encoding = encoding
 		}
 		cm.clientsMu.Unlock()
-		log.Printf("[CLIENT-MANAGER] Client %s setzt Encoding auf: %s", clientIDStr, encoding)
 	}
 
 	if req.Action == "" {
@@ -583,14 +580,6 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 				return
 			}
 		}
-		log.Printf(
-			"[CLIENT-MANAGER] 'subscribe_bulk': client=%s exchange=%s market_type=%s data_type=%s symbols=%d",
-			clientIDStr,
-			req.Exchange,
-			req.MarketType,
-			req.DataType,
-			len(req.Symbols),
-		)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "deploy_batch_register", RequestID: req.RequestID, BatchSent: len(req.Symbols)})
 		for _, symbol := range req.Symbols {
 			if symbol == "" {
@@ -617,14 +606,6 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 				return
 			}
 		}
-		log.Printf(
-			"[CLIENT-MANAGER] 'unsubscribe_bulk': client=%s exchange=%s market_type=%s data_type=%s symbols=%d",
-			clientIDStr,
-			req.Exchange,
-			req.MarketType,
-			req.DataType,
-			len(req.Symbols),
-		)
 		cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "deploy_batch_register", RequestID: req.RequestID, BatchSent: len(req.Symbols)})
 		for _, symbol := range req.Symbols {
 			if symbol == "" {

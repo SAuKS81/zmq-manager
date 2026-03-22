@@ -94,6 +94,8 @@ func configureLogging() (io.Closer, error) {
 		return writer, err
 	}
 
-	log.SetOutput(io.MultiWriter(log.Writer(), writer))
+	// Wenn der Central Logger aktiv ist, schreiben wir exklusiv dorthin,
+	// um doppelte Writes auf stdout/stderr und Loghub zu vermeiden.
+	log.SetOutput(writer)
 	return writer, nil
 }

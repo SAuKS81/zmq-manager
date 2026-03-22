@@ -1,7 +1,6 @@
 package kucoin
 
 import (
-	"log"
 	"sync"
 
 	"bybit-watcher/internal/shared_types"
@@ -37,7 +36,6 @@ func NewConnectionManager(marketType string, dataCh chan<- *shared_types.TradeUp
 }
 
 func (cm *ConnectionManager) Run() {
-	log.Printf("[KUCOIN-CONN-MANAGER] Starte Manager fuer %s", cm.marketType)
 	for {
 		select {
 		case cmd := <-cm.commandCh:
@@ -48,7 +46,6 @@ func (cm *ConnectionManager) Run() {
 				cm.removeSubscription(cmd.Symbol)
 			}
 		case <-cm.stopCh:
-			log.Printf("[KUCOIN-CONN-MANAGER] Stoppe Manager fuer %s", cm.marketType)
 			cm.stopAllShards()
 			return
 		}
@@ -65,9 +62,8 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 	}
 	cm.activeSubscriptions[symbol] = true
 
-	for i, shard := range cm.shards {
+	for _, shard := range cm.shards {
 		if cm.shardLoad[shard] < symbolsPerShard {
-			log.Printf("[KUCOIN-CONN-MANAGER] Sende 'subscribe' fuer %s an existierenden Shard %d.", symbol, i)
 			shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: []string{symbol}}
 			cm.symbolToShard[symbol] = shard
 			cm.shardLoad[shard]++
@@ -75,7 +71,6 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 		}
 	}
 
-	log.Printf("[KUCOIN-CONN-MANAGER] Erstelle neuen Shard fuer %s.", symbol)
 	stopCh := make(chan struct{})
 	newShard := NewShardWorker(wsSpotURL, cm.marketType, []string{symbol}, stopCh, cm.dataCh, cm.statusCh, &cm.wg)
 	cm.shards = append(cm.shards, newShard)

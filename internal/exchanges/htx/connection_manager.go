@@ -1,7 +1,6 @@
 package htx
 
 import (
-	"log"
 	"sync"
 
 	"bybit-watcher/internal/shared_types"
@@ -39,7 +38,6 @@ func NewConnectionManager(wsURL, marketType string, dataCh chan<- *shared_types.
 }
 
 func (cm *ConnectionManager) Run() {
-	log.Printf("[HTX-CONN-MANAGER] Starte Manager fuer %s", cm.marketType)
 	for {
 		select {
 		case cmd := <-cm.commandCh:
@@ -50,7 +48,6 @@ func (cm *ConnectionManager) Run() {
 				cm.removeSubscription(cmd.Symbol)
 			}
 		case <-cm.stopCh:
-			log.Printf("[HTX-CONN-MANAGER] Stoppe Manager fuer %s", cm.marketType)
 			cm.stopAllShards()
 			return
 		}
@@ -66,14 +63,12 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 	cm.activeSubscriptions[symbol] = true
 	for _, shard := range cm.shards {
 		if cm.shardLoad[shard] < symbolsPerShard {
-			log.Printf("[HTX-CONN-MANAGER] Sende 'subscribe' fuer %s an existierenden Shard.", symbol)
 			shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: []string{symbol}}
 			cm.symbolToShard[symbol] = shard
 			cm.shardLoad[shard]++
 			return
 		}
 	}
-	log.Printf("[HTX-CONN-MANAGER] Erstelle neuen Shard fuer %s.", symbol)
 	stopCh := make(chan struct{})
 	newShard := NewShardWorker(cm.wsURL, cm.marketType, []string{symbol}, stopCh, cm.dataCh, cm.statusCh, &cm.wg)
 	cm.shards = append(cm.shards, newShard)

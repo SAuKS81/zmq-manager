@@ -1,7 +1,6 @@
 package mexc
 
 import (
-	"log"
 	"sync"
 
 	"bybit-watcher/internal/shared_types"
@@ -39,7 +38,6 @@ func NewOrderBookConnectionManager(marketType string, dataCh chan<- *shared_type
 }
 
 func (cm *OrderBookConnectionManager) Run() {
-	log.Printf("[MEXC-OB-CONN-MANAGER] Starte Manager fuer %s", cm.marketType)
 	for {
 		select {
 		case cmd := <-cm.commandCh:
@@ -50,7 +48,6 @@ func (cm *OrderBookConnectionManager) Run() {
 				cm.removeSubscription(cmd.Symbol)
 			}
 		case <-cm.stopCh:
-			log.Printf("[MEXC-OB-CONN-MANAGER] Stoppe Manager fuer %s", cm.marketType)
 			cm.stopAllShards()
 			return
 		}
@@ -79,7 +76,6 @@ func (cm *OrderBookConnectionManager) addSubscription(symbol string, depth int, 
 
 	for _, shard := range cm.shards {
 		if cm.shardLoad[shard] < symbolsPerShard {
-			log.Printf("[MEXC-OB-CONN-MANAGER] Sende 'subscribe' fuer %s an existierenden Shard.", symbol)
 			shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: []string{symbol}, Depth: depth, Freq: freq}
 			cm.symbolToShard[symbol] = shard
 			cm.symbolDepth[symbol] = depth
@@ -89,7 +85,6 @@ func (cm *OrderBookConnectionManager) addSubscription(symbol string, depth int, 
 		}
 	}
 
-	log.Printf("[MEXC-OB-CONN-MANAGER] Erstelle neuen Shard fuer %s.", symbol)
 	stopCh := make(chan struct{})
 	newShard := NewOrderBookShardWorker(wsURL, cm.marketType, stopCh, cm.dataCh, cm.statusCh, &cm.wg)
 	cm.shards = append(cm.shards, newShard)

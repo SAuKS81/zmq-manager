@@ -432,7 +432,6 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		}
 		sm.wildcardSubscribers[wildcardID][string(req.ClientID)] = true
 		sm.wildcardRoutes[getClientRouteKey(string(req.ClientID), wildcardID)] = req.Exchange
-		log.Printf("[SUB-MANAGER] Client %s hat 'subscribe_all' für Trades auf %s aktiviert.", string(req.ClientID), wildcardID)
 	}
 
 	subID := getSubscriptionID(exchangeNameForSubID, req.Symbol, req.MarketType)
