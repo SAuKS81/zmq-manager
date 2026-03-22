@@ -77,14 +77,12 @@ func (cm *ConnectionManager) Stop() {
 
 func (cm *ConnectionManager) addSubscription(symbol string) {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
 	if cm.activeSubscriptions[symbol] {
+		cm.mu.Unlock()
 		return
 	}
 
 	log.Printf("[BITGET-CONN-MANAGER] Fuege Abonnement hinzu: %s", symbol)
-	cm.activeSubscriptions[symbol] = true
 
 	// Find an existing shard with capacity.
 	var targetShard *ShardWorker
@@ -94,20 +92,54 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 			break
 		}
 	}
+	cm.mu.Unlock()
 
-	// No shard with capacity, create a new one.
+	// No shard with capacity, create a new one. The cooldown remains, but no
+	// longer blocks unrelated map access under cm.mu.
 	if targetShard == nil {
 		log.Printf("[BITGET-CONN-MANAGER] Erstelle neuen Shard fuer %s. Pausiere fuer 1100ms...", symbol)
 		time.Sleep(1100 * time.Millisecond)
 
 		stopCh := make(chan struct{})
 		targetShard = NewShardWorker(wsURL, cm.marketType, []string{}, stopCh, cm.dataCh, cm.statusCh, cm.limiter, &cm.wg)
-		cm.shards = append(cm.shards, targetShard)
-		cm.shardLoad[targetShard] = 0
-		cm.wg.Add(1)
-		go targetShard.Run()
 	}
 
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.activeSubscriptions[symbol] {
+		return
+	}
+
+	// Re-use a shard created while we were outside the lock if possible.
+	if existingShard, ok := cm.symbolToShard[symbol]; ok {
+		targetShard = existingShard
+	} else {
+		for _, shard := range cm.shards {
+			if cm.shardLoad[shard] < symbolsPerShard {
+				targetShard = shard
+				break
+			}
+		}
+	}
+
+	if targetShard != nil && cm.shardLoad[targetShard] == 0 {
+		knownShard := false
+		for _, shard := range cm.shards {
+			if shard == targetShard {
+				knownShard = true
+				break
+			}
+		}
+		if !knownShard {
+			cm.shards = append(cm.shards, targetShard)
+			cm.shardLoad[targetShard] = 0
+			cm.wg.Add(1)
+			go targetShard.Run()
+		}
+	}
+
+	cm.activeSubscriptions[symbol] = true
 	cm.pendingSubscriptions[targetShard] = append(cm.pendingSubscriptions[targetShard], symbol)
 	cm.symbolToShard[symbol] = targetShard
 	cm.shardLoad[targetShard]++
@@ -123,18 +155,18 @@ func (cm *ConnectionManager) addSubscription(symbol string) {
 
 func (cm *ConnectionManager) flushSubscriptions(shard *ShardWorker) {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
 	symbolsToSub := cm.pendingSubscriptions[shard]
 	if len(symbolsToSub) == 0 {
+		cm.mu.Unlock()
 		return
 	}
 
-	log.Printf("[BITGET-CONN-MANAGER] Timer abgelaufen. Sende Batch mit %d Symbolen an Shard.", len(symbolsToSub))
-	shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: symbolsToSub}
-
 	delete(cm.pendingSubscriptions, shard)
 	delete(cm.subscriptionTimers, shard)
+	cm.mu.Unlock()
+
+	log.Printf("[BITGET-CONN-MANAGER] Timer abgelaufen. Sende Batch mit %d Symbolen an Shard.", len(symbolsToSub))
+	shard.commandCh <- ShardCommand{Action: "subscribe", Symbols: symbolsToSub}
 }
 
 func (cm *ConnectionManager) removeSubscription(symbol string) {
@@ -223,20 +255,23 @@ func (cm *ConnectionManager) enqueueUnsubscribeLocked(shard *ShardWorker, symbol
 
 func (cm *ConnectionManager) flushUnsubs(shard *ShardWorker) {
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
 	symbolsToUnsub := cm.pendingUnsubs[shard]
 	if len(symbolsToUnsub) == 0 {
 		delete(cm.unsubTimers, shard)
+		cm.mu.Unlock()
 		return
 	}
+
+	delete(cm.pendingUnsubs, shard)
+	delete(cm.unsubTimers, shard)
+	cm.mu.Unlock()
 
 	log.Printf("[BITGET-CONN-MANAGER] Sende Unsubscribe-Batch mit %d Symbolen an Shard.", len(symbolsToUnsub))
 	shard.commandCh <- ShardCommand{Action: "unsubscribe", Symbols: symbolsToUnsub}
 
-	delete(cm.pendingUnsubs, shard)
-	delete(cm.unsubTimers, shard)
+	cm.mu.Lock()
 	cm.maybeRetireShardLocked(shard)
+	cm.mu.Unlock()
 }
 
 func (cm *ConnectionManager) retireShardLocked(shard *ShardWorker) {
