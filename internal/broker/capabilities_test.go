@@ -140,6 +140,48 @@ func TestCapabilitiesCatalogIncludesKucoinNativeTrades(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesCatalogIncludesHtxNativeTrades(t *testing.T) {
+	item, ok := capabilityForExchange("htx_native")
+	if !ok {
+		t.Fatal("expected htx_native capability entry")
+	}
+	if item.Exchange != "htx" {
+		t.Fatalf("expected logical exchange htx, got %q", item.Exchange)
+	}
+	if item.ManagerExchange != "htx_native" {
+		t.Fatalf("expected manager exchange htx_native, got %q", item.ManagerExchange)
+	}
+	if item.Adapter != "native" {
+		t.Fatalf("expected native adapter, got %q", item.Adapter)
+	}
+	for _, marketType := range []string{"spot", "swap"} {
+		trades, ok := item.Channels[marketType]["trades"]
+		if !ok {
+			t.Fatalf("expected trades channel for %s, got %+v", marketType, item.Channels)
+		}
+		if !trades.Subscribe || !trades.Unsubscribe || !trades.BulkSubscribe || !trades.BulkUnsubscribe {
+			t.Fatalf("expected full trade support for %s, got %+v", marketType, trades)
+		}
+		orderbooks, ok := item.Channels[marketType]["orderbooks"]
+		if !ok {
+			t.Fatalf("expected orderbooks channel for %s, got %+v", marketType, item.Channels)
+		}
+		depthParam, ok := orderbooks.Parameters["depth"]
+		if !ok {
+			t.Fatalf("expected depth parameter for %s orderbooks, got %+v", marketType, orderbooks.Parameters)
+		}
+		want := []int{5, 20, 150, 400}
+		if len(depthParam.AllowedValues) != len(want) {
+			t.Fatalf("unexpected depth allowed values for %s: %+v", marketType, depthParam.AllowedValues)
+		}
+		for i, depth := range want {
+			if depthParam.AllowedValues[i] != depth {
+				t.Fatalf("expected depth %d at index %d for %s, got %+v", depth, i, marketType, depthParam.AllowedValues)
+			}
+		}
+	}
+}
+
 func TestCapabilitiesCatalogIncludesCoinexNativeChannels(t *testing.T) {
 	item, ok := capabilityForExchange("coinex_native")
 	if !ok {

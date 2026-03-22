@@ -13,6 +13,7 @@ import (
 	"bybit-watcher/internal/exchanges/bitget"
 	"bybit-watcher/internal/exchanges/bybit"
 	"bybit-watcher/internal/exchanges/coinex"
+	"bybit-watcher/internal/exchanges/htx"
 	"bybit-watcher/internal/exchanges/kucoin"
 	"bybit-watcher/internal/exchanges/mexc"
 	"bybit-watcher/internal/metrics"
@@ -79,6 +80,8 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 	sm.exchangeRegistry["mexc_native"] = mexc.NewMexcExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["kucoin_native"] = kucoin.NewKucoinExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["coinex_native"] = coinex.NewCoinexExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["htx_native"] = htx.NewHtxExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["huobi_native"] = sm.exchangeRegistry["htx_native"]
 	registerCCXT(sm)
 	return sm
 }
@@ -805,6 +808,11 @@ func canonicalSubscriptionSymbol(exchange, symbol, marketType string) string {
 			return kucoin.TranslateSymbolFromExchange(strings.ToUpper(kucoin.TranslateSymbolToExchange(symbol)))
 		}
 		return kucoin.TranslateSymbolFromExchange(symbol)
+	case "htx":
+		if strings.Contains(symbol, "/") {
+			return htx.TranslateSymbolFromExchange(htx.TranslateSymbolToExchange(symbol, marketType), marketType)
+		}
+		return htx.TranslateSymbolFromExchange(symbol, marketType)
 	default:
 		return symbol
 	}
@@ -858,6 +866,12 @@ func runtimeSymbolAliases(exchange, symbol, marketType string) []string {
 			add(strings.ToUpper(kucoin.TranslateSymbolToExchange(symbol)))
 		} else {
 			add(kucoin.TranslateSymbolFromExchange(symbol))
+		}
+	case "htx":
+		if strings.Contains(symbol, "/") {
+			add(htx.TranslateSymbolToExchange(symbol, marketType))
+		} else {
+			add(htx.TranslateSymbolFromExchange(symbol, marketType))
 		}
 	}
 

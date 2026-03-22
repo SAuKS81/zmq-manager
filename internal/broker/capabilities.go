@@ -62,6 +62,11 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			supportsRequestID:   true,
 			supportsDeployQueue: true,
 		}),
+		newCapabilityItem("htx", "htx_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
+			orderBookDepths:     []int{5, 20, 150, 400},
+			supportsRequestID:   true,
+			supportsDeployQueue: true,
+		}),
 		newCapabilityItem("mexc", "mexc_native", "native", []string{"spot"}, []string{"trades", "orderbooks"}, mexcPushInterval, capabilityFlags{
 			orderBookDepths:     []int{5, 10, 20},
 			supportsRequestID:   true,
