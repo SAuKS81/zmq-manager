@@ -49,6 +49,7 @@ type ClientRequest struct {
 	Encoding       string `json:"encoding,omitempty"`
 	CacheN         int    `json:"cache_n,omitempty"`
 	OrderBookDepth int    `json:"depth,omitempty"`
+	OrderBookMode  string `json:"orderbook_mode,omitempty"`
 	OrderBookFreq  string `json:"frequency,omitempty"`
 	PushIntervalMS int    `json:"push_interval_ms,omitempty"`
 	BatchSent      int    `json:"-"`
@@ -66,18 +67,20 @@ type BulkClientRequest struct {
 	Encoding       string   `json:"encoding,omitempty"`
 	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
+	OrderBookMode  string   `json:"orderbook_mode,omitempty"`
 	OrderBookFreq  string   `json:"frequency,omitempty"`
 	PushIntervalMS int      `json:"push_interval_ms,omitempty"`
 }
 
 type CapabilityParameter struct {
-	Type          string `json:"type"`
-	Required      bool   `json:"required"`
-	Default       any    `json:"default,omitempty"`
-	Min           any    `json:"min,omitempty"`
-	Max           any    `json:"max,omitempty"`
-	Step          any    `json:"step,omitempty"`
-	AllowedValues []int  `json:"allowed_values,omitempty"`
+	Type                string   `json:"type"`
+	Required            bool     `json:"required"`
+	Default             any      `json:"default,omitempty"`
+	Min                 any      `json:"min,omitempty"`
+	Max                 any      `json:"max,omitempty"`
+	Step                any      `json:"step,omitempty"`
+	AllowedValues       []int    `json:"allowed_values,omitempty"`
+	AllowedStringValues []string `json:"allowed_string_values,omitempty"`
 }
 
 type ChannelCapability struct {

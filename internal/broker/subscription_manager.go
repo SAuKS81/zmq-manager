@@ -11,6 +11,7 @@ import (
 	"bybit-watcher/internal/exchanges"
 	"bybit-watcher/internal/exchanges/binance"
 	"bybit-watcher/internal/exchanges/bitget"
+	"bybit-watcher/internal/exchanges/bitmart"
 	"bybit-watcher/internal/exchanges/bybit"
 	"bybit-watcher/internal/exchanges/coinex"
 	"bybit-watcher/internal/exchanges/htx"
@@ -33,6 +34,7 @@ type SubscriptionManager struct {
 	tradeSubscriptionCacheN        map[string]int
 	orderBookSubscriptionRoutes    map[string]string
 	orderBookSubscriptionDepths    map[string]int
+	orderBookSubscriptionModes     map[string]string
 	tradeSubscriptionEncodings     map[string]string
 	orderBookSubscriptionEncodings map[string]string
 	stickyTradeSubscriptions       map[string]bool
@@ -62,6 +64,7 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 		tradeSubscriptionCacheN:        make(map[string]int),
 		orderBookSubscriptionRoutes:    make(map[string]string),
 		orderBookSubscriptionDepths:    make(map[string]int),
+		orderBookSubscriptionModes:     make(map[string]string),
 		tradeSubscriptionEncodings:     make(map[string]string),
 		orderBookSubscriptionEncodings: make(map[string]string),
 		stickyTradeSubscriptions:       make(map[string]bool),
@@ -77,6 +80,7 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["bitget_native"] = bitget.NewBitgetExchange(sm.RequestCh, sm.TradeDataCh, sm.StatusCh)
+	sm.exchangeRegistry["bitmart_native"] = bitmart.NewBitmartExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["mexc_native"] = mexc.NewMexcExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["kucoin_native"] = kucoin.NewKucoinExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["coinex_native"] = coinex.NewCoinexExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
@@ -397,6 +401,9 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if sm.orderBookSubscriptionDepths == nil {
 		sm.orderBookSubscriptionDepths = make(map[string]int)
 	}
+	if sm.orderBookSubscriptionModes == nil {
+		sm.orderBookSubscriptionModes = make(map[string]string)
+	}
 	if sm.stickyTradeSubscriptions == nil {
 		sm.stickyTradeSubscriptions = make(map[string]bool)
 	}
@@ -499,6 +506,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 
 	prevOwnerCount := 0
 	prevEffectiveDepth := 0
+	prevEffectiveMode := ""
 	prevEffectiveCacheN := 0
 	existingClientSubscribed := false
 	if clients, ok := subMap[subID]; ok {
@@ -508,13 +516,16 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	existingSticky := false
 	existingExactExchange := ""
 	existingDepth := 0
+	existingMode := ""
 	existingCacheN := 0
 	if req.DataType == "orderbooks" {
 		prevOwnerCount = sm.orderBookOwnerCount(subID, req.Exchange)
 		prevEffectiveDepth = sm.effectiveOrderBookDepth(subID, req.Exchange)
+		prevEffectiveMode = sm.effectiveOrderBookMode(subID, req.Exchange)
 		existingSticky = sm.stickyOrderBookSubscriptions[routeKey]
 		existingExactExchange = sm.orderBookSubscriptionRoutes[routeKey]
 		existingDepth = sm.orderBookSubscriptionDepths[routeKey]
+		existingMode = sm.orderBookSubscriptionModes[routeKey]
 	} else {
 		prevOwnerCount = sm.tradeOwnerCount(subID, req.Exchange)
 		prevEffectiveCacheN = sm.effectiveTradeCacheN(subID, req.Exchange)
@@ -529,7 +540,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		sameSticky := existingSticky == req.Sticky
 		sameParams := false
 		if req.DataType == "orderbooks" {
-			sameParams = existingDepth == req.OrderBookDepth
+			sameParams = existingDepth == req.OrderBookDepth && existingMode == req.OrderBookMode
 		} else {
 			sameParams = existingCacheN == req.CacheN
 		}
@@ -544,7 +555,12 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	switch req.Action {
 	case "subscribe":
 		if req.DataType == "orderbooks" {
+			prevMode := sm.orderBookSubscriptionModes[routeKey]
+			depthChanged := false
 			if prevDepth, ok := sm.orderBookSubscriptionDepths[routeKey]; ok && prevDepth > 0 && req.OrderBookDepth > 0 && prevDepth != req.OrderBookDepth {
+				depthChanged = true
+			}
+			if depthChanged || (prevMode != "" && prevMode != req.OrderBookMode) {
 				eventType = "stream_update_acked"
 			}
 		}
@@ -573,6 +589,11 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			if req.OrderBookDepth > 0 {
 				sm.orderBookSubscriptionDepths[routeKey] = req.OrderBookDepth
 			}
+			if req.OrderBookMode != "" {
+				sm.orderBookSubscriptionModes[routeKey] = req.OrderBookMode
+			} else {
+				delete(sm.orderBookSubscriptionModes, routeKey)
+			}
 		} else {
 			sm.tradeSubscriptionRoutes[routeKey] = req.Exchange
 			if req.CacheN > 0 {
@@ -584,9 +605,11 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		wasActive = sm.runtimeTracker.isActive(opKey)
 		if req.DataType == "orderbooks" {
 			newEffectiveDepth := sm.effectiveOrderBookDepth(subID, req.Exchange)
-			if prevOwnerCount == 0 || newEffectiveDepth != prevEffectiveDepth {
+			newEffectiveMode := sm.effectiveOrderBookMode(subID, req.Exchange)
+			if prevOwnerCount == 0 || newEffectiveDepth != prevEffectiveDepth || newEffectiveMode != prevEffectiveMode {
 				forwardReq = cloneClientRequest(req)
 				forwardReq.OrderBookDepth = newEffectiveDepth
+				forwardReq.OrderBookMode = newEffectiveMode
 			}
 		} else {
 			newEffectiveCacheN := sm.effectiveTradeCacheN(subID, req.Exchange)
@@ -655,6 +678,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		if req.DataType == "orderbooks" {
 			delete(sm.orderBookSubscriptionRoutes, routeKey)
 			delete(sm.orderBookSubscriptionDepths, routeKey)
+			delete(sm.orderBookSubscriptionModes, routeKey)
 			delete(sm.stickyOrderBookSubscriptions, routeKey)
 		} else {
 			delete(sm.tradeSubscriptionRoutes, routeKey)
@@ -673,11 +697,13 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			forwardReq.Exchange = prevExactExchange
 		} else if req.DataType == "orderbooks" {
 			newEffectiveDepth := sm.effectiveOrderBookDepth(subID, prevExactExchange)
-			if newEffectiveDepth != prevEffectiveDepth {
+			newEffectiveMode := sm.effectiveOrderBookMode(subID, prevExactExchange)
+			if newEffectiveDepth != prevEffectiveDepth || newEffectiveMode != prevEffectiveMode {
 				forwardReq = cloneClientRequest(req)
 				forwardReq.Action = "subscribe"
 				forwardReq.Exchange = prevExactExchange
 				forwardReq.OrderBookDepth = newEffectiveDepth
+				forwardReq.OrderBookMode = newEffectiveMode
 			}
 		} else {
 			newEffectiveCacheN := sm.effectiveTradeCacheN(subID, prevExactExchange)
@@ -949,6 +975,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		exactExchange := sm.orderBookSubscriptionRoutes[routeKey]
 		delete(sm.orderBookSubscriptionRoutes, routeKey)
 		delete(sm.orderBookSubscriptionDepths, routeKey)
+		delete(sm.orderBookSubscriptionModes, routeKey)
 		delete(sm.orderBookSubscriptionEncodings, routeKey)
 		delete(sm.stickyOrderBookSubscriptions, routeKey)
 		if len(clients) == 0 {
@@ -1083,6 +1110,28 @@ func (sm *SubscriptionManager) effectiveOrderBookDepth(subID, exactExchange stri
 		}
 	}
 	return maxDepth
+}
+
+func (sm *SubscriptionManager) effectiveOrderBookMode(subID, exactExchange string) string {
+	clients := sm.orderBookSubscriptions[subID]
+	mode := ""
+	for clientID := range clients {
+		routeKey := getClientRouteKey(clientID, subID)
+		if effectiveRouteForClient(subID, routeKey, sm.orderBookSubscriptionRoutes) != exactExchange {
+			continue
+		}
+		currentMode := bitmart.NormalizeOrderBookMode(sm.orderBookSubscriptionModes[routeKey])
+		if currentMode == "all" {
+			return "all"
+		}
+		if currentMode != "" {
+			mode = currentMode
+		}
+	}
+	if mode == "" {
+		return "level100"
+	}
+	return mode
 }
 
 func (sm *SubscriptionManager) buildSubscriptionsSnapshotResponse(scope, requestID string) *shared_types.SubscriptionsSnapshotResponse {
@@ -1291,6 +1340,14 @@ func (sm *SubscriptionManager) broadcastRuntimeTotalsTick() {
 
 func (sm *SubscriptionManager) validateRequestSpec(req *shared_types.ClientRequest) string {
 	if req == nil || req.Action != "subscribe" || req.DataType != "orderbooks" {
+		return ""
+	}
+	if canonicalSubscriptionExchange(req.Exchange) == "bitmart" {
+		if !bitmart.IsValidOrderBookMode(req.OrderBookMode) {
+			return "unsupported orderbook_mode"
+		}
+		req.OrderBookMode = bitmart.NormalizeOrderBookMode(req.OrderBookMode)
+		req.OrderBookDepth = bitmart.NormalizeOrderBookDepth(req.OrderBookDepth)
 		return ""
 	}
 	capability, ok := capabilityForExchange(req.Exchange)

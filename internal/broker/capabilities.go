@@ -36,6 +36,18 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			},
 		},
 	}
+	bitmartParams := map[string]map[string]map[string]shared_types.CapabilityParameter{
+		"spot": {
+			"orderbooks": {
+				"orderbook_mode": {
+					Type:                "string",
+					Required:            false,
+					Default:             "level100",
+					AllowedStringValues: []string{"level100", "all"},
+				},
+			},
+		},
+	}
 
 	return []shared_types.CapabilitiesItem{
 		newCapabilityItem("binance", "binance_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
@@ -49,6 +61,10 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			supportsDeployQueue: true,
 		}),
 		newCapabilityItem("bitget", "bitget_native", "native", []string{"spot", "swap"}, []string{"trades"}, nil, capabilityFlags{
+			supportsRequestID:   true,
+			supportsDeployQueue: true,
+		}),
+		newCapabilityItem("bitmart", "bitmart_native", "native", []string{"spot"}, []string{"trades", "orderbooks"}, bitmartParams, capabilityFlags{
 			supportsRequestID:   true,
 			supportsDeployQueue: true,
 		}),
@@ -243,6 +259,9 @@ func cloneCapabilityParameterMap(input map[string]shared_types.CapabilityParamet
 		cloned := value
 		if len(value.AllowedValues) > 0 {
 			cloned.AllowedValues = append([]int(nil), value.AllowedValues...)
+		}
+		if len(value.AllowedStringValues) > 0 {
+			cloned.AllowedStringValues = append([]string(nil), value.AllowedStringValues...)
 		}
 		out[key] = cloned
 	}
