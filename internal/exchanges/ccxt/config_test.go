@@ -69,6 +69,41 @@ func TestGetConfigSupportsHuobiAlias(t *testing.T) {
 	}
 }
 
+func TestGetConfigSupportsGateioAlias(t *testing.T) {
+	gateCfg := getConfig("gate", "spot")
+	gateioCfg := getConfig("gateio", "spot")
+
+	if gateCfg != gateioCfg {
+		t.Fatalf("expected gateio alias to resolve to gate policy, got %#v vs %#v", gateioCfg, gateCfg)
+	}
+}
+
+func TestGetConfigIncludesGatePolicy(t *testing.T) {
+	cfg := getConfig("gate", "spot")
+
+	if !cfg.Enabled {
+		t.Fatal("expected gate spot config to be enabled")
+	}
+	if !cfg.UseForSymbols {
+		t.Fatal("expected gate spot config to advertise batch-symbol support")
+	}
+	if cfg.BatchSize != 50 {
+		t.Fatalf("expected gate batch size 50, got %d", cfg.BatchSize)
+	}
+	if cfg.SymbolsPerShard != 50 {
+		t.Fatalf("expected gate symbols per shard 50, got %d", cfg.SymbolsPerShard)
+	}
+	if cfg.SubscribePause != 250*time.Millisecond {
+		t.Fatalf("expected gate subscribe pause 250ms, got %s", cfg.SubscribePause)
+	}
+	if cfg.NewShardPause != 1100*time.Millisecond {
+		t.Fatalf("expected gate new shard pause 1100ms, got %s", cfg.NewShardPause)
+	}
+	if !cfg.SupportsTradeUnwatch || !cfg.SupportsOrderBookUnwatch {
+		t.Fatalf("expected gate unwatch support to stay enabled, got %#v", cfg)
+	}
+}
+
 func TestGetConfigIncludesBitmartPolicy(t *testing.T) {
 	cfg := getConfig("bitmart", "spot")
 

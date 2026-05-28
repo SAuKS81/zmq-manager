@@ -125,6 +125,17 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			supportsRequestID:   true,
 			supportsDeployQueue: true,
 		}),
+		newCapabilityItem("gate", "gate", "ccxt", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
+			orderBookDepths:               []int{5, 20, 50, 100},
+			usesBatchSymbols:              true,
+			supportsTradeUnwatch:          true,
+			supportsTradeBatchUnwatch:     true,
+			supportsOrderBookUnwatch:      true,
+			supportsOrderBookBatchUnwatch: true,
+			supportsCacheN:                true,
+			supportsRequestID:             true,
+			supportsDeployQueue:           true,
+		}),
 		newCapabilityItem("htx", "htx", "ccxt", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
 			supportsTradeUnwatch: true,
 			supportsCacheN:       true,
@@ -272,6 +283,8 @@ func canonicalCapabilityExchange(exchange string) string {
 	switch exchange {
 	case "huobi":
 		return "htx"
+	case "gateio":
+		return "gate"
 	default:
 		return exchange
 	}

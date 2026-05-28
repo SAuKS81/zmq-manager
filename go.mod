@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -35,7 +36,6 @@ require (
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 require (

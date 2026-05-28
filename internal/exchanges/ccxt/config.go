@@ -12,6 +12,8 @@ func canonicalExchangeName(exchangeName string) string {
 	switch strings.ToLower(exchangeName) {
 	case "huobi":
 		return "htx"
+	case "gateio":
+		return "gate"
 	default:
 		return strings.ToLower(exchangeName)
 	}
@@ -166,6 +168,32 @@ var exchangePolicies = map[string]ExchangePolicySet{
 			SymbolsPerShard: 1000,
 			SubscribePause:  250 * time.Millisecond,
 			NewShardPause:   1100 * time.Millisecond,
+		},
+	},
+	"gate": {
+		Spot: ExchangeConfig{
+			Enabled:                       true,
+			UseForSymbols:                 true,
+			BatchSize:                     50,
+			SymbolsPerShard:               50,
+			SubscribePause:                250 * time.Millisecond,
+			NewShardPause:                 1100 * time.Millisecond,
+			SupportsTradeUnwatch:          true,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookUnwatch:      true,
+			SupportsOrderBookBatchUnwatch: true,
+		},
+		Swap: ExchangeConfig{
+			Enabled:                       true,
+			UseForSymbols:                 true,
+			BatchSize:                     50,
+			SymbolsPerShard:               50,
+			SubscribePause:                250 * time.Millisecond,
+			NewShardPause:                 1100 * time.Millisecond,
+			SupportsTradeUnwatch:          true,
+			SupportsTradeBatchUnwatch:     true,
+			SupportsOrderBookUnwatch:      true,
+			SupportsOrderBookBatchUnwatch: true,
 		},
 	},
 	"htx": {
