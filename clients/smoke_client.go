@@ -25,6 +25,7 @@ type subscribeRequest struct {
 	Symbol     string `json:"symbol"`
 	MarketType string `json:"market_type"`
 	DataType   string `json:"data_type"`
+	Interval   string `json:"interval,omitempty"`
 	Depth      int    `json:"depth,omitempty"`
 	Encoding   string `json:"encoding,omitempty"`
 }
@@ -35,6 +36,7 @@ type subscribeBulkRequest struct {
 	Symbols    []string `json:"symbols"`
 	MarketType string   `json:"market_type"`
 	DataType   string   `json:"data_type"`
+	Interval   string   `json:"interval,omitempty"`
 	Depth      int      `json:"depth,omitempty"`
 	Encoding   string   `json:"encoding,omitempty"`
 }
@@ -53,6 +55,8 @@ type smokeConfig struct {
 	symbolsLimitSwap int
 	trades           bool
 	orderbooks       bool
+	ohlcv            bool
+	interval         string
 	obDepth          int
 	bulkSize         int
 	encoding         string
@@ -70,6 +74,7 @@ type statusEvent struct {
 	Exchange   string   `json:"exchange,omitempty"`
 	MarketType string   `json:"market_type,omitempty"`
 	DataType   string   `json:"data_type,omitempty"`
+	Interval   string   `json:"interval,omitempty"`
 	Symbol     string   `json:"symbol,omitempty"`
 	Symbols    []string `json:"symbols,omitempty"`
 	Reason     string   `json:"reason,omitempty"`
@@ -191,7 +196,7 @@ func consumeLoop(sigCtx context.Context, socket zmq4.Socket, cfg smokeConfig) {
 	rateTicker := time.NewTicker(cfg.rateLog)
 	defer rateTicker.Stop()
 
-	var totalTrades, totalOB, windowTrades, windowOB int
+	var totalTrades, totalOB, totalOHLCV, windowTrades, windowOB, windowOHLCV int
 	var totalDecodeErrors, windowDecodeErrors int
 	var totalStatus, windowStatus statusCounters
 
@@ -199,23 +204,24 @@ func consumeLoop(sigCtx context.Context, socket zmq4.Socket, cfg smokeConfig) {
 		select {
 		case <-deadline.C:
 			sendDisconnect(socket)
-			fmt.Printf("[SMOKE] done total_trades=%d total_ob=%d decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
-				totalTrades, totalOB, totalDecodeErrors,
+			fmt.Printf("[SMOKE] done total_trades=%d total_ob=%d total_ohlcv=%d decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
+				totalTrades, totalOB, totalOHLCV, totalDecodeErrors,
 				totalStatus.reconnecting, totalStatus.restored, totalStatus.unsubscribeFailed, totalStatus.forceClosed, totalStatus.other,
 			)
 			return
 		case <-sigCtx.Done():
 			sendDisconnect(socket)
-			fmt.Printf("[SMOKE] interrupted total_trades=%d total_ob=%d decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
-				totalTrades, totalOB, totalDecodeErrors,
+			fmt.Printf("[SMOKE] interrupted total_trades=%d total_ob=%d total_ohlcv=%d decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
+				totalTrades, totalOB, totalOHLCV, totalDecodeErrors,
 				totalStatus.reconnecting, totalStatus.restored, totalStatus.unsubscribeFailed, totalStatus.forceClosed, totalStatus.other,
 			)
 			return
 		case <-rateTicker.C:
 			secs := cfg.rateLog.Seconds()
-			fmt.Printf("[SMOKE] rate trades/s=%.2f ob/s=%.2f decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
+			fmt.Printf("[SMOKE] rate trades/s=%.2f ob/s=%.2f ohlcv/s=%.2f decode_errors=%d reconnecting=%d restored=%d unsub_failed=%d force_closed=%d other_status=%d\n",
 				float64(windowTrades)/secs,
 				float64(windowOB)/secs,
+				float64(windowOHLCV)/secs,
 				windowDecodeErrors,
 				windowStatus.reconnecting,
 				windowStatus.restored,
@@ -225,17 +231,20 @@ func consumeLoop(sigCtx context.Context, socket zmq4.Socket, cfg smokeConfig) {
 			)
 			windowTrades = 0
 			windowOB = 0
+			windowOHLCV = 0
 			windowDecodeErrors = 0
 			windowStatus.reset()
 		case err := <-errCh:
 			fmt.Fprintf(os.Stderr, "[SMOKE] recv failed: %v\n", err)
 			os.Exit(1)
 		case msg := <-msgCh:
-			trades, obs, decodeErr, statusType := decodeMessage(socket, msg)
+			trades, obs, ohlcv, decodeErr, statusType := decodeMessage(socket, msg)
 			totalTrades += trades
 			windowTrades += trades
 			totalOB += obs
 			windowOB += obs
+			totalOHLCV += ohlcv
+			windowOHLCV += ohlcv
 			totalDecodeErrors += decodeErr
 			windowDecodeErrors += decodeErr
 			if statusType != "" {
@@ -255,9 +264,9 @@ func sendDisconnect(socket zmq4.Socket) {
 	fmt.Printf("[SMOKE] DISCONNECT_SENT\n")
 }
 
-func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, string) {
+func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, int, string) {
 	if len(msg.Frames) == 0 {
-		return 0, 0, 0, ""
+		return 0, 0, 0, 0, ""
 	}
 
 	payload := msg.Frames[len(msg.Frames)-1]
@@ -271,21 +280,30 @@ func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, string) {
 		case 'T':
 			var trades []*shared_types.TradeUpdate
 			if err := msgpack.Unmarshal(payload, &trades); err != nil {
-				return 0, 0, 1, ""
+				return 0, 0, 0, 1, ""
 			}
 			if len(trades) == 0 {
-				return 1, 0, 0, ""
+				return 1, 0, 0, 0, ""
 			}
-			return len(trades), 0, 0, ""
+			return len(trades), 0, 0, 0, ""
 		case 'O':
 			var obs []*shared_types.OrderBookUpdate
 			if err := msgpack.Unmarshal(payload, &obs); err != nil {
-				return 0, 0, 1, ""
+				return 0, 0, 0, 1, ""
 			}
 			if len(obs) == 0 {
-				return 0, 1, 0, ""
+				return 0, 1, 0, 0, ""
 			}
-			return 0, len(obs), 0, ""
+			return 0, len(obs), 0, 0, ""
+		case 'K':
+			var klines []*shared_types.OHLCVUpdate
+			if err := msgpack.Unmarshal(payload, &klines); err != nil {
+				return 0, 0, 0, 1, ""
+			}
+			if len(klines) == 0 {
+				return 0, 0, 1, 0, ""
+			}
+			return 0, 0, len(klines), 0, ""
 		}
 	}
 
@@ -293,20 +311,21 @@ func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, string) {
 	if err := json.Unmarshal(payload, &ping); err == nil && ping["type"] == "ping" {
 		pong, _ := json.Marshal(map[string]string{"message": "pong"})
 		_ = socket.Send(zmq4.NewMsg(pong))
-		return 0, 0, 0, ""
+		return 0, 0, 0, 0, ""
 	}
 
 	var status statusEvent
 	if err := json.Unmarshal(payload, &status); err == nil && strings.HasPrefix(status.Type, "stream_") {
 		fmt.Printf("[SMOKE] status type=%s exchange=%s market_type=%s data_type=%s symbol=%s attempt=%d reason=%s\n",
 			status.Type, status.Exchange, status.MarketType, status.DataType, status.Symbol, status.Attempt, status.Reason)
-		return 0, 0, 0, status.Type
+		return 0, 0, 0, 0, status.Type
 	}
 
 	var arr []map[string]any
 	if err := json.Unmarshal(payload, &arr); err == nil {
 		trades := 0
 		obs := 0
+		ohlcv := 0
 		for _, item := range arr {
 			if dt, ok := item["data_type"].(string); ok {
 				switch dt {
@@ -314,13 +333,15 @@ func decodeMessage(socket zmq4.Socket, msg zmq4.Msg) (int, int, int, string) {
 					trades++
 				case "orderbooks":
 					obs++
+				case "ohlcv":
+					ohlcv++
 				}
 			}
 		}
-		return trades, obs, 0, ""
+		return trades, obs, ohlcv, 0, ""
 	}
 
-	return 0, 0, 1, ""
+	return 0, 0, 0, 1, ""
 }
 
 func parseFlags() smokeConfig {
@@ -335,6 +356,8 @@ func parseFlags() smokeConfig {
 	flag.IntVar(&cfg.symbolsLimitSwap, "symbols-limit-swap", 0, "max swap symbols to use (0 = fallback to --symbols-limit)")
 	flag.BoolVar(&cfg.trades, "trades", true, "subscribe trades")
 	flag.BoolVar(&cfg.orderbooks, "orderbooks", true, "subscribe orderbooks")
+	flag.BoolVar(&cfg.ohlcv, "ohlcv", false, "subscribe OHLCV/kline streams")
+	flag.StringVar(&cfg.interval, "interval", "1m", "OHLCV interval")
 	flag.IntVar(&cfg.obDepth, "ob-depth", 5, "orderbook depth")
 	flag.IntVar(&cfg.bulkSize, "bulk-size", 100, "symbols per subscribe_bulk request (<=1 disables bulk)")
 	flag.StringVar(&cfg.encoding, "encoding", "msgpack", "msgpack|json")
@@ -354,8 +377,8 @@ func validateConfig(cfg smokeConfig) error {
 	if cfg.encoding != "msgpack" && cfg.encoding != "json" && cfg.encoding != "binary" {
 		return fmt.Errorf("--encoding must be msgpack, binary or json")
 	}
-	if !cfg.trades && !cfg.orderbooks {
-		return fmt.Errorf("at least one of --trades or --orderbooks must be true")
+	if !cfg.trades && !cfg.orderbooks && !cfg.ohlcv {
+		return fmt.Errorf("at least one of --trades, --orderbooks or --ohlcv must be true")
 	}
 	if cfg.duration <= 0 {
 		return fmt.Errorf("--duration must be > 0")
@@ -365,6 +388,9 @@ func validateConfig(cfg smokeConfig) error {
 	}
 	if cfg.obDepth < 0 {
 		return fmt.Errorf("--ob-depth must be >= 0")
+	}
+	if cfg.ohlcv && !isAllowedSmokeInterval(cfg.interval) {
+		return fmt.Errorf("--interval must be one of 1m,3m,5m,15m,30m,1h,4h,1d")
 	}
 	if cfg.bulkSize < 0 {
 		return fmt.Errorf("--bulk-size must be >= 0")
@@ -389,6 +415,15 @@ func validateConfig(cfg smokeConfig) error {
 		}
 	}
 	return nil
+}
+
+func isAllowedSmokeInterval(interval string) bool {
+	switch strings.TrimSpace(interval) {
+	case "", "1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseCSV(csv string) []string {
@@ -457,6 +492,9 @@ func buildPlan(exchanges []string, marketTypes []string, symbolsByMarket map[str
 			if cfg.orderbooks {
 				plan = appendRequests(plan, ex, marketType, "orderbooks", cfg.obDepth, symbols, cfg)
 			}
+			if cfg.ohlcv {
+				plan = appendRequests(plan, ex, marketType, "ohlcv", 0, symbols, cfg)
+			}
 		}
 	}
 	return plan
@@ -472,6 +510,7 @@ func appendRequests(plan []any, exchange, marketType, dataType string, depth int
 				Symbol:     symbol,
 				MarketType: marketType,
 				DataType:   dataType,
+				Interval:   intervalForDataType(dataType, cfg),
 				Depth:      depth,
 				Encoding:   cfg.encoding,
 			}
@@ -491,12 +530,23 @@ func appendRequests(plan []any, exchange, marketType, dataType string, depth int
 			Symbols:    symbols[start:end],
 			MarketType: marketType,
 			DataType:   dataType,
+			Interval:   intervalForDataType(dataType, cfg),
 			Depth:      depth,
 			Encoding:   cfg.encoding,
 		}
 		plan = append(plan, req)
 	}
 	return plan
+}
+
+func intervalForDataType(dataType string, cfg smokeConfig) string {
+	if dataType != "ohlcv" {
+		return ""
+	}
+	if strings.TrimSpace(cfg.interval) == "" {
+		return "1m"
+	}
+	return strings.TrimSpace(cfg.interval)
 }
 
 func resolveMarketTypes(cfg smokeConfig) []string {

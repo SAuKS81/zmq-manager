@@ -8,6 +8,7 @@ import (
 
 const (
 	TypeTrade      = "trade"
+	TypeOHLCV      = "ohlcv"
 	TypeOBUpdate   = "ob_update"
 	TypeOBSnapshot = "ob_snapshot"
 
@@ -89,6 +90,7 @@ var (
 	)
 
 	publishTradeInternal      prometheus.Counter
+	publishOHLCVInternal      prometheus.Counter
 	publishOBUpdateInternal   prometheus.Counter
 	publishOBSnapshotInternal prometheus.Counter
 
@@ -127,32 +129,38 @@ func Init() {
 		prometheus.MustRegister(streamRestoreSuccessTotal)
 
 		publishTradeInternal = publishMessagesTotal.WithLabelValues(TypeTrade, ClientTierInternal)
+		publishOHLCVInternal = publishMessagesTotal.WithLabelValues(TypeOHLCV, ClientTierInternal)
 		publishOBUpdateInternal = publishMessagesTotal.WithLabelValues(TypeOBUpdate, ClientTierInternal)
 		publishOBSnapshotInternal = publishMessagesTotal.WithLabelValues(TypeOBSnapshot, ClientTierInternal)
 
 		droppedByReasonType = map[string]map[string]prometheus.Counter{
 			ReasonSlowClient: {
 				TypeTrade:      droppedMessagesTotal.WithLabelValues(ReasonSlowClient, TypeTrade),
+				TypeOHLCV:      droppedMessagesTotal.WithLabelValues(ReasonSlowClient, TypeOHLCV),
 				TypeOBUpdate:   droppedMessagesTotal.WithLabelValues(ReasonSlowClient, TypeOBUpdate),
 				TypeOBSnapshot: droppedMessagesTotal.WithLabelValues(ReasonSlowClient, TypeOBSnapshot),
 			},
 			ReasonBufferFull: {
 				TypeTrade:      droppedMessagesTotal.WithLabelValues(ReasonBufferFull, TypeTrade),
+				TypeOHLCV:      droppedMessagesTotal.WithLabelValues(ReasonBufferFull, TypeOHLCV),
 				TypeOBUpdate:   droppedMessagesTotal.WithLabelValues(ReasonBufferFull, TypeOBUpdate),
 				TypeOBSnapshot: droppedMessagesTotal.WithLabelValues(ReasonBufferFull, TypeOBSnapshot),
 			},
 			ReasonParseError: {
 				TypeTrade:      droppedMessagesTotal.WithLabelValues(ReasonParseError, TypeTrade),
+				TypeOHLCV:      droppedMessagesTotal.WithLabelValues(ReasonParseError, TypeOHLCV),
 				TypeOBUpdate:   droppedMessagesTotal.WithLabelValues(ReasonParseError, TypeOBUpdate),
 				TypeOBSnapshot: droppedMessagesTotal.WithLabelValues(ReasonParseError, TypeOBSnapshot),
 			},
 			ReasonStaleSeq: {
 				TypeTrade:      droppedMessagesTotal.WithLabelValues(ReasonStaleSeq, TypeTrade),
+				TypeOHLCV:      droppedMessagesTotal.WithLabelValues(ReasonStaleSeq, TypeOHLCV),
 				TypeOBUpdate:   droppedMessagesTotal.WithLabelValues(ReasonStaleSeq, TypeOBUpdate),
 				TypeOBSnapshot: droppedMessagesTotal.WithLabelValues(ReasonStaleSeq, TypeOBSnapshot),
 			},
 			ReasonInternalErr: {
 				TypeTrade:      droppedMessagesTotal.WithLabelValues(ReasonInternalErr, TypeTrade),
+				TypeOHLCV:      droppedMessagesTotal.WithLabelValues(ReasonInternalErr, TypeOHLCV),
 				TypeOBUpdate:   droppedMessagesTotal.WithLabelValues(ReasonInternalErr, TypeOBUpdate),
 				TypeOBSnapshot: droppedMessagesTotal.WithLabelValues(ReasonInternalErr, TypeOBSnapshot),
 			},
@@ -160,6 +168,7 @@ func Init() {
 
 		observeByType = map[string]prometheus.Observer{
 			TypeTrade:    processingDuration.WithLabelValues(TypeTrade),
+			TypeOHLCV:    processingDuration.WithLabelValues(TypeOHLCV),
 			TypeOBUpdate: processingDuration.WithLabelValues(TypeOBUpdate),
 		}
 
@@ -200,6 +209,8 @@ func RecordPublish(typeName string) {
 	switch normalizeType(typeName) {
 	case TypeTrade:
 		publishTradeInternal.Inc()
+	case TypeOHLCV:
+		publishOHLCVInternal.Inc()
 	case TypeOBSnapshot:
 		publishOBSnapshotInternal.Inc()
 	default:
@@ -271,6 +282,8 @@ func normalizeType(typeName string) string {
 	switch typeName {
 	case TypeTrade:
 		return TypeTrade
+	case TypeOHLCV:
+		return TypeOHLCV
 	case TypeOBSnapshot:
 		return TypeOBSnapshot
 	case TypeOBUpdate:
@@ -283,6 +296,9 @@ func normalizeType(typeName string) string {
 func normalizeProcessingType(typeName string) string {
 	if typeName == TypeTrade {
 		return TypeTrade
+	}
+	if typeName == TypeOHLCV {
+		return TypeOHLCV
 	}
 	return TypeOBUpdate
 }

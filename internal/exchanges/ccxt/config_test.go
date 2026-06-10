@@ -78,6 +78,15 @@ func TestGetConfigSupportsGateioAlias(t *testing.T) {
 	}
 }
 
+func TestGetConfigSupportsWooxAlias(t *testing.T) {
+	wooCfg := getConfig("woo", "spot")
+	wooxCfg := getConfig("woox", "spot")
+
+	if wooCfg != wooxCfg {
+		t.Fatalf("expected woox alias to resolve to woo policy, got %#v vs %#v", wooxCfg, wooCfg)
+	}
+}
+
 func TestGetConfigIncludesGatePolicy(t *testing.T) {
 	cfg := getConfig("gate", "spot")
 

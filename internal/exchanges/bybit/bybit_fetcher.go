@@ -15,19 +15,23 @@ type BybitExchange struct {
 	swapTradeMgr *ConnectionManager
 	spotOBMgr    *OrderBookConnectionManager // NEU
 	swapOBMgr    *OrderBookConnectionManager // NEU
+	spotOHLCVMgr *OHLCVConnectionManager
+	swapOHLCVMgr *OHLCVConnectionManager
 
 	requestCh   chan<- *shared_types.ClientRequest
 	tradeDataCh chan<- *shared_types.TradeUpdate
 	obDataCh    chan<- *shared_types.OrderBookUpdate
+	ohlcvDataCh chan<- *shared_types.OHLCVUpdate
 	statusCh    chan<- *shared_types.StreamStatusEvent
 }
 
 // NewBybitExchange akzeptiert jetzt auch einen Orderbuch-Kanal.
-func NewBybitExchange(requestCh chan<- *shared_types.ClientRequest, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
+func NewBybitExchange(requestCh chan<- *shared_types.ClientRequest, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, ohlcvDataCh chan<- *shared_types.OHLCVUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
 	return &BybitExchange{
 		requestCh:   requestCh,
 		tradeDataCh: tradeDataCh,
 		obDataCh:    obDataCh,
+		ohlcvDataCh: ohlcvDataCh,
 		statusCh:    statusCh,
 	}
 }
@@ -49,13 +53,31 @@ func (e *BybitExchange) HandleRequest(req *shared_types.ClientRequest) {
 	}
 
 	cmd := ManagerCommand{
-		Action: managerAction,
-		Symbol: exchangeSymbol,
-		Depth:  req.OrderBookDepth, // Tiefe weitergeben
+		Action:   managerAction,
+		Symbol:   exchangeSymbol,
+		Depth:    req.OrderBookDepth, // Tiefe weitergeben
+		Interval: req.Interval,
 	}
 
 	// Route basierend auf Datentyp und Markt
-	if req.DataType == "orderbooks" {
+	if req.DataType == "ohlcv" {
+		switch req.MarketType {
+		case "spot":
+			if e.spotOHLCVMgr == nil {
+				log.Println("[BYBIT-EXCHANGE] Erster Spot-OHLCV-Abonnent. Starte Manager.")
+				e.spotOHLCVMgr = NewOHLCVConnectionManager(spotWsURL, "spot", e.ohlcvDataCh, e.statusCh)
+				go e.spotOHLCVMgr.Run()
+			}
+			e.spotOHLCVMgr.commandCh <- cmd
+		case "swap":
+			if e.swapOHLCVMgr == nil {
+				log.Println("[BYBIT-EXCHANGE] Erster Swap-OHLCV-Abonnent. Starte Manager.")
+				e.swapOHLCVMgr = NewOHLCVConnectionManager(linearWsURL, "swap", e.ohlcvDataCh, e.statusCh)
+				go e.swapOHLCVMgr.Run()
+			}
+			e.swapOHLCVMgr.commandCh <- cmd
+		}
+	} else if req.DataType == "orderbooks" {
 		switch req.MarketType {
 		case "spot":
 			if e.spotOBMgr == nil {
@@ -106,5 +128,11 @@ func (e *BybitExchange) Stop() {
 	}
 	if e.swapOBMgr != nil {
 		e.swapOBMgr.Stop()
+	}
+	if e.spotOHLCVMgr != nil {
+		e.spotOHLCVMgr.Stop()
+	}
+	if e.swapOHLCVMgr != nil {
+		e.swapOHLCVMgr.Stop()
 	}
 }

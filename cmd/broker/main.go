@@ -79,6 +79,7 @@ func sampleQueueMetrics(sm *broker.SubscriptionManager, cm *broker.ClientManager
 
 	for range ticker.C {
 		metrics.SetQueueSample("trade_ingest_to_broker", len(sm.TradeDataCh), cap(sm.TradeDataCh))
+		metrics.SetQueueSample("ohlcv_ingest_to_broker", len(sm.OHLCVCh), cap(sm.OHLCVCh))
 		metrics.SetQueueSample("ob_ingest_to_broker", len(sm.OrderBookCh), cap(sm.OrderBookCh))
 		metrics.SetQueueSample("broker_request", len(sm.RequestCh), cap(sm.RequestCh))
 		metrics.SetQueueSample("broker_to_distribution", len(cm.DistributionCh), cap(cm.DistributionCh))

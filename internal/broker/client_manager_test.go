@@ -79,6 +79,28 @@ func TestHandleMessageSubscribeBulkPropagatesCacheN(t *testing.T) {
 	}
 }
 
+func TestHandleMessageSubscribeBulkPropagatesOHLCVInterval(t *testing.T) {
+	reqCh := make(chan *shared_types.ClientRequest, 10)
+	cm := &ClientManager{
+		clients:   map[string]*Client{"client-1": {ID: []byte("client-1"), LastPong: time.Now(), Encoding: "json"}},
+		requestCh: reqCh,
+		sendChP1:  make(chan outboundEnvelope, 16),
+	}
+
+	payload := []byte(`{"action":"subscribe_bulk","request_id":"deploy-ohlcv","exchange":"bybit_native","symbols":["BTC/USDT:USDT","ETH/USDT:USDT"],"market_type":"swap","data_type":"ohlcv","interval":"5m"}`)
+	cm.handleMessage([]byte("client-1"), payload)
+
+	reqs := drainRequests(reqCh)
+	if len(reqs) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(reqs))
+	}
+	for _, req := range reqs[1:] {
+		if req.DataType != "ohlcv" || req.Interval != "5m" {
+			t.Fatalf("expected ohlcv interval=5m to propagate, got %+v", req)
+		}
+	}
+}
+
 func TestHandleMessageInvalidJSONNoPanic(t *testing.T) {
 	reqCh := make(chan *shared_types.ClientRequest, 10)
 	cm := &ClientManager{

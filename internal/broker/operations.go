@@ -136,6 +136,7 @@ func (sm *SubscriptionManager) emitPendingActivation(key runtimeKey) {
 		MarketType: pending.ExactKey.MarketType,
 		Symbol:     pending.ExactKey.Symbol,
 		DataType:   pending.ExactKey.DataType,
+		Interval:   pending.ExactKey.Interval,
 		Adapter:    pending.Adapter,
 		RequestID:  pending.RequestID,
 		Status:     pending.Status,

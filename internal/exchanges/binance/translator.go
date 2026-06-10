@@ -3,10 +3,22 @@ package binance
 import (
 	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var binanceKlineIntervals = map[string]string{
+	"1m":  "1m",
+	"3m":  "3m",
+	"5m":  "5m",
+	"15m": "15m",
+	"30m": "30m",
+	"1h":  "1h",
+	"4h":  "4h",
+	"1d":  "1d",
+}
 
 func TranslateSymbolToExchange(ccxtSymbol string) string {
 	s := strings.Split(ccxtSymbol, ":")[0]
@@ -31,6 +43,32 @@ func TranslateSymbolFromExchange(binanceSymbol, marketType string) string {
 		return ccxtBase + ":" + quote
 	}
 	return ccxtBase
+}
+
+func NormalizeKlineInterval(interval string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(interval))
+	if normalized == "" {
+		normalized = "1m"
+	}
+	topicInterval, ok := binanceKlineIntervals[normalized]
+	return topicInterval, ok
+}
+
+func NormalizeUserKlineInterval(interval string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(interval))
+	if normalized == "" {
+		normalized = "1m"
+	}
+	_, ok := binanceKlineIntervals[normalized]
+	return normalized, ok
+}
+
+func BuildKlineStream(symbol, interval string) (string, error) {
+	topicInterval, ok := NormalizeKlineInterval(interval)
+	if !ok {
+		return "", fmt.Errorf("unsupported interval: %s", interval)
+	}
+	return strings.ToLower(symbol) + "@kline_" + topicInterval, nil
 }
 
 func NormalizeTrade(trade wsTrade, marketType string, goTimestamp int64, ingestUnixNano int64) (*shared_types.TradeUpdate, error) {
@@ -63,6 +101,65 @@ func NormalizeTrade(trade wsTrade, marketType string, goTimestamp int64, ingestU
 	t.Side = side
 	t.TradeID = strconv.FormatInt(trade.TradeID, 10)
 	return t, nil
+}
+
+func NormalizeOHLCV(kline wsKline, symbolRaw, marketType string, goTimestamp int64, ingestUnixNano int64) (*shared_types.OHLCVUpdate, error) {
+	data := kline.Kline
+	symbol := data.Symbol
+	if symbol == "" {
+		symbol = kline.Symbol
+	}
+	if symbol == "" {
+		symbol = symbolRaw
+	}
+	interval, ok := NormalizeUserKlineInterval(data.Interval)
+	if !ok {
+		return nil, fmt.Errorf("unsupported interval: %s", data.Interval)
+	}
+	open, err := strconv.ParseFloat(data.Open, 64)
+	if err != nil {
+		return nil, err
+	}
+	high, err := strconv.ParseFloat(data.High, 64)
+	if err != nil {
+		return nil, err
+	}
+	low, err := strconv.ParseFloat(data.Low, 64)
+	if err != nil {
+		return nil, err
+	}
+	closePrice, err := strconv.ParseFloat(data.Close, 64)
+	if err != nil {
+		return nil, err
+	}
+	volume, err := strconv.ParseFloat(data.Volume, 64)
+	if err != nil {
+		return nil, err
+	}
+	turnover := 0.0
+	if data.QuoteVolume != "" {
+		if turnover, err = strconv.ParseFloat(data.QuoteVolume, 64); err != nil {
+			return nil, err
+		}
+	}
+
+	normalized := pools.GetOHLCVUpdate()
+	normalized.Exchange = "binance"
+	normalized.Symbol = TranslateSymbolFromExchange(symbol, marketType)
+	normalized.MarketType = marketType
+	normalized.Interval = interval
+	normalized.Timestamp = data.StartTime
+	normalized.GoTimestamp = goTimestamp
+	normalized.IngestUnixNano = ingestUnixNano
+	normalized.Open = open
+	normalized.High = high
+	normalized.Low = low
+	normalized.Close = closePrice
+	normalized.Volume = volume
+	normalized.Turnover = turnover
+	normalized.Confirm = data.Closed
+	normalized.DataType = "ohlcv"
+	return normalized, nil
 }
 
 func NormalizeOrderBook(ob wsOrderBookPartial, symbolRaw, marketType string, goTimestamp int64, ingestUnixNano int64) (*shared_types.OrderBookUpdate, error) {

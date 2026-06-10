@@ -25,6 +25,12 @@ var (
 			return &shared_types.TradeUpdate{}
 		},
 	}
+
+	OHLCVUpdatePool = sync.Pool{
+		New: func() interface{} {
+			return &shared_types.OHLCVUpdate{}
+		},
+	}
 )
 
 func GetOrderBookUpdate() *shared_types.OrderBookUpdate {
@@ -66,4 +72,27 @@ func PutTradeUpdate(t *shared_types.TradeUpdate) {
 	t.TradeID = ""
 	t.DataType = ""
 	TradeUpdatePool.Put(t)
+}
+
+func GetOHLCVUpdate() *shared_types.OHLCVUpdate {
+	return OHLCVUpdatePool.Get().(*shared_types.OHLCVUpdate)
+}
+
+func PutOHLCVUpdate(k *shared_types.OHLCVUpdate) {
+	k.Exchange = ""
+	k.Symbol = ""
+	k.MarketType = ""
+	k.Interval = ""
+	k.Timestamp = 0
+	k.GoTimestamp = 0
+	k.IngestUnixNano = 0
+	k.Open = 0
+	k.High = 0
+	k.Low = 0
+	k.Close = 0
+	k.Volume = 0
+	k.Turnover = 0
+	k.Confirm = false
+	k.DataType = ""
+	OHLCVUpdatePool.Put(k)
 }

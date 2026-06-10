@@ -48,14 +48,36 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			},
 		},
 	}
+	nativeOHLCVParams := map[string]map[string]map[string]shared_types.CapabilityParameter{
+		"spot": {
+			"ohlcv": {
+				"interval": {
+					Type:                "string",
+					Required:            false,
+					Default:             "1m",
+					AllowedStringValues: []string{"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"},
+				},
+			},
+		},
+		"swap": {
+			"ohlcv": {
+				"interval": {
+					Type:                "string",
+					Required:            false,
+					Default:             "1m",
+					AllowedStringValues: []string{"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"},
+				},
+			},
+		},
+	}
 
 	return []shared_types.CapabilitiesItem{
-		newCapabilityItem("binance", "binance_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
+		newCapabilityItem("binance", "binance_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks", "ohlcv"}, nativeOHLCVParams, capabilityFlags{
 			orderBookDepths:     []int{5, 10, 20},
 			supportsRequestID:   true,
 			supportsDeployQueue: true,
 		}),
-		newCapabilityItem("bybit", "bybit_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
+		newCapabilityItem("bybit", "bybit_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks", "ohlcv"}, nativeOHLCVParams, capabilityFlags{
 			orderBookDepths:     []int{1, 50, 200, 1000},
 			supportsRequestID:   true,
 			supportsDeployQueue: true,

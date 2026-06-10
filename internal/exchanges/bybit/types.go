@@ -29,6 +29,27 @@ type wsOrderBookMsg struct {
 	Data      wsOrderBookData `json:"data"`
 }
 
+type wsKlineData struct {
+	Start     int64  `json:"start"`
+	End       int64  `json:"end"`
+	Interval  string `json:"interval"`
+	Open      string `json:"open"`
+	Close     string `json:"close"`
+	High      string `json:"high"`
+	Low       string `json:"low"`
+	Volume    string `json:"volume"`
+	Turnover  string `json:"turnover"`
+	Confirm   bool   `json:"confirm"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+type wsKlineMsg struct {
+	Topic     string        `json:"topic"`
+	Type      string        `json:"type"`
+	Timestamp int64         `json:"ts"`
+	Data      []wsKlineData `json:"data"`
+}
+
 type wsCommandResponse struct {
 	Success bool   `json:"success"`
 	RetMsg  string `json:"ret_msg"`

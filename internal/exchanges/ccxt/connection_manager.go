@@ -138,9 +138,7 @@ func (cm *ConnectionManager) shouldUseBatchOrderBookMode() bool {
 }
 
 func (cm *ConnectionManager) shouldUseTradeBatchMode() bool {
-	// Temporarily force the single-symbol path for all exchanges while we
-	// isolate the known CCXT-Go watch*ForSymbols memory behavior.
-	return false
+	return cm.config.UseForSymbols
 }
 
 func (cm *ConnectionManager) tradeShardCapacity() int {

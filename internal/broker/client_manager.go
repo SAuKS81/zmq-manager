@@ -24,6 +24,7 @@ const (
 	HeaderJSON     = "J"
 	HeaderTradeBin = "T"
 	HeaderOBBin    = "O"
+	HeaderOHLCVBin = "K"
 )
 
 const (
@@ -34,6 +35,7 @@ const (
 var (
 	headerTradeBinFrame = []byte(HeaderTradeBin)
 	headerOBBinFrame    = []byte(HeaderOBBin)
+	headerOHLCVBinFrame = []byte(HeaderOHLCVBin)
 	emptyFrame          = []byte{}
 	msgpackCtxPool      = sync.Pool{
 		New: func() any {
@@ -90,6 +92,7 @@ type incomingClientMessage struct {
 	Symbols        []string `json:"symbols"`
 	MarketType     string   `json:"market_type"`
 	DataType       string   `json:"data_type"`
+	Interval       string   `json:"interval,omitempty"`
 	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 	OrderBookMode  string   `json:"orderbook_mode,omitempty"`
@@ -182,6 +185,8 @@ func (cm *ClientManager) distributionLoop() {
 		switch payload := msg.RawPayload.(type) {
 		case []*shared_types.TradeUpdate:
 			cm.distributeTradeBatch(clientIDs, payload)
+		case []*shared_types.OHLCVUpdate:
+			cm.distributeOHLCVBatch(clientIDs, payload)
 		case []*shared_types.OrderBookUpdate:
 			cm.distributeOrderBookBatch(clientIDs, payload)
 		case *shared_types.StreamStatusEvent:
@@ -236,6 +241,39 @@ func (cm *ClientManager) distributeTradeBatch(clientIDs [][]byte, trades []*shar
 		cm.enqueueSocketSend(outboundEnvelope{
 			msg:         msg,
 			metricType:  metrics.TypeTrade,
+			ingestNanos: ingestNanos,
+		})
+	}
+}
+
+func (cm *ClientManager) distributeOHLCVBatch(clientIDs [][]byte, updates []*shared_types.OHLCVUpdate) {
+	if len(updates) == 0 {
+		return
+	}
+
+	ingestNanos := make([]int64, 0, len(updates))
+	for _, k := range updates {
+		if k != nil && k.IngestUnixNano > 0 {
+			ingestNanos = append(ingestNanos, k.IngestUnixNano)
+		}
+	}
+
+	var jsonCache []byte
+	var msgpackCache []byte
+	for _, clientID := range clientIDs {
+		clientIDStr := string(clientID)
+		encoding, exists := cm.clientEncoding(clientIDStr)
+		if !exists || cm.isControlClient(clientIDStr) {
+			continue
+		}
+
+		msg, ok := cm.encodePayloadForClient(clientID, encoding, HeaderOHLCVBin, updates, &jsonCache, &msgpackCache, metrics.TypeOHLCV)
+		if !ok {
+			continue
+		}
+		cm.enqueueSocketSend(outboundEnvelope{
+			msg:         msg,
+			metricType:  metrics.TypeOHLCV,
 			ingestNanos: ingestNanos,
 		})
 	}
@@ -323,6 +361,8 @@ func (cm *ClientManager) encodePayloadForClient(
 		switch msgTypeHeader {
 		case HeaderTradeBin:
 			return zmq4.NewMsgFrom(clientID, headerTradeBinFrame, *msgpackCache), true
+		case HeaderOHLCVBin:
+			return zmq4.NewMsgFrom(clientID, headerOHLCVBinFrame, *msgpackCache), true
 		case HeaderOBBin:
 			return zmq4.NewMsgFrom(clientID, headerOBBinFrame, *msgpackCache), true
 		}
@@ -499,7 +539,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth, OrderBookMode: req.OrderBookMode, OrderBookFreq: req.OrderBookFreq, PushIntervalMS: req.PushIntervalMS})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "subscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), Interval: req.Interval, CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth, OrderBookMode: req.OrderBookMode, OrderBookFreq: req.OrderBookFreq, PushIntervalMS: req.PushIntervalMS})
 		}
 		return
 	case "unsubscribe_bulk":
@@ -525,7 +565,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 			if symbol == "" {
 				continue
 			}
-			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth, OrderBookMode: req.OrderBookMode, OrderBookFreq: req.OrderBookFreq, PushIntervalMS: req.PushIntervalMS})
+			cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: "unsubscribe", RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), Interval: req.Interval, CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth, OrderBookMode: req.OrderBookMode, OrderBookFreq: req.OrderBookFreq, PushIntervalMS: req.PushIntervalMS})
 		}
 		return
 	case "subscribe_all":
@@ -555,7 +595,7 @@ func (cm *ClientManager) handleMessage(clientID []byte, payload []byte) {
 		return
 	}
 
-	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth, OrderBookMode: req.OrderBookMode, OrderBookFreq: req.OrderBookFreq, PushIntervalMS: req.PushIntervalMS})
+	cm.enqueueRequest(&shared_types.ClientRequest{ClientID: clientID, Action: req.Action, Scope: req.Scope, RequestID: req.RequestID, Sticky: req.Sticky, Exchange: req.Exchange, Symbol: req.Symbol, MarketType: req.MarketType, DataType: req.DataType, Encoding: currentClientEncoding(cm, clientIDStr), Interval: req.Interval, CacheN: req.CacheN, OrderBookDepth: req.OrderBookDepth, OrderBookMode: req.OrderBookMode, OrderBookFreq: req.OrderBookFreq, PushIntervalMS: req.PushIntervalMS})
 }
 
 func (cm *ClientManager) enqueueRequest(req *shared_types.ClientRequest) {

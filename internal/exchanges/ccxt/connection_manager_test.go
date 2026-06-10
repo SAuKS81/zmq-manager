@@ -190,6 +190,32 @@ func TestConnectionManagerStartStopNoDeadlock(t *testing.T) {
 	}
 }
 
+func TestConnectionManagerUsesTradeBatchModeFromConfig(t *testing.T) {
+	batchCM := NewConnectionManager(
+		"gate",
+		"spot",
+		ExchangeConfig{Enabled: true, UseForSymbols: true},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+	if !batchCM.shouldUseTradeBatchMode() {
+		t.Fatal("expected trade batch mode when UseForSymbols is enabled")
+	}
+
+	singleCM := NewConnectionManager(
+		"mexc",
+		"spot",
+		ExchangeConfig{Enabled: true, UseForSymbols: false},
+		make(chan *shared_types.TradeUpdate, 1),
+		make(chan *shared_types.OrderBookUpdate, 1),
+		make(chan *shared_types.StreamStatusEvent, 1),
+	)
+	if singleCM.shouldUseTradeBatchMode() {
+		t.Fatal("expected single-watch mode when UseForSymbols is disabled")
+	}
+}
+
 func TestTradeShardCapacityUsesBatchSizeWhenOnlyOneBatchPerShardIsAllowed(t *testing.T) {
 	cm := NewConnectionManager(
 		"kucoin",

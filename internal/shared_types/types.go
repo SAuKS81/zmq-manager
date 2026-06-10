@@ -35,6 +35,25 @@ type TradeUpdate struct {
 	DataType       string  `json:"data_type" msgpack:"dt"`
 }
 
+// OHLCVUpdate ist die normalisierte Candle-/Kline-Struktur.
+type OHLCVUpdate struct {
+	Exchange       string  `json:"exchange" msgpack:"e"`
+	Symbol         string  `json:"symbol" msgpack:"s"`
+	MarketType     string  `json:"market_type" msgpack:"m"`
+	Interval       string  `json:"interval" msgpack:"i"`
+	Timestamp      int64   `json:"timestamp" msgpack:"t"`
+	GoTimestamp    int64   `json:"go_timestamp" msgpack:"gt"`
+	IngestUnixNano int64   `json:"-" msgpack:"-"`
+	Open           float64 `json:"open" msgpack:"o"`
+	High           float64 `json:"high" msgpack:"h"`
+	Low            float64 `json:"low" msgpack:"l"`
+	Close          float64 `json:"close" msgpack:"c"`
+	Volume         float64 `json:"volume" msgpack:"v"`
+	Turnover       float64 `json:"turnover,omitempty" msgpack:"to,omitempty"`
+	Confirm        bool    `json:"confirm" msgpack:"cf"`
+	DataType       string  `json:"data_type" msgpack:"dt"`
+}
+
 // ClientRequest
 type ClientRequest struct {
 	ClientID       []byte `json:"-" msgpack:"-"` // Wird nicht gesendet
@@ -47,6 +66,7 @@ type ClientRequest struct {
 	MarketType     string `json:"market_type"`
 	DataType       string `json:"data_type"`
 	Encoding       string `json:"encoding,omitempty"`
+	Interval       string `json:"interval,omitempty"`
 	CacheN         int    `json:"cache_n,omitempty"`
 	OrderBookDepth int    `json:"depth,omitempty"`
 	OrderBookMode  string `json:"orderbook_mode,omitempty"`
@@ -65,6 +85,7 @@ type BulkClientRequest struct {
 	MarketType     string   `json:"market_type"`
 	DataType       string   `json:"data_type"`
 	Encoding       string   `json:"encoding,omitempty"`
+	Interval       string   `json:"interval,omitempty"`
 	CacheN         int      `json:"cache_n,omitempty"`
 	OrderBookDepth int      `json:"depth,omitempty"`
 	OrderBookMode  string   `json:"orderbook_mode,omitempty"`
@@ -97,6 +118,7 @@ type StreamStatusEvent struct {
 	Exchange   string   `json:"exchange,omitempty"`
 	MarketType string   `json:"market_type,omitempty"`
 	DataType   string   `json:"data_type,omitempty"`
+	Interval   string   `json:"interval,omitempty"`
 	Symbol     string   `json:"symbol,omitempty"`
 	Symbols    []string `json:"symbols,omitempty"`
 	Adapter    string   `json:"adapter,omitempty"`
@@ -113,6 +135,7 @@ type RuntimeSubscriptionItem struct {
 	MarketType string `json:"market_type"`
 	Symbol     string `json:"symbol"`
 	DataType   string `json:"data_type"`
+	Interval   string `json:"interval,omitempty"`
 	Adapter    string `json:"adapter"`
 	Encoding   string `json:"encoding,omitempty"`
 	CacheN     int    `json:"cache_n,omitempty"`
@@ -128,6 +151,7 @@ type SubscriptionHealthItem struct {
 	MarketType       string  `json:"market_type"`
 	Symbol           string  `json:"symbol"`
 	DataType         string  `json:"data_type"`
+	Interval         string  `json:"interval,omitempty"`
 	Status           string  `json:"status"`
 	LastMessageAgeMS int64   `json:"last_message_age_ms"`
 	LastMessageTS    int64   `json:"last_message_ts,omitempty"`

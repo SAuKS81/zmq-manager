@@ -24,6 +24,7 @@ type runtimeKey struct {
 	MarketType string
 	Symbol     string
 	DataType   string
+	Interval   string
 }
 
 type runtimeHealthState struct {
@@ -89,6 +90,26 @@ func (rt *runtimeTracker) recordOrderBookForSymbol(ob *shared_types.OrderBookUpd
 		Symbol:     symbol,
 		DataType:   "orderbooks",
 	}, ob.Timestamp, ob.IngestUnixNano)
+}
+
+func (rt *runtimeTracker) recordOHLCV(kline *shared_types.OHLCVUpdate) {
+	if kline == nil {
+		return
+	}
+	rt.recordOHLCVForSymbol(kline, kline.Symbol)
+}
+
+func (rt *runtimeTracker) recordOHLCVForSymbol(kline *shared_types.OHLCVUpdate, symbol string) {
+	if kline == nil || symbol == "" {
+		return
+	}
+	rt.recordMessage(runtimeKey{
+		Exchange:   kline.Exchange,
+		MarketType: kline.MarketType,
+		Symbol:     symbol,
+		DataType:   "ohlcv",
+		Interval:   kline.Interval,
+	}, kline.Timestamp, kline.IngestUnixNano)
 }
 
 func (rt *runtimeTracker) recordMessage(key runtimeKey, eventTS int64, ingestUnixNano int64) {
@@ -161,6 +182,7 @@ func (rt *runtimeTracker) recordStatusForSymbol(event *shared_types.StreamStatus
 		MarketType: event.MarketType,
 		Symbol:     symbol,
 		DataType:   event.DataType,
+		Interval:   event.Interval,
 	}
 	state := rt.getOrCreateLocked(key)
 	if event.Message != "" {
@@ -207,6 +229,7 @@ func (rt *runtimeTracker) snapshotHealth(subs []shared_types.RuntimeSubscription
 			MarketType: sub.MarketType,
 			Symbol:     sub.Symbol,
 			DataType:   sub.DataType,
+			Interval:   sub.Interval,
 		}
 		state := rt.lookupStateLocked(key)
 
@@ -215,6 +238,7 @@ func (rt *runtimeTracker) snapshotHealth(subs []shared_types.RuntimeSubscription
 			MarketType: sub.MarketType,
 			Symbol:     sub.Symbol,
 			DataType:   sub.DataType,
+			Interval:   sub.Interval,
 			Status:     runtimeStatusDegraded,
 		}
 
@@ -393,7 +417,13 @@ func lessRuntimeHealth(a, b shared_types.SubscriptionHealthItem) bool {
 	if a.Symbol != b.Symbol {
 		return a.Symbol < b.Symbol
 	}
-	return a.DataType < b.DataType
+	if a.DataType != b.DataType {
+		return a.DataType < b.DataType
+	}
+	if a.Interval != b.Interval {
+		return a.Interval < b.Interval
+	}
+	return false
 }
 
 func maxInt64(a, b int64) int64 {

@@ -109,6 +109,49 @@ func TestCapabilitiesCatalogIncludesBybitNativeDepthParameter(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesCatalogIncludesBybitNativeOHLCVIntervals(t *testing.T) {
+	for _, exchange := range []string{"bybit_native", "binance_native"} {
+		item, ok := capabilityForExchange(exchange)
+		if !ok {
+			t.Fatalf("expected %s capability entry", exchange)
+		}
+
+		hasOHLCV := false
+		for _, dataType := range item.DataTypes {
+			if dataType == "ohlcv" {
+				hasOHLCV = true
+				break
+			}
+		}
+		if !hasOHLCV {
+			t.Fatalf("expected %s data_types to include ohlcv, got %+v", exchange, item.DataTypes)
+		}
+
+		for _, marketType := range []string{"spot", "swap"} {
+			channel, ok := item.Channels[marketType]["ohlcv"]
+			if !ok {
+				t.Fatalf("expected %s %s ohlcv channel, got %+v", exchange, marketType, item.Channels)
+			}
+			intervalParam, ok := channel.Parameters["interval"]
+			if !ok {
+				t.Fatalf("expected interval parameter for %s %s ohlcv, got %+v", exchange, marketType, channel.Parameters)
+			}
+			if intervalParam.Type != "string" || intervalParam.Default != "1m" {
+				t.Fatalf("unexpected interval parameter metadata: %+v", intervalParam)
+			}
+			want := []string{"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"}
+			if len(intervalParam.AllowedStringValues) != len(want) {
+				t.Fatalf("unexpected interval values: %+v", intervalParam.AllowedStringValues)
+			}
+			for i, interval := range want {
+				if intervalParam.AllowedStringValues[i] != interval {
+					t.Fatalf("expected interval %s at index %d, got %+v", interval, i, intervalParam.AllowedStringValues)
+				}
+			}
+		}
+	}
+}
+
 func TestCapabilitiesCatalogIncludesKucoinNativeTrades(t *testing.T) {
 	item, ok := capabilityForExchange("kucoin_native")
 	if !ok {

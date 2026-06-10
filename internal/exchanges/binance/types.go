@@ -18,6 +18,11 @@ type wsOrderBookCombined struct {
 	Data   wsOrderBookPartial `json:"data"`
 }
 
+type wsKlineCombined struct {
+	Stream string  `json:"stream"`
+	Data   wsKline `json:"data"`
+}
+
 type wsTrade struct {
 	EventType    string `json:"e"`
 	EventTime    int64  `json:"E"`
@@ -27,6 +32,30 @@ type wsTrade struct {
 	Quantity     string `json:"q"`
 	TradeTime    int64  `json:"T"`
 	IsBuyerMaker bool   `json:"m"`
+}
+
+type wsKline struct {
+	EventType string      `json:"e"`
+	EventTime int64       `json:"E"`
+	Symbol    string      `json:"s"`
+	Kline     wsKlineData `json:"k"`
+}
+
+type wsKlineData struct {
+	StartTime        int64  `json:"t"`
+	CloseTime        int64  `json:"T"`
+	Symbol           string `json:"s"`
+	Interval         string `json:"i"`
+	Open             string `json:"o"`
+	Close            string `json:"c"`
+	High             string `json:"h"`
+	Low              string `json:"l"`
+	Volume           string `json:"v"`
+	TradeCount       int64  `json:"n"`
+	Closed           bool   `json:"x"`
+	QuoteVolume      string `json:"q"`
+	TakerBuyVolume   string `json:"V"`
+	TakerBuyTurnover string `json:"Q"`
 }
 
 type wsOrderBookLevel []string

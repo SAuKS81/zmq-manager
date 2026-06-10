@@ -30,6 +30,7 @@ Unterstuetzte Datenarten:
 
 - `trades`
 - `orderbooks`
+- `ohlcv`
 
 Unterstuetzte Adaptertypen:
 
@@ -42,7 +43,7 @@ Unterstuetzte Adaptertypen:
 
 Wichtige Batch-Regel:
 
-- Trades und Orderbooks werden gleichberechtigt ueber denselben direkten Sendepfad verteilt
+- Trades, Orderbooks und OHLCV werden gleichberechtigt ueber denselben direkten Sendepfad verteilt
 - es gibt im aktuellen Stand keinen degradierten Latest-Only-Orderbook-Pfad mehr
 - wenn die Sendqueue eines Clients ueberlaeuft, wird der Client zuerst gewarnt und bei erneutem Ueberlauf getrennt
 - Drops duerfen nie still passieren; sie werden explizit gezaehlt
@@ -54,7 +55,7 @@ Wichtige Versandregel:
   - maximal `32` Trades
   - oder maximal `10ms`
   - was zuerst eintritt
-- Orderbooks bleiben davon unberuehrt
+- Orderbooks und OHLCV bleiben davon unberuehrt
 
 ## 2. Wie der Broker gestartet wird
 
@@ -80,6 +81,13 @@ Der Broker startet zusaetzlich:
 
 - Prometheus Metrics: `http://127.0.0.1:6060/metrics`
 - pprof: `http://127.0.0.1:6060/debug/pprof/`
+
+Windows-Build:
+
+```powershell
+go build -o dist\zmq_manager_windows_amd64.exe .\cmd\broker
+go build -o dist\smoke_client_windows_amd64.exe .\clients\smoke_client.go
+```
 
 ## 3. Wo der Broker lauscht
 
@@ -119,7 +127,7 @@ Optionale Client-Rolle:
 
 - `client_role: "feed"`:
   - Default
-  - darf Trades und Orderbooks subscriben
+  - darf Trades, Orderbooks und OHLCV subscriben
 - `client_role: "control"`:
   - fuer Web-/Admin-/Command-Bridge-Clients
   - erhaelt immer nur Control-/Snapshot-/Statusverkehr
@@ -199,7 +207,7 @@ Bedeutung:
 
 - der Control-Client hinterlegt den gewuenschten Stream-Zustand im Broker
 - der Broker baut die Subscription intern auf
-- der anfordernde Control-Client bekommt trotzdem keine Trades/Orderbooks zugestellt
+- der anfordernde Control-Client bekommt trotzdem keine Market-Data zugestellt
 - die Subscription bleibt auch ueber Disconnects dieses Control-Clients bestehen
 - entfernt wird sie nur per explizitem `unsubscribe` oder `unsubscribe_bulk` mit `sticky: true`
 
@@ -230,6 +238,20 @@ Mit Orderbook-Tiefe:
 }
 ```
 
+Mit nativer OHLCV:
+
+```json
+{
+  "action": "subscribe",
+  "exchange": "binance_native",
+  "symbol": "BTC/USDT:USDT",
+  "market_type": "swap",
+  "data_type": "ohlcv",
+  "interval": "1m",
+  "encoding": "msgpack"
+}
+```
+
 Wichtig fuer native Orderbooks:
 
 - Binance native verwendet die dokumentierten Stufen `5`, `10`, `20`
@@ -244,6 +266,25 @@ Wichtig fuer native Orderbooks:
   - `binance_native depth=7 -> 10`
   - `bybit_native depth=5 -> 50`
 - Werte oberhalb der maximalen dokumentierten Tiefe werden abgelehnt
+
+Wichtig fuer native OHLCV:
+
+- OHLCV ist aktuell fuer `bybit_native` und `binance_native` implementiert
+- `market_type` kann `spot` oder `swap` sein
+- `interval` ist Pflicht im Sinne der Subscription-Spezifikation; wenn es fehlt, verwendet der Broker `1m`
+- erlaubte Intervalle sind:
+  - `1m`
+  - `3m`
+  - `5m`
+  - `15m`
+  - `30m`
+  - `1h`
+  - `4h`
+  - `1d`
+- der Subscription-Key enthaelt das Intervall, daher koennen z. B. `BTC/USDT:USDT` mit `1m` und `5m` parallel laufen
+- ungueltige Intervalle werden mit `stream_subscribe_failed` und `reason=invalid_interval` abgelehnt
+- Binance-native sendet intern kombinierte Streams wie `btcusdt@kline_1m`
+- Bybit-native sendet intern Topics wie `kline.1.BTCUSDT`
 
 ### 5.2 Einzel-Unsubscribe
 
@@ -295,6 +336,20 @@ Hinweise:
 - `10` ist ein expliziter Opt-in fuer dichtere Updates
 - der Broker akzeptiert fuer bestehende Tools weiterhin auch das aeltere Feld `frequency`, das Webinterface sollte aber `push_interval_ms` verwenden
 
+Nativer OHLCV-Bulk-Request:
+
+```json
+{
+  "action": "subscribe_bulk",
+  "exchange": "binance_native",
+  "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+  "market_type": "swap",
+  "data_type": "ohlcv",
+  "interval": "1m",
+  "encoding": "msgpack"
+}
+```
+
 ### 5.4 Subscribe-All
 
 `subscribe_all` ist aktuell nicht produktiv unterstuetzt.
@@ -311,6 +366,19 @@ Der Broker lehnt diesen Request explizit ab und erwartet stattdessen `subscribe_
   "symbols": ["BTC/USDT", "ETH/USDT"],
   "market_type": "spot",
   "data_type": "trades"
+}
+```
+
+Bei OHLCV muss `interval` beim Unsubscribe identisch zum Subscribe sein:
+
+```json
+{
+  "action": "unsubscribe_bulk",
+  "exchange": "bybit_native",
+  "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+  "market_type": "swap",
+  "data_type": "ohlcv",
+  "interval": "1m"
 }
 ```
 
@@ -379,6 +447,7 @@ Semantik:
   - ein Wert = konsistent
   - `mixed` = mehrere Clients mit unterschiedlichem Encoding
 - `depth` wird nur bei Orderbooks gesetzt
+- `interval` wird nur bei OHLCV gesetzt
 - `owners` und `clients` sind in der aktuellen Version identisch und entsprechen der Anzahl abonnierter Clients auf diesen Join-Key
 
 ### 5.7 Health-Snapshot pro Subscription
@@ -430,7 +499,7 @@ Latenz-Semantik:
 
 - `latency_ms`:
   - echte Exchange-Latenz
-  - Zeit vom Exchange-Timestamp des Trades/Orderbooks bis zum Eintreffen im Broker
+  - Zeit vom Exchange-Timestamp des Trades/Orderbooks/OHLCV-Events bis zum Eintreffen im Broker
 - `broker_latency_ms`:
   - interne Broker-Latenz
   - Zeit vom Broker-Ingest bis zum Snapshot-/Dispatch-Pfad
@@ -479,6 +548,7 @@ Warum dieser Endpunkt bevorzugt werden sollte:
   - `market_type`
   - `symbol`
   - `data_type`
+  - `interval` fuer OHLCV
 
 ### 5.9 Capabilities-Snapshot
 
@@ -574,6 +644,37 @@ Der Endpunkt ist fuer das UI die Quelle fuer:
   - `supports_orderbook_unwatch`
   - `supports_orderbook_batch_unwatch`
 
+Native OHLCV wird in den Capabilities fuer `bybit_native` und `binance_native` als eigener Channel gemeldet:
+
+```json
+{
+  "exchange": "binance",
+  "manager_exchange": "binance_native",
+  "adapter": "native",
+  "market_types": ["spot", "swap"],
+  "data_types": ["trades", "orderbooks", "ohlcv"],
+  "channels": {
+    "swap": {
+      "ohlcv": {
+        "subscribe": true,
+        "unsubscribe": true,
+        "bulk_subscribe": true,
+        "bulk_unsubscribe": true,
+        "supports_request_id": true,
+        "parameters": {
+          "interval": {
+            "type": "string",
+            "required": false,
+            "default": "1m",
+            "allowed_string_values": ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 Wichtige UI-Regel:
 
 - das Frontend sollte fuer neue Adapter primaer `channels[market_type][data_type].parameters` auswerten
@@ -618,10 +719,11 @@ Wichtig:
 
 ## 7. Welche Antworten der Broker liefert
 
-Der Broker sendet drei Hauptarten von Nutzdaten:
+Der Broker sendet vier Hauptarten von Nutzdaten:
 
 - Trade-Micro-Batches
 - Orderbook-Batches
+- OHLCV-Batches
 - Lifecycle-/Status-Events
 
 Zusatz:
@@ -638,6 +740,7 @@ Bei `encoding=json` erhaelt der Client JSON-Payloads.
 
 Trades kommen im aktuellen Stand als kleine Arrays aus dem Trade-Micro-Batch-Fenster.
 Orderbooks kommen ebenfalls als Arrays von normalisierten Objekten.
+OHLCV kommt ebenfalls als Array von normalisierten Candle-Objekten.
 
 ### 8.2 Msgpack/Binary
 
@@ -650,6 +753,7 @@ Header:
 
 - `T` = Trade-Batch
 - `O` = Orderbook-Batch
+- `K` = OHLCV-/Kline-Batch
 - `J` = JSON-Control-Payload, z. B. Errors, Snapshots, Lifecycle-Events
 
 Das wird in [internal/broker/client_manager.go](./internal/broker/client_manager.go) und [clients/smoke_client.go](./clients/smoke_client.go) sichtbar.
@@ -807,6 +911,74 @@ Hinweise:
 - die effektive Tiefe haengt vom Adapter und der ausgehandelten `depth` ab
 - interne Felder wie `UpdateType` und `IngestUnixNano` werden nicht an Clients ausgeliefert
 
+### OHLCVUpdate
+
+OHLCV/Klines werden ebenfalls als Arrays gesendet.
+
+JSON-Felder:
+
+- `exchange`
+- `symbol`
+- `market_type`
+- `interval`
+- `timestamp`
+- `go_timestamp`
+- `open`
+- `high`
+- `low`
+- `close`
+- `volume`
+- `turnover`
+- `confirm`
+- `data_type`
+
+JSON-Beispiel:
+
+```json
+[
+  {
+    "exchange": "bybit",
+    "symbol": "BTC/USDT:USDT",
+    "market_type": "swap",
+    "interval": "1m",
+    "timestamp": 1772300000000,
+    "go_timestamp": 1772300000123,
+    "open": 91200.0,
+    "high": 91300.0,
+    "low": 91150.0,
+    "close": 91280.5,
+    "volume": 123.45,
+    "turnover": 11234567.89,
+    "confirm": false,
+    "data_type": "ohlcv"
+  }
+]
+```
+
+Msgpack-Key-Mapping fuer `OHLCVUpdate`:
+
+- `e` = `exchange`
+- `s` = `symbol`
+- `m` = `market_type`
+- `i` = `interval`
+- `t` = `timestamp`
+- `gt` = `go_timestamp`
+- `o` = `open`
+- `h` = `high`
+- `l` = `low`
+- `c` = `close`
+- `v` = `volume`
+- `to` = `turnover`
+- `cf` = `confirm`
+- `dt` = `data_type`
+
+Hinweise:
+
+- `timestamp` ist der Candle-Startzeitpunkt
+- `confirm=true` bedeutet, dass Bybit die Kerze als geschlossen meldet
+- `data_type` ist fuer OHLCV immer `ohlcv`
+- interne Felder wie `IngestUnixNano` werden nicht an Clients ausgeliefert
+
 ## 10. Lifecycle- und Status-Events
 
 Seit `P7` verteilt der Broker explizite Stream-Status-Events an betroffene Clients.
@@ -955,6 +1127,38 @@ Wichtige Regeln:
   - `50`
   - `200`
   - `1000`
+- native OHLCV/Kline wird fuer `spot` und `swap` unterstuetzt
+- Bybit-Kline-Topics werden intern als `kline.{interval}.{symbol}` gesendet
+- interne Intervall-Uebersetzung:
+  - `1m -> 1`
+  - `3m -> 3`
+  - `5m -> 5`
+  - `15m -> 15`
+  - `30m -> 30`
+  - `1h -> 60`
+  - `4h -> 240`
+  - `1d -> D`
+- Status-/Health-Keys enthalten bei OHLCV immer das `interval`
+
+### Binance native
+
+- native Trades und Orderbooks laufen ueber kombinierte Binance-Streams
+- native Orderbook-Stufen folgen der Binance-Doku:
+  - `5`
+  - `10`
+  - `20`
+- native OHLCV/Kline wird fuer `spot` und `swap` unterstuetzt
+- Binance-Kline-Streams werden intern als `{symbol}@kline_{interval}` gesendet, z. B. `btcusdt@kline_1m`
+- erlaubte Intervalle sind:
+  - `1m`
+  - `3m`
+  - `5m`
+  - `15m`
+  - `30m`
+  - `1h`
+  - `4h`
+  - `1d`
+- Status-/Health-Keys enthalten bei OHLCV immer das `interval`
 
 ### Bitget native
 
@@ -1031,7 +1235,7 @@ Wichtige Betriebsmetriken:
 Der Runtime-Health-Snapshot wird broker-seitig aus drei Quellen aufgebaut:
 
 - aktuelle deduplizierte aktive Subscription-Maps
-- beobachtete eingehende Trade-/Orderbook-Nachrichten
+- beobachtete eingehende Trade-/Orderbook-/OHLCV-Nachrichten
 - Lifecycle-Events wie `stream_reconnecting` und `stream_restored`
 
 Das bedeutet:
@@ -1066,7 +1270,7 @@ Wichtige Regel:
 1. Broker starten
 2. Client verbindet sich
 3. Client setzt optional Encoding
-4. Client subscribed Trades/Orderbooks
+4. Client subscribed Trades/Orderbooks/OHLCV
 5. Broker routed Requests an passenden Adapter
 6. Adapter liefert normalisierte Daten
 7. Broker verteilt Daten an abonnierte Clients
@@ -1124,7 +1328,19 @@ Pruefen:
 - nativer vs. CCXT-Pfad korrekt?
 - exakte Route wurde beibehalten?
 - `DISCONNECT_SENT` im Smoke-Log?
-- `STATS` faellt auf `Trades: 0 | OrderBooks: 0`?
+- `STATS` faellt auf `Trades: 0 | OrderBooks: 0 | OHLCV: 0`?
+- bei Python-ZMQ-Clients kein hartes `sock.close(0)` direkt nach `disconnect` verwenden, sonst koennen ausstehende `unsubscribe_bulk`/`disconnect`-Frames verworfen werden
+
+### Native OHLCV liefert keine Daten
+
+Pruefen:
+
+- `exchange` muss `bybit_native` oder `binance_native` sein, nicht `bybit`/`binance`
+- `data_type` muss `ohlcv` sein
+- `interval` muss einer der erlaubten Werte sein
+- Spot-Symbole haben Format `BTC/USDT`
+- Swap-Symbole haben Format `BTC/USDT:USDT`
+- `subscription_health_snapshot` bzw. `get_runtime_snapshot` zeigt OHLCV getrennt nach `interval`
 
 ### Bitget reagiert empfindlich
 
@@ -1149,6 +1365,14 @@ Wichtig:
   - [clients/smoke_client.go](./clients/smoke_client.go)
 - Einfacher Python-Rate-Client fuer native Trades:
   - [clients/native_rate_client.py](./clients/native_rate_client.py)
+- Python-Smoke-Client fuer Bybit-native OHLCV mit CCXT-Markets:
+  - [clients/bybit_ohlcv_ccxt_smoke.py](./clients/bybit_ohlcv_ccxt_smoke.py)
+- Bybit-native OHLCV:
+  - [internal/exchanges/bybit/ohlcv_connection_manager.go](./internal/exchanges/bybit/ohlcv_connection_manager.go)
+  - [internal/exchanges/bybit/ohlcv_shard_worker.go](./internal/exchanges/bybit/ohlcv_shard_worker.go)
+- Binance-native OHLCV:
+  - [internal/exchanges/binance/ohlcv_connection_manager.go](./internal/exchanges/binance/ohlcv_connection_manager.go)
+  - [internal/exchanges/binance/ohlcv_shard_worker.go](./internal/exchanges/binance/ohlcv_shard_worker.go)
 - Baseline:
   - [scripts/baseline_ingest.sh](./scripts/baseline_ingest.sh)
   - [scripts/README_baseline.md](./scripts/README_baseline.md)
@@ -1161,6 +1385,7 @@ Stand heute:
 
 - Baseline-v2 Pfad ist abgeschlossen
 - P7 Lifecycle-Hardening ist abgeschlossen
+- Bybit-native OHLCV fuer `spot` und `swap` ist implementiert
 - Beta-Deployment soll weiterhin Reconnect-/Status-Verhalten beobachten
 - Bitget-Orderbook bleibt bewusst ein spaeterer Doku-/Implementierungspfad
 
@@ -1199,3 +1424,51 @@ python3 clients/native_rate_client.py --symbols BTC/USDT,ETH/USDT,SOL/USDT
 python3 clients/native_rate_client.py --market-type swap --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
 python3 clients/native_rate_client.py --broker tcp://127.0.0.1:5555
 ```
+
+## 22. Bybit-native OHLCV Python-Smoke-Client
+
+Fuer einen schnellen OHLCV-Test ohne manuell gepflegte Symbol-Dateien gibt es:
+
+- [clients/bybit_ohlcv_ccxt_smoke.py](./clients/bybit_ohlcv_ccxt_smoke.py)
+
+Der Client:
+
+- laedt Bybit-Markets ueber `ccxt`
+- filtert Spot und Swap auf `USDT`
+- subscribed `bybit_native` mit `data_type=ohlcv`
+- verwendet `interval`, standardmaessig `1m`
+- decodiert `K`-Frames bei `msgpack`/`binary`
+- sendet am Ende `unsubscribe_bulk` und `disconnect`
+
+Voraussetzungen:
+
+```bash
+pip install ccxt pyzmq msgpack
+```
+
+Windows-Beispiel, wenn der Broker unter `tcp://127.0.0.1:5555` laeuft:
+
+```powershell
+python .\clients\bybit_ohlcv_ccxt_smoke.py `
+  --broker tcp://127.0.0.1:5555 `
+  --market-types spot,swap `
+  --quote USDT `
+  --limit-symbols 0 `
+  --bulk-size 10 `
+  --interval 1m `
+  --encoding msgpack `
+  --duration 60 `
+  --rate-log 10
+```
+
+Kleiner erster Test:
+
+```powershell
+python .\clients\bybit_ohlcv_ccxt_smoke.py --limit-symbols 20 --duration 30
+```
+
+Hinweise:
+
+- `--limit-symbols 0` bedeutet alle gefundenen Symbole pro Market-Type
+- `reason=` bei `stream_subscribe_acked` ist normal; ein Reason wird nur bei Fehlern/Reconnects gesetzt
+- wenn nach Laufende noch OHLCV-Events kommen, zuerst pruefen, ob der Client `DISCONNECT_SENT` geloggt hat und ob der Broker danach `OHLCV: 0` in `STATS` erreicht

@@ -14,6 +14,8 @@ func canonicalExchangeName(exchangeName string) string {
 		return "htx"
 	case "gateio":
 		return "gate"
+	case "woox":
+		return "woo"
 	default:
 		return strings.ToLower(exchangeName)
 	}

@@ -28,22 +28,28 @@ type SubscriptionManager struct {
 	DistributionCh                 chan<- *DistributionMessage
 	TradeDataCh                    chan *shared_types.TradeUpdate
 	OrderBookCh                    chan *shared_types.OrderBookUpdate
+	OHLCVCh                        chan *shared_types.OHLCVUpdate
 	tradeSubscriptions             map[string]map[string]bool
 	orderBookSubscriptions         map[string]map[string]bool
+	ohlcvSubscriptions             map[string]map[string]bool
 	tradeSubscriptionRoutes        map[string]string
 	tradeSubscriptionCacheN        map[string]int
 	orderBookSubscriptionRoutes    map[string]string
+	ohlcvSubscriptionRoutes        map[string]string
 	orderBookSubscriptionDepths    map[string]int
 	orderBookSubscriptionModes     map[string]string
 	tradeSubscriptionEncodings     map[string]string
 	orderBookSubscriptionEncodings map[string]string
+	ohlcvSubscriptionEncodings     map[string]string
 	stickyTradeSubscriptions       map[string]bool
 	stickyOrderBookSubscriptions   map[string]bool
+	stickyOHLCVSubscriptions       map[string]bool
 	exchangeRegistry               map[string]exchanges.Exchange
 	wildcardSubscribers            map[string]map[string]bool
 	wildcardRoutes                 map[string]string
 	incomingTradeCounter           atomic.Uint64
 	incomingOBCounter              atomic.Uint64
+	incomingOHLCVCounter           atomic.Uint64
 	totalDataReceived              atomic.Uint64
 	runtimeTracker                 *runtimeTracker
 	pendingActivations             map[runtimeKey]pendingActivation
@@ -58,17 +64,22 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 		DistributionCh:                 distributionCh,
 		TradeDataCh:                    make(chan *shared_types.TradeUpdate, 10000),
 		OrderBookCh:                    make(chan *shared_types.OrderBookUpdate, 5000),
+		OHLCVCh:                        make(chan *shared_types.OHLCVUpdate, 5000),
 		tradeSubscriptions:             make(map[string]map[string]bool),
 		orderBookSubscriptions:         make(map[string]map[string]bool),
+		ohlcvSubscriptions:             make(map[string]map[string]bool),
 		tradeSubscriptionRoutes:        make(map[string]string),
 		tradeSubscriptionCacheN:        make(map[string]int),
 		orderBookSubscriptionRoutes:    make(map[string]string),
+		ohlcvSubscriptionRoutes:        make(map[string]string),
 		orderBookSubscriptionDepths:    make(map[string]int),
 		orderBookSubscriptionModes:     make(map[string]string),
 		tradeSubscriptionEncodings:     make(map[string]string),
 		orderBookSubscriptionEncodings: make(map[string]string),
+		ohlcvSubscriptionEncodings:     make(map[string]string),
 		stickyTradeSubscriptions:       make(map[string]bool),
 		stickyOrderBookSubscriptions:   make(map[string]bool),
+		stickyOHLCVSubscriptions:       make(map[string]bool),
 		exchangeRegistry:               make(map[string]exchanges.Exchange),
 		wildcardSubscribers:            make(map[string]map[string]bool),
 		wildcardRoutes:                 make(map[string]string),
@@ -77,8 +88,8 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 		requestContexts:                make(map[runtimeKey]requestOperationContext),
 		deployBatches:                  make(map[string]*deployBatchState),
 	}
-	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
-	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["bybit_native"] = bybit.NewBybitExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.OHLCVCh, sm.StatusCh)
+	sm.exchangeRegistry["binance_native"] = binance.NewBinanceExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.OHLCVCh, sm.StatusCh)
 	sm.exchangeRegistry["bitget_native"] = bitget.NewBitgetExchange(sm.RequestCh, sm.TradeDataCh, sm.StatusCh)
 	sm.exchangeRegistry["bitmart_native"] = bitmart.NewBitmartExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["mexc_native"] = mexc.NewMexcExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
@@ -100,9 +111,11 @@ func (sm *SubscriptionManager) Run() {
 		tradeBatchMaxSize = 32
 		tradeBatchWindow  = 10 * time.Millisecond
 		obBatchMaxSize    = 250
+		ohlcvBatchMaxSize = 128
 	)
 	tradeBatch := make([]*shared_types.TradeUpdate, 0, tradeBatchMaxSize)
 	obBatch := make([]*shared_types.OrderBookUpdate, 0, obBatchMaxSize)
+	ohlcvBatch := make([]*shared_types.OHLCVUpdate, 0, ohlcvBatchMaxSize)
 
 	for {
 		select {
@@ -167,6 +180,30 @@ func (sm *SubscriptionManager) Run() {
 
 			sm.processOrderBookBatch(obBatch)
 			obBatch = obBatch[:0]
+
+		case firstOHLCV := <-sm.OHLCVCh:
+			sm.incomingOHLCVCounter.Add(1)
+			sm.totalDataReceived.Add(1)
+			firstOHLCV.DataType = "ohlcv"
+			metrics.RecordIngest(firstOHLCV.Exchange, metrics.TypeOHLCV)
+			ohlcvBatch = append(ohlcvBatch, firstOHLCV)
+
+		OHLCVLoop:
+			for len(ohlcvBatch) < ohlcvBatchMaxSize {
+				select {
+				case nextOHLCV := <-sm.OHLCVCh:
+					sm.incomingOHLCVCounter.Add(1)
+					sm.totalDataReceived.Add(1)
+					nextOHLCV.DataType = "ohlcv"
+					metrics.RecordIngest(nextOHLCV.Exchange, metrics.TypeOHLCV)
+					ohlcvBatch = append(ohlcvBatch, nextOHLCV)
+				default:
+					break OHLCVLoop
+				}
+			}
+
+			sm.processOHLCVBatch(ohlcvBatch)
+			ohlcvBatch = ohlcvBatch[:0]
 		}
 	}
 }
@@ -201,6 +238,15 @@ func (sm *SubscriptionManager) processStatusEvent(event *shared_types.StreamStat
 		}
 		for _, alias := range runtimeSymbolAliases(event.Exchange, symbol, event.MarketType) {
 			subID := getSubscriptionID(event.Exchange, alias, event.MarketType)
+			if event.DataType == "ohlcv" {
+				subID = getOHLCVSubscriptionID(event.Exchange, alias, event.MarketType, event.Interval)
+				if clients, ok := sm.ohlcvSubscriptions[subID]; ok {
+					for clientID := range clients {
+						targetClients[clientID] = true
+					}
+				}
+				continue
+			}
 			if event.DataType == "orderbooks" {
 				if clients, ok := sm.orderBookSubscriptions[subID]; ok {
 					for clientID := range clients {
@@ -376,6 +422,69 @@ func (sm *SubscriptionManager) processOrderBookBatch(batch []*shared_types.Order
 	}
 }
 
+func (sm *SubscriptionManager) processOHLCVBatch(batch []*shared_types.OHLCVUpdate) {
+	if len(batch) == 0 {
+		return
+	}
+
+	clientBatches := make(map[string][]*shared_types.OHLCVUpdate)
+
+	for _, kline := range batch {
+		for _, alias := range runtimeSymbolAliases(kline.Exchange, kline.Symbol, kline.MarketType) {
+			sm.runtimeTracker.recordOHLCVForSymbol(kline, alias)
+			subID := getOHLCVSubscriptionID(kline.Exchange, alias, kline.MarketType, kline.Interval)
+			if clients, ok := sm.ohlcvSubscriptions[subID]; ok {
+				for clientIDStr := range clients {
+					clientBatches[clientIDStr] = append(clientBatches[clientIDStr], kline)
+					routeKey := getClientRouteKey(clientIDStr, subID)
+					exactExchange := sm.ohlcvSubscriptionRoutes[routeKey]
+					if exactExchange == "" {
+						exactExchange = kline.Exchange
+					}
+					sm.emitPendingActivation(runtimeKey{
+						Exchange:   exactExchange,
+						MarketType: kline.MarketType,
+						Symbol:     alias,
+						DataType:   "ohlcv",
+						Interval:   kline.Interval,
+					})
+				}
+			}
+		}
+	}
+
+	toRelease := append([]*shared_types.OHLCVUpdate(nil), batch...)
+	if len(clientBatches) == 0 {
+		for _, kline := range toRelease {
+			if kline != nil {
+				pools.PutOHLCVUpdate(kline)
+			}
+		}
+		return
+	}
+
+	var remaining atomic.Int32
+	remaining.Store(int32(len(clientBatches)))
+	onComplete := func() {
+		if remaining.Add(-1) != 0 {
+			return
+		}
+		for _, kline := range toRelease {
+			if kline != nil {
+				pools.PutOHLCVUpdate(kline)
+			}
+		}
+	}
+
+	for clientIDStr, updates := range clientBatches {
+		sm.DistributionCh <- &DistributionMessage{
+			ClientIDs:  [][]byte{[]byte(clientIDStr)},
+			RawPayload: updates,
+			OnComplete: onComplete,
+		}
+	}
+}
+
 func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if req.DataType == "" {
 		req.DataType = "trades"
@@ -392,11 +501,17 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	if sm.orderBookSubscriptionRoutes == nil {
 		sm.orderBookSubscriptionRoutes = make(map[string]string)
 	}
+	if sm.ohlcvSubscriptionRoutes == nil {
+		sm.ohlcvSubscriptionRoutes = make(map[string]string)
+	}
 	if sm.tradeSubscriptionEncodings == nil {
 		sm.tradeSubscriptionEncodings = make(map[string]string)
 	}
 	if sm.orderBookSubscriptionEncodings == nil {
 		sm.orderBookSubscriptionEncodings = make(map[string]string)
+	}
+	if sm.ohlcvSubscriptionEncodings == nil {
+		sm.ohlcvSubscriptionEncodings = make(map[string]string)
 	}
 	if sm.orderBookSubscriptionDepths == nil {
 		sm.orderBookSubscriptionDepths = make(map[string]int)
@@ -409,6 +524,12 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	}
 	if sm.stickyOrderBookSubscriptions == nil {
 		sm.stickyOrderBookSubscriptions = make(map[string]bool)
+	}
+	if sm.stickyOHLCVSubscriptions == nil {
+		sm.stickyOHLCVSubscriptions = make(map[string]bool)
+	}
+	if sm.ohlcvSubscriptions == nil {
+		sm.ohlcvSubscriptions = make(map[string]map[string]bool)
 	}
 	if sm.wildcardRoutes == nil {
 		sm.wildcardRoutes = make(map[string]string)
@@ -432,6 +553,11 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	}
 	exchangeNameForSubID := canonicalSubscriptionExchange(req.Exchange)
 	req.Symbol = canonicalSubscriptionSymbol(exchangeNameForSubID, req.Symbol, req.MarketType)
+	if req.DataType == "ohlcv" {
+		if normalizedInterval, ok := bybit.NormalizeUserKlineInterval(req.Interval); ok {
+			req.Interval = normalizedInterval
+		}
+	}
 	if req.Action == "subscribe_all" && req.DataType == "trades" {
 		wildcardID := exchangeNameForSubID + "-" + req.MarketType + "-all"
 		if _, ok := sm.wildcardSubscribers[wildcardID]; !ok {
@@ -441,12 +567,15 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		sm.wildcardRoutes[getClientRouteKey(string(req.ClientID), wildcardID)] = req.Exchange
 	}
 
-	subID := getSubscriptionID(exchangeNameForSubID, req.Symbol, req.MarketType)
+	subID := subscriptionIDForRequest(exchangeNameForSubID, req.Symbol, req.MarketType, req.DataType, req.Interval)
 	clientIDStr := string(req.ClientID)
 
 	var subMap map[string]map[string]bool
 	var encMap map[string]string
-	if req.DataType == "orderbooks" {
+	if req.DataType == "ohlcv" {
+		subMap = sm.ohlcvSubscriptions
+		encMap = sm.ohlcvSubscriptionEncodings
+	} else if req.DataType == "orderbooks" {
 		subMap = sm.orderBookSubscriptions
 		encMap = sm.orderBookSubscriptionEncodings
 	} else {
@@ -463,6 +592,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		MarketType: req.MarketType,
 		Symbol:     req.Symbol,
 		DataType:   req.DataType,
+		Interval:   req.Interval,
 	}
 	if validationReason := sm.validateRequestSpec(req); validationReason != "" {
 		if req.Action == "subscribe" && req.DataType == "orderbooks" {
@@ -474,6 +604,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			MarketType: req.MarketType,
 			Symbol:     req.Symbol,
 			DataType:   req.DataType,
+			Interval:   req.Interval,
 			Adapter:    adapterFromExchangeRoute(req.Exchange),
 			RequestID:  req.RequestID,
 			Status:     "failed",
@@ -493,6 +624,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			MarketType: req.MarketType,
 			Symbol:     req.Symbol,
 			DataType:   req.DataType,
+			Interval:   req.Interval,
 			Adapter:    adapterFromExchangeRoute(req.Exchange),
 			RequestID:  req.RequestID,
 			Status:     "failed",
@@ -518,7 +650,11 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 	existingDepth := 0
 	existingMode := ""
 	existingCacheN := 0
-	if req.DataType == "orderbooks" {
+	if req.DataType == "ohlcv" {
+		prevOwnerCount = sm.ohlcvOwnerCount(subID, req.Exchange)
+		existingSticky = sm.stickyOHLCVSubscriptions[routeKey]
+		existingExactExchange = sm.ohlcvSubscriptionRoutes[routeKey]
+	} else if req.DataType == "orderbooks" {
 		prevOwnerCount = sm.orderBookOwnerCount(subID, req.Exchange)
 		prevEffectiveDepth = sm.effectiveOrderBookDepth(subID, req.Exchange)
 		prevEffectiveMode = sm.effectiveOrderBookMode(subID, req.Exchange)
@@ -539,7 +675,9 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		sameEncoding := existingEncoding == req.Encoding
 		sameSticky := existingSticky == req.Sticky
 		sameParams := false
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			sameParams = true
+		} else if req.DataType == "orderbooks" {
 			sameParams = existingDepth == req.OrderBookDepth && existingMode == req.OrderBookMode
 		} else {
 			sameParams = existingCacheN == req.CacheN
@@ -571,7 +709,13 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		if req.Encoding != "" {
 			encMap[routeKey] = req.Encoding
 		}
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			if req.Sticky {
+				sm.stickyOHLCVSubscriptions[routeKey] = true
+			} else {
+				delete(sm.stickyOHLCVSubscriptions, routeKey)
+			}
+		} else if req.DataType == "orderbooks" {
 			if req.Sticky {
 				sm.stickyOrderBookSubscriptions[routeKey] = true
 			} else {
@@ -584,7 +728,9 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 				delete(sm.stickyTradeSubscriptions, routeKey)
 			}
 		}
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			sm.ohlcvSubscriptionRoutes[routeKey] = req.Exchange
+		} else if req.DataType == "orderbooks" {
 			sm.orderBookSubscriptionRoutes[routeKey] = req.Exchange
 			if req.OrderBookDepth > 0 {
 				sm.orderBookSubscriptionDepths[routeKey] = req.OrderBookDepth
@@ -603,7 +749,11 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			}
 		}
 		wasActive = sm.runtimeTracker.isActive(opKey)
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			if prevOwnerCount == 0 {
+				forwardReq = cloneClientRequest(req)
+			}
+		} else if req.DataType == "orderbooks" {
 			newEffectiveDepth := sm.effectiveOrderBookDepth(subID, req.Exchange)
 			newEffectiveMode := sm.effectiveOrderBookMode(subID, req.Exchange)
 			if prevOwnerCount == 0 || newEffectiveDepth != prevEffectiveDepth || newEffectiveMode != prevEffectiveMode {
@@ -627,6 +777,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			MarketType: req.MarketType,
 			Symbol:     req.Symbol,
 			DataType:   req.DataType,
+			Interval:   req.Interval,
 			Adapter:    adapterFromExchangeRoute(req.Exchange),
 			RequestID:  req.RequestID,
 			Status:     "acked",
@@ -639,6 +790,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 				MarketType: req.MarketType,
 				Symbol:     req.Symbol,
 				DataType:   req.DataType,
+				Interval:   req.Interval,
 				Adapter:    adapterFromExchangeRoute(req.Exchange),
 				RequestID:  req.RequestID,
 				Status:     runtimeStatusRunning,
@@ -649,7 +801,11 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		}
 	case "unsubscribe":
 		prevExactExchange := req.Exchange
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			if exact := sm.ohlcvSubscriptionRoutes[routeKey]; exact != "" {
+				prevExactExchange = exact
+			}
+		} else if req.DataType == "orderbooks" {
 			if exact := sm.orderBookSubscriptionRoutes[routeKey]; exact != "" {
 				prevExactExchange = exact
 			}
@@ -664,6 +820,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			MarketType: req.MarketType,
 			Symbol:     req.Symbol,
 			DataType:   req.DataType,
+			Interval:   req.Interval,
 			Adapter:    adapterFromExchangeRoute(req.Exchange),
 			RequestID:  req.RequestID,
 			Status:     runtimeStatusStopped,
@@ -675,7 +832,10 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 				delete(subMap, subID)
 			}
 		}
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			delete(sm.ohlcvSubscriptionRoutes, routeKey)
+			delete(sm.stickyOHLCVSubscriptions, routeKey)
+		} else if req.DataType == "orderbooks" {
 			delete(sm.orderBookSubscriptionRoutes, routeKey)
 			delete(sm.orderBookSubscriptionDepths, routeKey)
 			delete(sm.orderBookSubscriptionModes, routeKey)
@@ -687,7 +847,9 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		}
 		delete(encMap, routeKey)
 		currentOwnerCount := 0
-		if req.DataType == "orderbooks" {
+		if req.DataType == "ohlcv" {
+			currentOwnerCount = sm.ohlcvOwnerCount(subID, prevExactExchange)
+		} else if req.DataType == "orderbooks" {
 			currentOwnerCount = sm.orderBookOwnerCount(subID, prevExactExchange)
 		} else {
 			currentOwnerCount = sm.tradeOwnerCount(subID, prevExactExchange)
@@ -695,6 +857,8 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 		if currentOwnerCount == 0 {
 			forwardReq = cloneClientRequest(req)
 			forwardReq.Exchange = prevExactExchange
+		} else if req.DataType == "ohlcv" {
+			forwardReq = nil
 		} else if req.DataType == "orderbooks" {
 			newEffectiveDepth := sm.effectiveOrderBookDepth(subID, prevExactExchange)
 			newEffectiveMode := sm.effectiveOrderBookMode(subID, prevExactExchange)
@@ -720,6 +884,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			MarketType: req.MarketType,
 			Symbol:     req.Symbol,
 			DataType:   req.DataType,
+			Interval:   req.Interval,
 			Adapter:    adapterFromExchangeRoute(req.Exchange),
 			RequestID:  req.RequestID,
 			Status:     "acked",
@@ -766,6 +931,7 @@ func (sm *SubscriptionManager) handleRequest(req *shared_types.ClientRequest) {
 			MarketType: req.MarketType,
 			Symbol:     req.Symbol,
 			DataType:   req.DataType,
+			Interval:   req.Interval,
 			Adapter:    adapterFromExchangeRoute(req.Exchange),
 			RequestID:  req.RequestID,
 			Status:     runtimeStatusFailed,
@@ -793,6 +959,17 @@ func (sm *SubscriptionManager) shouldLogCCXTFallback(req *shared_types.ClientReq
 
 func getSubscriptionID(exchange, symbol, marketType string) string {
 	return exchange + "-" + marketType + "-" + symbol
+}
+
+func getOHLCVSubscriptionID(exchange, symbol, marketType, interval string) string {
+	return getSubscriptionID(exchange, symbol, marketType) + "|" + interval
+}
+
+func subscriptionIDForRequest(exchange, symbol, marketType, dataType, interval string) string {
+	if dataType == "ohlcv" {
+		return getOHLCVSubscriptionID(exchange, symbol, marketType, interval)
+	}
+	return getSubscriptionID(exchange, symbol, marketType)
 }
 
 func canonicalSubscriptionExchange(exchange string) string {
@@ -909,11 +1086,12 @@ func (sm *SubscriptionManager) logIncomingRate() {
 	for range ticker.C {
 		tradesCount := sm.incomingTradeCounter.Swap(0)
 		obCount := sm.incomingOBCounter.Swap(0)
+		ohlcvCount := sm.incomingOHLCVCounter.Swap(0)
 		totalCount := sm.totalDataReceived.Load()
 
 		log.Printf(
-			"[STATS] 10s Rate -> Trades: %d | OrderBooks: %d || Gesamt-Events: %d",
-			tradesCount, obCount, totalCount,
+			"[STATS] 10s Rate -> Trades: %d | OrderBooks: %d | OHLCV: %d || Gesamt-Events: %d",
+			tradesCount, obCount, ohlcvCount, totalCount,
 		)
 	}
 }
@@ -935,6 +1113,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		marketType string
 		symbol     string
 		dataType   string
+		interval   string
 	}
 	toUnsub := make([]unsubReq, 0, 256)
 
@@ -995,6 +1174,34 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 		}
 	}
 
+	for subID, clients := range sm.ohlcvSubscriptions {
+		routeKey := getClientRouteKey(clientID, subID)
+		if sm.stickyOHLCVSubscriptions[routeKey] {
+			continue
+		}
+		delete(clients, clientID)
+		exactExchange := sm.ohlcvSubscriptionRoutes[routeKey]
+		delete(sm.ohlcvSubscriptionRoutes, routeKey)
+		delete(sm.ohlcvSubscriptionEncodings, routeKey)
+		delete(sm.stickyOHLCVSubscriptions, routeKey)
+		if len(clients) == 0 {
+			exchange, marketType, symbol, interval, ok := parseOHLCVSubscriptionID(subID)
+			if ok {
+				if exactExchange == "" {
+					exactExchange = exchange
+				}
+				toUnsub = append(toUnsub, unsubReq{
+					exchange:   exactExchange,
+					marketType: marketType,
+					symbol:     symbol,
+					dataType:   "ohlcv",
+					interval:   interval,
+				})
+			}
+			delete(sm.ohlcvSubscriptions, subID)
+		}
+	}
+
 	for wildcardID, clients := range sm.wildcardSubscribers {
 		delete(clients, clientID)
 		delete(sm.wildcardRoutes, getClientRouteKey(clientID, wildcardID))
@@ -1020,6 +1227,7 @@ func (sm *SubscriptionManager) cleanupClientSubscriptions(clientID string) {
 			Symbol:     req.symbol,
 			MarketType: req.marketType,
 			DataType:   req.dataType,
+			Interval:   req.interval,
 		})
 	}
 }
@@ -1030,6 +1238,26 @@ func parseSubscriptionID(subID string) (exchange, marketType, symbol string, ok 
 		return "", "", "", false
 	}
 	return parts[0], parts[1], parts[2], true
+}
+
+func parseOHLCVSubscriptionID(subID string) (exchange, marketType, symbol, interval string, ok bool) {
+	base, interval, found := strings.Cut(subID, "|")
+	if !found || interval == "" {
+		return "", "", "", "", false
+	}
+	exchange, marketType, symbol, ok = parseSubscriptionID(base)
+	if !ok {
+		return "", "", "", "", false
+	}
+	return exchange, marketType, symbol, interval, true
+}
+
+func parseSubscriptionIDForDataType(subID, dataType string) (exchange, marketType, symbol, interval string, ok bool) {
+	if dataType == "ohlcv" {
+		return parseOHLCVSubscriptionID(subID)
+	}
+	exchange, marketType, symbol, ok = parseSubscriptionID(subID)
+	return exchange, marketType, symbol, "", ok
 }
 
 func getClientRouteKey(clientID, subID string) string {
@@ -1076,6 +1304,18 @@ func (sm *SubscriptionManager) orderBookOwnerCount(subID, exactExchange string) 
 	for clientID := range clients {
 		routeKey := getClientRouteKey(clientID, subID)
 		if effectiveRouteForClient(subID, routeKey, sm.orderBookSubscriptionRoutes) == exactExchange {
+			count++
+		}
+	}
+	return count
+}
+
+func (sm *SubscriptionManager) ohlcvOwnerCount(subID, exactExchange string) int {
+	clients := sm.ohlcvSubscriptions[subID]
+	count := 0
+	for clientID := range clients {
+		routeKey := getClientRouteKey(clientID, subID)
+		if effectiveRouteForClient(subID, routeKey, sm.ohlcvSubscriptionRoutes) == exactExchange {
 			count++
 		}
 	}
@@ -1178,9 +1418,10 @@ func (sm *SubscriptionManager) buildRuntimeSnapshotResponse(requestID string) *s
 }
 
 func (sm *SubscriptionManager) buildRuntimeSubscriptionItems() []shared_types.RuntimeSubscriptionItem {
-	items := make([]shared_types.RuntimeSubscriptionItem, 0, len(sm.tradeSubscriptions)+len(sm.orderBookSubscriptions))
+	items := make([]shared_types.RuntimeSubscriptionItem, 0, len(sm.tradeSubscriptions)+len(sm.orderBookSubscriptions)+len(sm.ohlcvSubscriptions))
 	items = append(items, sm.aggregateRuntimeSubscriptions(sm.tradeSubscriptions, sm.tradeSubscriptionRoutes, sm.tradeSubscriptionEncodings, sm.tradeSubscriptionCacheN, nil, "trades")...)
 	items = append(items, sm.aggregateRuntimeSubscriptions(sm.orderBookSubscriptions, sm.orderBookSubscriptionRoutes, sm.orderBookSubscriptionEncodings, nil, sm.orderBookSubscriptionDepths, "orderbooks")...)
+	items = append(items, sm.aggregateRuntimeSubscriptions(sm.ohlcvSubscriptions, sm.ohlcvSubscriptionRoutes, sm.ohlcvSubscriptionEncodings, nil, nil, "ohlcv")...)
 
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Exchange != items[j].Exchange {
@@ -1194,6 +1435,9 @@ func (sm *SubscriptionManager) buildRuntimeSubscriptionItems() []shared_types.Ru
 		}
 		if items[i].DataType != items[j].DataType {
 			return items[i].DataType < items[j].DataType
+		}
+		if items[i].Interval != items[j].Interval {
+			return items[i].Interval < items[j].Interval
 		}
 		return items[i].Depth < items[j].Depth
 	})
@@ -1213,6 +1457,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 		marketType string
 		symbol     string
 		dataType   string
+		interval   string
 		adapter    string
 		cacheN     int
 		depth      int
@@ -1223,7 +1468,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 
 	grouped := make(map[string]*aggregate)
 	for subID, clients := range subscriptions {
-		baseExchange, marketType, symbol, ok := parseSubscriptionID(subID)
+		baseExchange, marketType, symbol, interval, ok := parseSubscriptionIDForDataType(subID, defaultDataType)
 		if !ok {
 			continue
 		}
@@ -1234,7 +1479,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 				exactExchange = baseExchange
 			}
 
-			groupKey := strings.Join([]string{exactExchange, marketType, symbol, defaultDataType}, "|")
+			groupKey := strings.Join([]string{exactExchange, marketType, symbol, defaultDataType, interval}, "|")
 			entry, exists := grouped[groupKey]
 			if !exists {
 				entry = &aggregate{
@@ -1242,6 +1487,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 					marketType: marketType,
 					symbol:     symbol,
 					dataType:   defaultDataType,
+					interval:   interval,
 					adapter:    adapterFromExchangeRoute(exactExchange),
 					clients:    make(map[string]bool),
 					encodings:  make(map[string]bool),
@@ -1258,6 +1504,8 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 				entry.sticky = entry.sticky || sm.stickyTradeSubscriptions[routeKey]
 			} else if defaultDataType == "orderbooks" {
 				entry.sticky = entry.sticky || sm.stickyOrderBookSubscriptions[routeKey]
+			} else if defaultDataType == "ohlcv" {
+				entry.sticky = entry.sticky || sm.stickyOHLCVSubscriptions[routeKey]
 			}
 			if cacheMap != nil {
 				if cacheN := cacheMap[routeKey]; cacheN > entry.cacheN {
@@ -1280,6 +1528,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 			MarketType: entry.marketType,
 			Symbol:     entry.symbol,
 			DataType:   entry.dataType,
+			Interval:   entry.interval,
 			Adapter:    entry.adapter,
 			Encoding:   aggregateEncoding(entry.encodings),
 			CacheN:     entry.cacheN,
@@ -1290,6 +1539,7 @@ func (sm *SubscriptionManager) aggregateRuntimeSubscriptions(
 				MarketType: entry.marketType,
 				Symbol:     entry.symbol,
 				DataType:   entry.dataType,
+				Interval:   entry.interval,
 			}),
 			Owners:  clientCount,
 			Clients: clientCount,
@@ -1339,7 +1589,30 @@ func (sm *SubscriptionManager) broadcastRuntimeTotalsTick() {
 }
 
 func (sm *SubscriptionManager) validateRequestSpec(req *shared_types.ClientRequest) string {
-	if req == nil || req.Action != "subscribe" || req.DataType != "orderbooks" {
+	if req == nil || req.Action != "subscribe" {
+		return ""
+	}
+	if req.DataType == "ohlcv" {
+		if req.MarketType != "spot" && req.MarketType != "swap" {
+			return "unsupported_market_type"
+		}
+		var normalizedInterval string
+		var ok bool
+		switch req.Exchange {
+		case "bybit_native":
+			normalizedInterval, ok = bybit.NormalizeUserKlineInterval(req.Interval)
+		case "binance_native":
+			normalizedInterval, ok = binance.NormalizeUserKlineInterval(req.Interval)
+		default:
+			return "ohlcv_not_supported"
+		}
+		if !ok {
+			return "invalid_interval"
+		}
+		req.Interval = normalizedInterval
+		return ""
+	}
+	if req.DataType != "orderbooks" {
 		return ""
 	}
 	if canonicalSubscriptionExchange(req.Exchange) == "bitmart" {
@@ -1410,8 +1683,9 @@ func (sm *SubscriptionManager) enrichStatusEvent(event *shared_types.StreamStatu
 				MarketType: event.MarketType,
 				Symbol:     alias,
 				DataType:   event.DataType,
+				Interval:   event.Interval,
 			}
-			seenKey := key.Exchange + "|" + key.MarketType + "|" + key.Symbol + "|" + key.DataType
+			seenKey := key.Exchange + "|" + key.MarketType + "|" + key.Symbol + "|" + key.DataType + "|" + key.Interval
 			if seen[seenKey] {
 				continue
 			}

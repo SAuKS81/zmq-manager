@@ -689,9 +689,128 @@ func TestHandleRequestNormalizesBybitOrderBookDepth(t *testing.T) {
 	if rec.reqs[0].OrderBookDepth != 50 {
 		t.Fatalf("expected bybit depth to normalize to 50, got %+v", rec.reqs[0])
 	}
-	routeKey := getClientRouteKey("client-a", "bybit-spot-BTCUSDT")
+	routeKey := getClientRouteKey("client-a", "bybit-spot-BTC/USDT")
 	if got := sm.orderBookSubscriptionDepths[routeKey]; got != 50 {
 		t.Fatalf("expected runtime depth 50, got %d", got)
+	}
+}
+
+func TestHandleRequestRejectsInvalidBybitOHLCVInterval(t *testing.T) {
+	distCh := make(chan *DistributionMessage, 4)
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		DistributionCh:             distCh,
+		tradeSubscriptions:         make(map[string]map[string]bool),
+		orderBookSubscriptions:     make(map[string]map[string]bool),
+		ohlcvSubscriptions:         make(map[string]map[string]bool),
+		ohlcvSubscriptionRoutes:    make(map[string]string),
+		ohlcvSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"bybit_native": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:   []byte("client-a"),
+		Action:     "subscribe",
+		RequestID:  "ohlcv-invalid",
+		Exchange:   "bybit_native",
+		Symbol:     "BTC/USDT:USDT",
+		MarketType: "swap",
+		DataType:   "ohlcv",
+		Interval:   "2m",
+	})
+
+	if len(rec.reqs) != 0 {
+		t.Fatalf("invalid interval should not be forwarded, got %+v", rec.reqs)
+	}
+	msg := <-distCh
+	event, ok := msg.RawPayload.(*shared_types.StreamStatusEvent)
+	if !ok {
+		t.Fatalf("expected status event, got %T", msg.RawPayload)
+	}
+	if event.Type != "stream_subscribe_failed" || event.Reason != "invalid_interval" {
+		t.Fatalf("unexpected failure event: %+v", event)
+	}
+}
+
+func TestHandleRequestAllowsBinanceNativeOHLCVInterval(t *testing.T) {
+	rec := &recordingExchange{}
+	sm := &SubscriptionManager{
+		tradeSubscriptions:         make(map[string]map[string]bool),
+		orderBookSubscriptions:     make(map[string]map[string]bool),
+		ohlcvSubscriptions:         make(map[string]map[string]bool),
+		ohlcvSubscriptionRoutes:    make(map[string]string),
+		ohlcvSubscriptionEncodings: make(map[string]string),
+		exchangeRegistry: map[string]exchanges.Exchange{
+			"binance_native": rec,
+		},
+		runtimeTracker: newRuntimeTracker(),
+	}
+
+	sm.handleRequest(&shared_types.ClientRequest{
+		ClientID:   []byte("client-a"),
+		Action:     "subscribe",
+		Exchange:   "binance_native",
+		Symbol:     "BTC/USDT:USDT",
+		MarketType: "swap",
+		DataType:   "ohlcv",
+		Interval:   "1h",
+	})
+
+	if len(rec.reqs) != 1 {
+		t.Fatalf("expected one forwarded request, got %d", len(rec.reqs))
+	}
+	if rec.reqs[0].DataType != "ohlcv" || rec.reqs[0].Interval != "1h" {
+		t.Fatalf("expected normalized binance ohlcv request, got %+v", rec.reqs[0])
+	}
+	subID := getOHLCVSubscriptionID("binance", "BTC/USDT:USDT", "swap", "1h")
+	if !sm.ohlcvSubscriptions[subID]["client-a"] {
+		t.Fatalf("expected ohlcv subscription for %s, got %+v", subID, sm.ohlcvSubscriptions)
+	}
+}
+
+func TestRuntimeSnapshotSeparatesOHLCVIntervals(t *testing.T) {
+	sm := &SubscriptionManager{
+		ohlcvSubscriptions: map[string]map[string]bool{
+			getOHLCVSubscriptionID("bybit", "BTC/USDT:USDT", "swap", "1m"): {"client-a": true},
+			getOHLCVSubscriptionID("bybit", "BTC/USDT:USDT", "swap", "5m"): {"client-a": true},
+		},
+		ohlcvSubscriptionRoutes: map[string]string{
+			getClientRouteKey("client-a", getOHLCVSubscriptionID("bybit", "BTC/USDT:USDT", "swap", "1m")): "bybit_native",
+			getClientRouteKey("client-a", getOHLCVSubscriptionID("bybit", "BTC/USDT:USDT", "swap", "5m")): "bybit_native",
+		},
+		ohlcvSubscriptionEncodings: make(map[string]string),
+		runtimeTracker:             newRuntimeTracker(),
+	}
+	sm.runtimeTracker.recordOHLCV(&shared_types.OHLCVUpdate{
+		Exchange:       "bybit",
+		MarketType:     "swap",
+		Symbol:         "BTC/USDT:USDT",
+		Interval:       "5m",
+		Timestamp:      time.Now().UnixMilli(),
+		IngestUnixNano: time.Now().UnixNano(),
+	})
+
+	snapshot := sm.buildRuntimeSnapshotResponse("runtime-ohlcv")
+	if len(snapshot.Subscriptions) != 2 {
+		t.Fatalf("expected two ohlcv subscriptions, got %+v", snapshot.Subscriptions)
+	}
+	seen := map[string]bool{}
+	for _, item := range snapshot.Subscriptions {
+		if item.DataType != "ohlcv" {
+			t.Fatalf("expected ohlcv item, got %+v", item)
+		}
+		seen[item.Interval] = true
+	}
+	if !seen["1m"] || !seen["5m"] {
+		t.Fatalf("expected 1m and 5m subscriptions, got %+v", snapshot.Subscriptions)
+	}
+	for _, item := range snapshot.Health {
+		if item.DataType == "ohlcv" && item.Interval == "5m" && item.LastMessageAgeMS < 0 {
+			t.Fatalf("unexpected health item: %+v", item)
+		}
 	}
 }
 

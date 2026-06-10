@@ -8,9 +8,10 @@ import (
 
 // ManagerCommand ist ein Befehl an den ConnectionManager.
 type ManagerCommand struct {
-	Action string
-	Symbol string
-	Depth  int // Wird von diesem Manager ignoriert, aber fuer Kompatibilitaet hinzugefuegt
+	Action   string
+	Symbol   string
+	Depth    int    // Wird von diesem Manager ignoriert, aber fuer Kompatibilitaet hinzugefuegt
+	Interval string // Wird von Trade/OrderBook-Managern ignoriert.
 }
 
 // ConnectionManager verwaltet Shards fuer einen Markt-Typ.

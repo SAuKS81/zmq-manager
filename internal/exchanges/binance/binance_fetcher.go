@@ -14,18 +14,22 @@ type BinanceExchange struct {
 	swapTradeMgr *ConnectionManager
 	spotOBMgr    *OrderBookConnectionManager // Separate Struktur wie bei Bybit
 	swapOBMgr    *OrderBookConnectionManager
+	spotOHLCVMgr *OHLCVConnectionManager
+	swapOHLCVMgr *OHLCVConnectionManager
 
 	requestCh   chan<- *shared_types.ClientRequest
 	tradeDataCh chan<- *shared_types.TradeUpdate
 	obDataCh    chan<- *shared_types.OrderBookUpdate
+	ohlcvDataCh chan<- *shared_types.OHLCVUpdate
 	statusCh    chan<- *shared_types.StreamStatusEvent
 }
 
-func NewBinanceExchange(requestCh chan<- *shared_types.ClientRequest, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
+func NewBinanceExchange(requestCh chan<- *shared_types.ClientRequest, tradeDataCh chan<- *shared_types.TradeUpdate, obDataCh chan<- *shared_types.OrderBookUpdate, ohlcvDataCh chan<- *shared_types.OHLCVUpdate, statusCh chan<- *shared_types.StreamStatusEvent) exchanges.Exchange {
 	return &BinanceExchange{
 		requestCh:   requestCh,
 		tradeDataCh: tradeDataCh,
 		obDataCh:    obDataCh,
+		ohlcvDataCh: ohlcvDataCh,
 		statusCh:    statusCh,
 	}
 }
@@ -46,7 +50,30 @@ func (e *BinanceExchange) HandleRequest(req *shared_types.ClientRequest) {
 	}
 
 	// Route basierend auf Datentyp
-	if req.DataType == "orderbooks" {
+	if req.DataType == "ohlcv" {
+		cmd := OHLCVManagerCommand{
+			Action:   managerAction,
+			Symbol:   exchangeSymbol,
+			Interval: req.Interval,
+		}
+
+		switch req.MarketType {
+		case "spot":
+			if e.spotOHLCVMgr == nil {
+				log.Println("[BINANCE-EXCHANGE] Starte Spot OHLCV Manager.")
+				e.spotOHLCVMgr = NewOHLCVConnectionManager(spotWsURL, "spot", spotSymbolsPerShard, e.ohlcvDataCh)
+				go e.spotOHLCVMgr.Run()
+			}
+			e.spotOHLCVMgr.commandCh <- cmd
+		case "swap":
+			if e.swapOHLCVMgr == nil {
+				log.Println("[BINANCE-EXCHANGE] Starte Swap OHLCV Manager.")
+				e.swapOHLCVMgr = NewOHLCVConnectionManager(futuresWsURL, "swap", swapSymbolsPerShard, e.ohlcvDataCh)
+				go e.swapOHLCVMgr.Run()
+			}
+			e.swapOHLCVMgr.commandCh <- cmd
+		}
+	} else if req.DataType == "orderbooks" {
 		// OrderBook Command mit Depth
 		cmd := OBManagerCommand{
 			Action: managerAction,
@@ -115,5 +142,11 @@ func (e *BinanceExchange) Stop() {
 	}
 	if e.swapOBMgr != nil {
 		e.swapOBMgr.Stop()
+	}
+	if e.spotOHLCVMgr != nil {
+		e.spotOHLCVMgr.Stop()
+	}
+	if e.swapOHLCVMgr != nil {
+		e.swapOHLCVMgr.Stop()
 	}
 }
