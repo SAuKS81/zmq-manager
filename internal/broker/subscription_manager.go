@@ -14,6 +14,7 @@ import (
 	"bybit-watcher/internal/exchanges/bitmart"
 	"bybit-watcher/internal/exchanges/bybit"
 	"bybit-watcher/internal/exchanges/coinex"
+	"bybit-watcher/internal/exchanges/gateio"
 	"bybit-watcher/internal/exchanges/htx"
 	"bybit-watcher/internal/exchanges/kucoin"
 	"bybit-watcher/internal/exchanges/mexc"
@@ -95,6 +96,8 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 	sm.exchangeRegistry["mexc_native"] = mexc.NewMexcExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["kucoin_native"] = kucoin.NewKucoinExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["coinex_native"] = coinex.NewCoinexExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
+	sm.exchangeRegistry["gateio_native"] = gateio.NewGateioExchange(sm.RequestCh, sm.TradeDataCh, sm.StatusCh)
+	sm.exchangeRegistry["gate_native"] = sm.exchangeRegistry["gateio_native"]
 	sm.exchangeRegistry["htx_native"] = htx.NewHtxExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["huobi_native"] = sm.exchangeRegistry["htx_native"]
 	registerCCXT(sm)
@@ -1015,6 +1018,11 @@ func canonicalSubscriptionSymbol(exchange, symbol, marketType string) string {
 			return htx.TranslateSymbolFromExchange(htx.TranslateSymbolToExchange(symbol, marketType), marketType)
 		}
 		return htx.TranslateSymbolFromExchange(symbol, marketType)
+	case "gate":
+		if strings.Contains(symbol, "/") {
+			return gateio.TranslateSymbolFromExchange(gateio.TranslateSymbolToExchange(symbol), marketType)
+		}
+		return gateio.TranslateSymbolFromExchange(symbol, marketType)
 	default:
 		return symbol
 	}
@@ -1074,6 +1082,12 @@ func runtimeSymbolAliases(exchange, symbol, marketType string) []string {
 			add(htx.TranslateSymbolToExchange(symbol, marketType))
 		} else {
 			add(htx.TranslateSymbolFromExchange(symbol, marketType))
+		}
+	case "gate":
+		if strings.Contains(symbol, "/") {
+			add(gateio.TranslateSymbolToExchange(symbol))
+		} else {
+			add(gateio.TranslateSymbolFromExchange(symbol, marketType))
 		}
 	}
 

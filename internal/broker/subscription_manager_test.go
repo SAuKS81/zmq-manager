@@ -206,6 +206,9 @@ func TestCanonicalSubscriptionExchangeNormalizesAliases(t *testing.T) {
 	if got := canonicalSubscriptionExchange("binance_native"); got != "binance" {
 		t.Fatalf("expected binance_native to canonicalize to binance, got %q", got)
 	}
+	if got := canonicalSubscriptionExchange("gateio_native"); got != "gate" {
+		t.Fatalf("expected gateio_native to canonicalize to gate, got %q", got)
+	}
 }
 
 func TestCanonicalSubscriptionSymbolNormalizesNativeAndUnifiedForms(t *testing.T) {
@@ -216,6 +219,15 @@ func TestCanonicalSubscriptionSymbolNormalizesNativeAndUnifiedForms(t *testing.T
 	}
 	if native != "BTC/USDT" {
 		t.Fatalf("expected canonical unified symbol BTC/USDT, got %q", native)
+	}
+
+	gateNative := canonicalSubscriptionSymbol("gate", "BTC_USDT", "spot")
+	gateUnified := canonicalSubscriptionSymbol("gate", "BTC/USDT", "spot")
+	if gateNative != gateUnified {
+		t.Fatalf("expected gate native and unified forms to match, got %q vs %q", gateNative, gateUnified)
+	}
+	if gateNative != "BTC/USDT" {
+		t.Fatalf("expected canonical gate symbol BTC/USDT, got %q", gateNative)
 	}
 }
 

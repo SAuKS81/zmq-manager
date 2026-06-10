@@ -100,6 +100,10 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			supportsRequestID:   true,
 			supportsDeployQueue: true,
 		}),
+		newCapabilityItem("gate", "gateio_native", "native", []string{"spot", "swap"}, []string{"trades"}, nil, capabilityFlags{
+			supportsRequestID:   true,
+			supportsDeployQueue: true,
+		}),
 		newCapabilityItem("htx", "htx_native", "native", []string{"spot", "swap"}, []string{"trades", "orderbooks"}, nil, capabilityFlags{
 			orderBookDepths:     []int{5, 20, 150, 400},
 			supportsRequestID:   true,

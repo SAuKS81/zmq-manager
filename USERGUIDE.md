@@ -38,6 +38,7 @@ Unterstuetzte Adaptertypen:
   - `binance_native`
   - `bybit_native`
   - `bitget_native`
+  - `gateio_native`
 - CCXT-Pro Adapter:
   - z. B. `binance`, `bybit`, `bitget`
 
@@ -397,6 +398,7 @@ Wichtig:
 - seit `P7-5` bleibt dabei der exakte Routen-Typ erhalten:
   - `binance` bleibt `binance`
   - `binance_native` bleibt `binance_native`
+  - `gateio_native` bleibt `gateio_native`
 
 ### 5.6 Liste aktiver physischer Subscriptions
 
@@ -1090,6 +1092,7 @@ Aktuell relevant:
 - `binance_native`
 - `bybit_native`
 - `bitget_native`
+- `gateio_native`
 
 ### CCXT
 
@@ -1159,6 +1162,17 @@ Wichtige Regeln:
   - `4h`
   - `1d`
 - Status-/Health-Keys enthalten bei OHLCV immer das `interval`
+
+### Gate.io native
+
+- `gateio_native` ist der native Trade-Pfad fuer Gate.io und ersetzt fuer Gate-Trades den instabilen CCXT-Pfad
+- `spot` nutzt den oeffentlichen Channel `spot.trades`
+- `swap` nutzt den oeffentlichen USDT-Futures-Channel `futures.trades`
+- interne Symbole verwenden Gate-Format wie `BTC_USDT`, nach aussen bleiben sie CCXT-unified:
+  - Spot: `BTC/USDT`
+  - Swap: `BTC/USDT:USDT`
+- Delivery- und Options-Trade-Channels sind in der Gate-Doku vorhanden, sind aber im Broker aktuell nicht als eigene `market_type`-Pfade exposed
+- Orderbooks/OHLCV fuer Gate laufen weiterhin nicht ueber `gateio_native`
 
 ### Bitget native
 
@@ -1292,7 +1306,7 @@ Pruefen:
 - Broker laeuft?
 - richtiger Endpoint (`ipc://` vs `tcp://`)?
 - korrektes Symbolformat fuer nativen oder CCXT-Pfad?
-- `exchange` richtig gesetzt (`binance` vs `binance_native`)?
+- `exchange` richtig gesetzt (`binance` vs `binance_native`, `gate` vs `gateio_native`)?
 
 ### Client bekommt Fehler `invalid_request`
 
@@ -1373,6 +1387,9 @@ Wichtig:
 - Binance-native OHLCV:
   - [internal/exchanges/binance/ohlcv_connection_manager.go](./internal/exchanges/binance/ohlcv_connection_manager.go)
   - [internal/exchanges/binance/ohlcv_shard_worker.go](./internal/exchanges/binance/ohlcv_shard_worker.go)
+- Gate.io-native Trades:
+  - [internal/exchanges/gateio/connection_manager.go](./internal/exchanges/gateio/connection_manager.go)
+  - [internal/exchanges/gateio/shard_worker.go](./internal/exchanges/gateio/shard_worker.go)
 - Baseline:
   - [scripts/baseline_ingest.sh](./scripts/baseline_ingest.sh)
   - [scripts/README_baseline.md](./scripts/README_baseline.md)
@@ -1413,6 +1430,7 @@ Der Client:
 - sendet `subscribe_bulk` fuer:
   - `binance_native`
   - `bybit_native`
+- fuer Gate.io bitte explizit `--exchanges gateio_native` setzen
 - abonniert `trades`
 - gibt fortlaufend `msg/s` und `trades/s` aus
 - sendet bei `Ctrl+C` ein `disconnect`
@@ -1422,6 +1440,7 @@ Beispiele:
 ```bash
 python3 clients/native_rate_client.py --symbols BTC/USDT,ETH/USDT,SOL/USDT
 python3 clients/native_rate_client.py --market-type swap --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
+python3 clients/native_rate_client.py --exchanges gateio_native --symbols BTC/USDT,ETH/USDT
 python3 clients/native_rate_client.py --broker tcp://127.0.0.1:5555
 ```
 

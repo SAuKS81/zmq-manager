@@ -183,6 +183,24 @@ func TestCapabilitiesCatalogIncludesKucoinNativeTrades(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesCatalogIncludesGateioNativeTrades(t *testing.T) {
+	item, ok := capabilityForExchange("gateio_native")
+	if !ok {
+		t.Fatal("expected gateio_native capability entry")
+	}
+	if item.Exchange != "gate" || item.ManagerExchange != "gateio_native" || item.Adapter != "native" {
+		t.Fatalf("unexpected gateio_native identity: %+v", item)
+	}
+	if len(item.DataTypes) != 1 || item.DataTypes[0] != "trades" {
+		t.Fatalf("expected gateio_native trades only, got %+v", item.DataTypes)
+	}
+	for _, marketType := range []string{"spot", "swap"} {
+		if _, ok := item.Channels[marketType]["trades"]; !ok {
+			t.Fatalf("expected %s trades channel, got %+v", marketType, item.Channels)
+		}
+	}
+}
+
 func TestCapabilitiesCatalogIncludesHtxNativeTrades(t *testing.T) {
 	item, ok := capabilityForExchange("htx_native")
 	if !ok {
