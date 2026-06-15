@@ -18,6 +18,7 @@ import (
 	"bybit-watcher/internal/exchanges/htx"
 	"bybit-watcher/internal/exchanges/kucoin"
 	"bybit-watcher/internal/exchanges/mexc"
+	"bybit-watcher/internal/exchanges/woo"
 	"bybit-watcher/internal/metrics"
 	"bybit-watcher/internal/pools"
 	"bybit-watcher/internal/shared_types"
@@ -100,6 +101,8 @@ func NewSubscriptionManager(distributionCh chan<- *DistributionMessage) *Subscri
 	sm.exchangeRegistry["gate_native"] = sm.exchangeRegistry["gateio_native"]
 	sm.exchangeRegistry["htx_native"] = htx.NewHtxExchange(sm.RequestCh, sm.TradeDataCh, sm.OrderBookCh, sm.StatusCh)
 	sm.exchangeRegistry["huobi_native"] = sm.exchangeRegistry["htx_native"]
+	sm.exchangeRegistry["woo_native"] = woo.NewWooExchange(sm.RequestCh, sm.TradeDataCh, sm.StatusCh)
+	sm.exchangeRegistry["woox_native"] = sm.exchangeRegistry["woo_native"]
 	registerCCXT(sm)
 	return sm
 }
@@ -1023,6 +1026,11 @@ func canonicalSubscriptionSymbol(exchange, symbol, marketType string) string {
 			return gateio.TranslateSymbolFromExchange(gateio.TranslateSymbolToExchange(symbol), marketType)
 		}
 		return gateio.TranslateSymbolFromExchange(symbol, marketType)
+	case "woo":
+		if strings.Contains(symbol, "/") {
+			return woo.TranslateSymbolFromExchange(woo.TranslateSymbolToExchange(symbol, marketType), marketType)
+		}
+		return woo.TranslateSymbolFromExchange(symbol, marketType)
 	default:
 		return symbol
 	}
@@ -1088,6 +1096,12 @@ func runtimeSymbolAliases(exchange, symbol, marketType string) []string {
 			add(gateio.TranslateSymbolToExchange(symbol))
 		} else {
 			add(gateio.TranslateSymbolFromExchange(symbol, marketType))
+		}
+	case "woo":
+		if strings.Contains(symbol, "/") {
+			add(woo.TranslateSymbolToExchange(symbol, marketType))
+		} else {
+			add(woo.TranslateSymbolFromExchange(symbol, marketType))
 		}
 	}
 

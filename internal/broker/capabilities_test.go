@@ -201,6 +201,28 @@ func TestCapabilitiesCatalogIncludesGateioNativeTrades(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesCatalogIncludesWooNativeTrades(t *testing.T) {
+	item, ok := capabilityForExchange("woo_native")
+	if !ok {
+		t.Fatal("expected woo_native capability entry")
+	}
+	if item.Exchange != "woo" || item.ManagerExchange != "woo_native" || item.Adapter != "native" {
+		t.Fatalf("unexpected woo_native identity: %+v", item)
+	}
+	if len(item.DataTypes) != 1 || item.DataTypes[0] != "trades" {
+		t.Fatalf("expected woo_native trades only, got %+v", item.DataTypes)
+	}
+	for _, marketType := range []string{"spot", "swap"} {
+		if _, ok := item.Channels[marketType]["trades"]; !ok {
+			t.Fatalf("expected %s trades channel, got %+v", marketType, item.Channels)
+		}
+	}
+	alias, ok := capabilityForExchange("woox_native")
+	if !ok || alias.ManagerExchange != "woo_native" {
+		t.Fatalf("expected woox_native alias to resolve to woo_native, got %+v ok=%v", alias, ok)
+	}
+}
+
 func TestCapabilitiesCatalogIncludesHtxNativeTrades(t *testing.T) {
 	item, ok := capabilityForExchange("htx_native")
 	if !ok {

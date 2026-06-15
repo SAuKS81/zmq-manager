@@ -109,6 +109,10 @@ func capabilitiesCatalog() []shared_types.CapabilitiesItem {
 			supportsRequestID:   true,
 			supportsDeployQueue: true,
 		}),
+		newCapabilityItem("woo", "woo_native", "native", []string{"spot", "swap"}, []string{"trades"}, nil, capabilityFlags{
+			supportsRequestID:   true,
+			supportsDeployQueue: true,
+		}),
 		newCapabilityItem("mexc", "mexc_native", "native", []string{"spot"}, []string{"trades", "orderbooks"}, mexcPushInterval, capabilityFlags{
 			orderBookDepths:     []int{5, 10, 20},
 			supportsRequestID:   true,
@@ -311,6 +315,10 @@ func canonicalCapabilityExchange(exchange string) string {
 		return "htx"
 	case "gateio":
 		return "gate"
+	case "woox":
+		return "woo"
+	case "woox_native":
+		return "woo_native"
 	default:
 		return exchange
 	}

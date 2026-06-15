@@ -39,6 +39,7 @@ Unterstuetzte Adaptertypen:
   - `bybit_native`
   - `bitget_native`
   - `gateio_native`
+  - `woo_native`
 - CCXT-Pro Adapter:
   - z. B. `binance`, `bybit`, `bitget`
 
@@ -1093,6 +1094,7 @@ Aktuell relevant:
 - `bybit_native`
 - `bitget_native`
 - `gateio_native`
+- `woo_native`
 
 ### CCXT
 
@@ -1174,6 +1176,18 @@ Wichtige Regeln:
 - Delivery- und Options-Trade-Channels sind in der Gate-Doku vorhanden, sind aber im Broker aktuell nicht als eigene `market_type`-Pfade exposed
 - Orderbooks/OHLCV fuer Gate laufen weiterhin nicht ueber `gateio_native`
 
+### WOO X native
+
+- `woo_native` ist der native Trade-Pfad fuer WOO X/WOOX und ersetzt fuer WOO-Trades den instabilen CCXT-Pfad
+- `woox_native` ist als Alias auf denselben Handler registriert
+- `spot` nutzt intern WOO-Symbole wie `SPOT_BTC_USDT`
+- `swap` nutzt intern WOO-Perp-Symbole wie `PERP_BTC_USDT`
+- nach aussen bleiben Symbole CCXT-unified:
+  - Spot: `BTC/USDT`
+  - Swap: `BTC/USDT:USDT`
+- WOO X limitiert laut Doku die Topics pro WebSocket-Verbindung; der native Adapter shardet deshalb auf maximal 50 Symbole pro Verbindung
+- Orderbooks/OHLCV fuer WOO laufen weiterhin nicht ueber `woo_native`
+
 ### Bitget native
 
 - besonders empfindlich bei Subscribe-/Unsubscribe-Taktung
@@ -1189,7 +1203,8 @@ Wichtige Regeln:
 - bekannte Ausnahmen wie `mexc` bleiben trotz `has=true` auf `recycle-on-unsubscribe`
 - `mexc` ist aktuell ein expliziter Fall fuer `recycle-on-unsubscribe`, weil `UnWatchTrades` in der verwendeten CCXT-Pro-Version reproduzierbar fehlschlaegt
 - `kucoin` Spot-Trades verwenden echten Batch-Unwatch; Orderbook-Unwatch bleibt bis zu einem eigenen Verifikationslauf konservativ
-- `htx`/`huobi` Trades und `woo` Trades laufen auf echtem `UnWatchTrades`; Laufzeitfehler werden abgefangen und fallen auf Fallback zurueck
+- `htx`/`huobi` Trades laufen auf echtem `UnWatchTrades`; Laufzeitfehler werden abgefangen und fallen auf Fallback zurueck
+- fuer WOO/WOOX sollte `woo_native` bzw. `woox_native` verwendet werden, weil der CCXT-Go-WOO-Pfad unter parallelen Trades reproduzierbar mit `concurrent map writes` crashen kann
 - `bybit` CCXT-Orderbooks laufen aktuell konservativ auf Recycle-on-Unsubscribe
 - `bybit` CCXT `swap`-Orderbooks laufen zudem bewusst ueber den Single-Watcher-Pfad (`watchOrderBook`) statt `watchOrderBookForSymbols`, da der Batch-Pfad in der gepinnten CCXT-Pro-Version fuer `swap` stallen kann
 
@@ -1431,6 +1446,7 @@ Der Client:
   - `binance_native`
   - `bybit_native`
 - fuer Gate.io bitte explizit `--exchanges gateio_native` setzen
+- fuer WOO X bitte explizit `--exchanges woo_native` oder `--exchanges woox_native` setzen
 - abonniert `trades`
 - gibt fortlaufend `msg/s` und `trades/s` aus
 - sendet bei `Ctrl+C` ein `disconnect`
@@ -1441,6 +1457,7 @@ Beispiele:
 python3 clients/native_rate_client.py --symbols BTC/USDT,ETH/USDT,SOL/USDT
 python3 clients/native_rate_client.py --market-type swap --symbols BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT
 python3 clients/native_rate_client.py --exchanges gateio_native --symbols BTC/USDT,ETH/USDT
+python3 clients/native_rate_client.py --exchanges woo_native --symbols BTC/USDT,ETH/USDT
 python3 clients/native_rate_client.py --broker tcp://127.0.0.1:5555
 ```
 
